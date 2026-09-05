@@ -517,7 +517,7 @@ export function cellsRouter(doc, rootDir) {
   r.get('/preview.png', async (req, res) => {
     try {
       await withShape(req, ({ shape }) => {
-        const png = renderPreview(brepDistance(shape), meshingBounds(brepBBox(shape)), {
+        const png = renderPreview(brepDistance(shape, { tolerance: tolerance(req, shape) }), meshingBounds(brepBBox(shape)), {
           width: parseInt(req.query.width || '640', 10),
           height: parseInt(req.query.height || '480', 10),
           yaw: parseFloat(req.query.yaw ?? '-35'),
