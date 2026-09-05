@@ -792,6 +792,31 @@ window.addEventListener('keydown', (e) => {
   history(e.shiftKey ? 'redo' : 'undo');
 });
 
+// ----------------------------------------------------------------- export
+
+/**
+ * STEP is the only export. A refusal (a failing assertion) comes back as JSON
+ * with the reason, which is worth more in the status line than a broken download.
+ */
+$('#stepBtn').onclick = async () => {
+  say('Exporting STEP…');
+  try {
+    const res = await fetch(`${API}/export/step`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') || '')?.[1] || 'model.step';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    say(`Saved ${name}`);
+  } catch (e) { say(e.message, true); }
+};
+
 // ------------------------------------------------------------------- live
 
 function connect() {

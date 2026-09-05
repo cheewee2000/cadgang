@@ -28,7 +28,7 @@ import { meshingBounds } from '../core/sdf.js';
 import { meshStats } from '../core/mesher.js';
 import { renderPreview } from '../core/render.js';
 import {
-  initBrep, beginBrepScope, tessellate, tessellateEdges, exportStep,
+  initBrep, beginBrepScope, tessellate, tessellateEdges, exportStep, tightBounds,
   brepDistance, brepBBox,
 } from '../core/brep.js';
 
@@ -92,9 +92,21 @@ export function cellsRouter(doc, rootDir) {
     }
   }
 
-  const tolerance = (req) => {
+  /**
+   * Mesh deflection for the viewport: explicit if asked, else scaled to the
+   * part. A fixed 0.01 mm is invisible on a 100 mm bottle and costs half a
+   * minute on a thread; a two-thousandth of the diagonal, clamped, reads the
+   * same on screen at a fraction of the triangles.
+   */
+  const tolerance = (req, shape = null) => {
     const t = parseFloat(req.query.tolerance ?? '');
-    return Number.isFinite(t) && t > 0 ? Math.min(t, 5) : 0.01;
+    if (Number.isFinite(t) && t > 0) return Math.min(t, 5);
+    if (!shape) return 0.01;
+    try {
+      const { min, max } = tightBounds(shape);
+      const diag = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+      return Math.min(0.1, Math.max(0.01, diag / 2000));
+    } catch { return 0.01; }
   };
 
   // ------------------------------------------------------------------ document
@@ -453,7 +465,7 @@ export function cellsRouter(doc, rootDir) {
   r.get('/mesh', async (req, res) => {
     try {
       await withShape(req, ({ shape, target, shown, partial }) => {
-        const t = tessellate(shape, { tolerance: tolerance(req) });
+        const t = tessellate(shape, { tolerance: tolerance(req, shape) });
         const bounds = meshingBounds(brepBBox(shape));
         res.json({
           cell: shown,
@@ -465,7 +477,7 @@ export function cellsRouter(doc, rootDir) {
           normals: Array.from(t.normals),
           indices: Array.from(t.indices),
           faces: t.faces,
-          edges: tessellateEdges(shape, { tolerance: tolerance(req) }),
+          edges: tessellateEdges(shape, { tolerance: tolerance(req, shape) }),
           stats: meshStats(t.positions, t.indices, bounds, null),
         });
       }, { partial: true });

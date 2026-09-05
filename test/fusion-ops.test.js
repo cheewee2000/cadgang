@@ -235,3 +235,33 @@ test('sketch polygon and slot are closed profiles', () => inScope(() => {
   t.slot(-10, 0, 10, 0, 3);
   near(ops.volume(ops.extrude(t, 1)), 20 * 6 + Math.PI * 9);
 }));
+
+test('an island inside a hole is kept, not cut', () => inScope(() => {
+  const s = new Sketch();
+  s.rectangle(-20, -20, 20, 20);
+  s.circle(s.point(0, 0), 10);
+  s.circle(s.point(0, 0), 4);
+  near(ops.volume(ops.extrude(s, 1)), 1600 - Math.PI * 100 + Math.PI * 16);
+  const t = new Sketch();
+  t.rectangle(-20, -20, 20, 20);
+  t.circle(t.point(-8, 0), 5);
+  t.circle(t.point(8, 0), 5);
+  near(ops.volume(ops.extrude(t, 1)), 1600 - 2 * Math.PI * 25);
+}));
+
+test('bbox of a shelled revolve is the geometry, not the offset surface box', () => inScope(() => {
+  const s = new Sketch().on('XZ');
+  const a = s.anchor(0, 0); const b = s.point(28, 0); const c = s.point(28, 60);
+  const d = s.point(10, 90); const e = s.point(10, 97); const f = s.point(0, 97);
+  const shoulder = s.point(19, 75);
+  s.line(a, b); s.line(b, c); s.arc(shoulder, c, d); s.line(d, e); s.line(e, f); s.line(f, a);
+  const bottle = ops.revolve(s, [0, 0, 1]);
+  const hollow = ops.shell(bottle, q.faces(bottle).planar().facing('+z'), 1.2);
+  const before = ops.bbox(bottle);
+  const after = ops.bbox(hollow);
+  for (const k of [0, 1, 2]) {
+    near(after.min[k], before.min[k], 0.001);
+    near(after.max[k], before.max[k], 0.001);
+  }
+  near(after.max[2], 97, 0.001);
+}));

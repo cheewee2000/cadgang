@@ -40,6 +40,8 @@ import {
   brepAxisOfFace,
   brepSimplify,
   brepEdgeLength,
+  brepTwistedRing,
+  tightBounds,
   requireSolid,
 } from './brep.js';
 
@@ -54,7 +56,7 @@ const vrot = (v, k, deg) => {
   const t = (deg * Math.PI) / 180; const c = Math.cos(t); const s = Math.sin(t);
   return vadd(vadd(vmul(v, c), vmul(vcross(k, v), s)), vmul(k, vdot(k, v) * (1 - c)));
 };
-import { Query } from './query.js';
+import { Query, q } from './query.js';
 import { Sketch } from './sketch.js';
 
 /**
@@ -422,7 +424,7 @@ export function thread(shape, query, pitch, { depth = null, lefthand = false, le
     const matched = query.resolveOn(s);
     if (matched.length !== 1) throw new GraphError(`thread: the query must match exactly one cylindrical face (matched ${matched.length})`);
     const { element, d } = matched[0];
-    const { origin, direction, radius } = brepAxisOfFace(element);
+    const { origin, direction, radius } = brepAxisOfFace(element, d.radius);
     const h = depth ?? 0.6134 * pitch;
     if (!(h > 0 && h < radius)) throw new GraphError('thread depth must be positive and less than the radius');
     const onAxis = (p) => vadd(origin, vmul(direction, vdot(vsub(p, origin), direction)));
@@ -442,27 +444,61 @@ export function thread(shape, query, pitch, { depth = null, lefthand = false, le
     const probe = track(track(rc.makeSphere(0.1 * h)).translate(...probeAt));
     let external = true;
     try { external = !(rc.measureVolume(track(s.clone().intersect(probe))) > 0); } catch { /* empty intersection */ }
-    // Cross-section: radius varies as a triangle wave over one turn — crest at the original
-    // surface (nudged off it so no face is coincident), root `h` into the material.
+    // Cross-section: radius varies as a ROUNDED wave over one turn — crest at the original
+    // surface (nudged off it so no face is coincident), root `h` into the material. Rounded,
+    // not a sharp V: the mesher puts a million triangles into one turn of a sharp crest and
+    // runs out of memory on a bolt, where the rounded profile meshes in seconds. Real
+    // threads round the crest and root anyway.
     const out = external ? 1 : -1;
     const root = radius - out * 0.05;
     const N = 48;
     const pts = Array.from({ length: N }, (_, i) => {
       const u = i / N; const a = 2 * Math.PI * u;
-      const rr = root - out * h * (u < 0.5 ? 2 * u : 2 - 2 * u);
+      const rr = root - out * h * (0.5 - 0.5 * Math.cos(a));
       return [rr * Math.cos(a), rr * Math.sin(a)];
     });
     pts.push(pts[0]);
     const section = track(rc.drawPointsInterpolation(pts).sketchOnPlane(new rc.Plane(p0, null, direction)));
     const spine = track(rc.assembleWire([rc.makeLine(p0, vadd(p0, vmul(direction, span)))]));
-    const aux = brepHelix(1, pitch, span, { center: p0, axis: direction, lefthand });
-    const twisted = track(rc.genericSweep(section.wire, spine, { auxiliarySpine: track(aux.wire.clone()) }));
-    if (!external) return track(s.cut(twisted));
-    let core = track(cylinder(radius + 0.01, span));
-    core = alignZ(core, direction);
-    core = track(core.translate(...p0));
-    return track(track(s.cut(core)).fuse(twisted));
+    const aux = track(brepHelix(1, pitch, span, { center: p0, axis: direction, lefthand }).wire.clone());
+    const TT = (label, fn) => { const t = Date.now(); const r = fn(); if (process.env.CADGANG_TIMING) console.error('thread', label, Date.now() - t, 'ms'); return r; };
+    const along = (shape) => track(alignZ(track(shape), direction).translate(...p0));
+    // Every boolean that touches the twisted surface costs seconds, so the part only ever
+    // meets it on planar caps and a plain cylinder: cut a band out of the part with an
+    // ordinary cylinder, build the threaded ring from faces (no boolean), fuse it back.
+    if (!external) {
+      const rOut = radius + h + Math.max(0.1, 0.25 * h);
+      const ring = TT('ring', () => brepTwistedRing({ section, spine, aux, cylinderRadius: rOut, waveInside: true, p0, direction, span }));
+      const widened = TT('widen bore', () => track(s.cut(along(cylinder(rOut, span)))));
+      return TT('fuse ring', () => track(widened.fuse(ring)));
+    }
+    // A hollow boss keeps its bore: the ring's inner wall is the largest coaxial cylinder
+    // inside the thread root, if the part has one within the band.
+    const bore = q.faces(s).cylindrical().all()
+      .filter((f) => f.radius != null && f.radius < radius - h)
+      .filter((f) => distToAxisFromCenter(f, origin, direction) < 1e-3)
+      .filter((f) => overlapsSpan(f.bbox, origin, direction, start, start + span))
+      .map((f) => f.radius);
+    const rIn = bore.length ? Math.max(...bore) : null;
+    const twisted = rIn == null
+      ? TT('sweep', () => track(rc.genericSweep(section.wire, spine, { auxiliarySpine: aux })))
+      : TT('ring', () => brepTwistedRing({ section, spine, aux, cylinderRadius: rIn, waveInside: false, p0, direction, span }));
+    const cutBand = TT('cut band', () => track(s.cut(along(cylinder(radius + 0.01, span)))));
+    return TT('fuse', () => track(cutBand.fuse(twisted)));
   });
+}
+
+/** Distance from a face's centre to the axis, measured perpendicular to it — 0 for a coaxial cylinder's centre. */
+function distToAxisFromCenter(f, origin, direction) {
+  const d = vsub(f.center, origin);
+  const t = vdot(d, direction);
+  return Math.hypot(...vsub(d, vmul(direction, t)));
+}
+
+/** Does the face's box reach into the axial range [lo, hi]? */
+function overlapsSpan(bbox, origin, direction, lo, hi) {
+  const zs = [bbox.min, bbox.max].map((p) => vdot(vsub(p, origin), direction));
+  return Math.max(...zs) > lo + 1e-6 && Math.min(...zs) < hi - 1e-6;
 }
 
 /** A spring: a round (or 'square' / 'triangle') section of radius `sectionR` wound on a helix. */
@@ -679,9 +715,7 @@ export function distance(a, b) {
 
 export function bbox(shape) {
   return attempt('bbox', () => {
-    const b = requireSolid(shape, 'shape').boundingBox;
-    const [min, max] = b.bounds;
-    b.delete?.();
-    return { min: [...min], max: [...max], size: [0, 1, 2].map((k) => max[k] - min[k]) };
+    const { min, max } = tightBounds(requireSolid(shape, 'shape'));
+    return { min, max, size: [0, 1, 2].map((k) => max[k] - min[k]) };
   });
 }

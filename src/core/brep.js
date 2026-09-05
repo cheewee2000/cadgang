@@ -151,6 +151,8 @@ function kernel() {
 
 /** The replicad namespace, for modules that build on the kernel (query.js). */
 export const brepKernel = kernel;
+/** The raw OCCT module, for the few operations replicad does not wrap. */
+export const brepOC = () => OC;
 
 // ------------------------------------------------------------- error mapping
 
@@ -491,11 +493,11 @@ export function sketchProfile(plane, offset, points) {
 /**
  * A drawing from solved sketch loops — the bridge out of the 2D solver.
  *
- * Loops arrive outermost first, so the first one is the boundary and the rest
- * are cut out of it. Nesting deeper than that (an island inside a hole) is not
- * distinguished: each further loop is cut, which for the common case of a plate
- * with holes is right, and for an island would need a containment test that no
- * prompt has asked for yet.
+ * Loops arrive outermost first. Each one is a hole or an island by how many
+ * larger loops contain it: inside an odd number, it is cut; inside an even
+ * number (an island in a hole), it is fused back in. Containment is judged by
+ * a point of the loop against the larger loop's outline, with arcs sampled —
+ * a sketch whose loops cross is not a set of loops and is not distinguished here.
  */
 export function brepSketchLoops(loops, plane, offset) {
   const k = kernel();
@@ -503,10 +505,80 @@ export function brepSketchLoops(loops, plane, offset) {
     throw new GraphError('A profile needs at least one closed loop');
   }
   return attempt('sketch profile', () => {
+    const outlines = loops.map(loopOutline);
+    for (const o of outlines) {
+      const hit = selfIntersection(o);
+      if (hit) {
+        throw new GraphError(
+          `Sketch loop crosses itself near (${hit[0].toFixed(2)}, ${hit[1].toFixed(2)}) — ` +
+          'check that an arc bulges the way you meant (sk.arc runs counter-clockwise from a to b) and that no line cuts across another'
+        );
+      }
+    }
     const drawn = loops.map((loop) => drawLoop(k, loop));
-    const outer = drawn.slice(1).reduce((d, hole) => d.cut(hole), drawn[0]);
-    return sketchValue(outer, plane, offset);
+    let acc = drawn[0];
+    for (let i = 1; i < loops.length; i++) {
+      const p = outlines[i][0];
+      let depth = 0;
+      for (let j = 0; j < i; j++) if (pointInPolygon(p, outlines[j])) depth++;
+      acc = depth % 2 ? acc.cut(drawn[i]) : acc.fuse(drawn[i]);
+    }
+    return sketchValue(acc, plane, offset);
   });
+}
+
+/** A loop as a polygon: corners plus sampled arc points, enough for containment tests. */
+function loopOutline(loop) {
+  const pts = [];
+  for (const s of loop.segments) {
+    if (s.type === 'circle') {
+      for (let i = 0; i < 24; i++) {
+        const a = (2 * Math.PI * i) / 24;
+        pts.push([s.center[0] + s.radius * Math.cos(a), s.center[1] + s.radius * Math.sin(a)]);
+      }
+      return pts;
+    }
+    pts.push(s.from);
+    if (s.type === 'arc') {
+      const a0 = Math.atan2(s.from[1] - s.center[1], s.from[0] - s.center[0]);
+      const n = Math.max(2, Math.ceil(Math.abs(s.sweep) / (Math.PI / 12)));
+      for (let i = 1; i < n; i++) {
+        const a = a0 + (s.sweep * i) / n;
+        pts.push([s.center[0] + s.radius * Math.cos(a), s.center[1] + s.radius * Math.sin(a)]);
+      }
+    }
+  }
+  return pts;
+}
+
+/** The first place a closed polyline crosses itself, or null. Adjacent segments share a vertex and are skipped. */
+function selfIntersection(poly) {
+  const n = poly.length;
+  if (n < 4) return null;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  for (let i = 0; i < n; i++) {
+    const a = poly[i]; const b = poly[(i + 1) % n];
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      const c = poly[j]; const d = poly[(j + 1) % n];
+      const d1 = cross(a, b, c); const d2 = cross(a, b, d); const d3 = cross(c, d, a); const d4 = cross(c, d, b);
+      if (((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0)) && d1 !== 0 && d2 !== 0 && d3 !== 0 && d4 !== 0) {
+        const t = d1 / (d1 - d2);
+        return [c[0] + t * (d[0] - c[0]), c[1] + t * (d[1] - c[1])];
+      }
+    }
+  }
+  return null;
+}
+
+function pointInPolygon([x, y], poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i];
+    const [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
 }
 
 /** One closed loop as a replicad drawing: a circle, or a pen walked round it. */
@@ -589,6 +661,39 @@ export function brepSweep(sketch, path, { frenet = false, xDir = null, guide = n
   });
 }
 
+/**
+ * A twisted ring built from faces, with no boolean: the section wire swept
+ * along `spine` under the twist of `aux` gives the lateral shell; the other
+ * wall is a plain cylinder of `cylinderRadius` about the same axis; the two
+ * planar caps close it. `waveInside` puts the swept wall on the inside (an
+ * internal thread's teeth) and the cylinder outside.
+ *
+ * Built this way because every boolean that touches the swept BSpline
+ * surface costs seconds, where sewing costs nothing and the ring then meets
+ * the part only on planar caps and one plain cylinder.
+ */
+export function brepTwistedRing({ section, spine, aux, cylinderRadius, waveInside, p0, direction, span }) {
+  return attempt('twisted ring', () => {
+    const rc = kernel();
+    const [shell, w0, w1] = rc.genericSweep(section.wire, spine, { auxiliarySpine: aux }, true);
+    const p1 = p0.map((c, k) => c + direction[k] * span);
+    const flip = direction.map((c) => -c);
+    // A wire becomes a hole by running the other way; a circle drawn with the reversed normal does.
+    const circle = (at, reversed) => rc.assembleWire([rc.makeCircle(cylinderRadius, at, reversed ? flip : direction)]);
+    const wall = rc.loft([circle(p0, false), circle(p1, false)], { ruled: true }, true);
+    let cap0; let cap1;
+    if (waveInside) {
+      cap0 = rc.makeFace(circle(p0, false), [track(new rc.Wire(OC.TopoDS.Wire_1(w0.wrapped.Reversed())))]);
+      cap1 = rc.makeFace(circle(p1, false), [track(new rc.Wire(OC.TopoDS.Wire_1(w1.wrapped.Reversed())))]);
+    } else {
+      cap0 = rc.makeFace(w0, [circle(p0, true)]);
+      cap1 = rc.makeFace(w1, [circle(p1, true)]);
+    }
+    for (const o of [shell, w0, w1, wall, cap0, cap1]) track(o);
+    return track(rc.makeSolid([shell, cap0, cap1, wall]));
+  });
+}
+
 /** Point and unit tangent at parameter `t` in [0, 1] along a path. */
 export function brepPathAt(path, t) {
   if (path?.kind !== 'path') throw new GraphError('expected a path — brep.polyline, brep.spline or brep.helix');
@@ -603,25 +708,163 @@ export function brepFacePrism(face, vector) {
   return attempt('face extrude', () => track(kernel().basicFaceExtrusion(face, new (kernel().Vector)(vector))));
 }
 
-/** Axis of a cylindrical or conical face: {origin, direction, radius}. */
-export function brepAxisOfFace(face) {
-  return attempt('axisOf', () => {
-    const kind = face.geomType;
-    if (kind !== 'CYLINDRE' && kind !== 'CONE') {
-      throw new GraphError(`axisOf: the face is ${kind}, not cylindrical or conical`);
+/**
+ * What a face's surface really is.
+ *
+ * OCCT keeps a revolved line as a "surface of revolution" and a shelled
+ * cylinder as an "offset surface", which is true and useless: a query for the
+ * cylindrical faces of a revolved, shelled bottle would match nothing. The
+ * kernel build binds no way to read those surfaces' basis geometry, so the
+ * surface is SAMPLED instead: a grid of points, and a cylinder is recognised by
+ * fitting one (all normals perpendicular to one axis, all points one radius
+ * from it, to a millionth); a surface of revolution — whose axis the adaptor
+ * does give — by the curve its samples trace in (axial, radial): a line for a
+ * cone, a circle for a torus or, centred on the axis, a sphere. What does not
+ * fit keeps its raw kind. Elementary surfaces are read exactly, as before.
+ */
+export function faceGeometry(face) {
+  const adaptor = face._geomAdaptor();
+  try {
+    return classifySurface(adaptor, face);
+  } catch {
+    return { kind: face.geomType, axis: null, radius: null };
+  } finally {
+    adaptor.delete?.();
+  }
+}
+
+const pnt = (p) => [p.X(), p.Y(), p.Z()];
+const axisOf = (ax) => {
+  const loc = ax.Location(); const dir = ax.Direction();
+  const out = { origin: pnt(loc), direction: pnt(dir) };
+  loc.delete?.(); dir.delete?.(); ax.delete?.();
+  return out;
+};
+const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const unit3 = (a) => { const n = Math.hypot(...a); return n > 0 ? a.map((c) => c / n) : null; };
+const distToAxis = (p, { origin, direction }) => {
+  const d = sub3(p, origin);
+  const t = dot3(d, direction);
+  return Math.hypot(...d.map((c, k) => c - t * direction[k]));
+};
+
+function classifySurface(adaptor, face) {
+  const kind = face.geomType;
+  if (kind === 'CYLINDRE') {
+    const c = adaptor.Cylinder(); const out = { kind, axis: axisOf(c.Axis()), radius: c.Radius() }; c.delete?.(); return out;
+  }
+  if (kind === 'CONE') {
+    const c = adaptor.Cone(); const out = { kind, axis: axisOf(c.Axis()), radius: c.RefRadius() }; c.delete?.(); return out;
+  }
+  if (kind === 'SPHERE') {
+    const c = adaptor.Sphere(); const loc = c.Location();
+    const out = { kind, axis: null, radius: c.Radius(), center: pnt(loc) }; loc.delete?.(); c.delete?.(); return out;
+  }
+  if (kind === 'TORUS') {
+    const c = adaptor.Torus(); const out = { kind, axis: axisOf(c.Axis()), radius: c.MinorRadius(), majorRadius: c.MajorRadius() }; c.delete?.(); return out;
+  }
+  if (kind === 'PLANE') return { kind, axis: null, radius: null };
+
+  const samples = sampleFace(face);
+  const cyl = fitCylinder(samples);
+  if (cyl) return { kind: 'CYLINDRE', ...cyl };
+  if (kind === 'REVOLUTION_SURFACE') {
+    const axis = axisOf(adaptor.AxeOfRevolution());
+    const profile = samples.map(({ p }) => [dot3(sub3(p, axis.origin), axis.direction), distToAxis(p, axis)]);
+    const scale = Math.max(1, ...profile.map(([z, r]) => Math.abs(z) + r));
+    if (collinear(profile, 1e-7 * scale)) return { kind: 'CONE', axis, radius: null };
+    const circle = fitCircle(profile);
+    if (circle && circle.residual < 1e-7 * scale) {
+      return Math.abs(circle.center[1]) < 1e-7 * scale
+        ? { kind: 'SPHERE', axis, radius: circle.radius, center: axis.origin.map((c, k) => c + circle.center[0] * axis.direction[k]) }
+        : { kind: 'TORUS', axis, radius: circle.radius, majorRadius: circle.center[1] };
     }
-    const adaptor = face._geomAdaptor();
-    const surf = kind === 'CYLINDRE' ? adaptor.Cylinder() : adaptor.Cone();
-    const ax = surf.Axis();
-    const loc = ax.Location();
-    const dir = ax.Direction();
-    const out = {
-      origin: [loc.X(), loc.Y(), loc.Z()],
-      direction: [dir.X(), dir.Y(), dir.Z()],
-      radius: kind === 'CYLINDRE' ? surf.Radius() : surf.RefRadius(),
-    };
-    for (const o of [loc, dir, ax, surf, adaptor]) o.delete?.();
-    return out;
+    return { kind, axis, radius: null };
+  }
+  return { kind, axis: null, radius: null };
+}
+
+/** A 4×4 grid of surface points with finite-difference normals (replicad's u, v run 0..1 across the face). */
+function sampleFace(face) {
+  const N = 4;
+  const h = 1e-5;
+  const at = (u, v) => { const p = face.pointOnSurface(u, v); const t = [...p.toTuple()]; p.delete?.(); return t; };
+  const out = [];
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      const u = (i + 0.5) / N;
+      const v = (j + 0.5) / N;
+      const p = at(u, v);
+      const n = unit3(cross3(sub3(at(u + h, v), p), sub3(at(u, v + h), p)));
+      if (n) out.push({ p, n });
+    }
+  }
+  return out;
+}
+
+/** The cylinder through the samples, or null if they do not lie on one. */
+function fitCylinder(samples) {
+  if (samples.length < 6) return null;
+  let axis = null; let best = 0;
+  for (let i = 0; i < samples.length; i++) {
+    for (let j = i + 1; j < samples.length; j++) {
+      const c = cross3(samples[i].n, samples[j].n); const m = Math.hypot(...c);
+      if (m > best) { best = m; axis = c.map((k) => k / m); }
+    }
+  }
+  if (!axis || best < 1e-3) return null;
+  if (samples.some(({ n }) => Math.abs(dot3(n, axis)) > 1e-3)) return null;
+  // Project onto the plane normal to the axis; the points must sit on one circle.
+  const e1 = unit3(cross3(axis, Math.abs(axis[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0]));
+  const e2 = cross3(axis, e1);
+  const circle = fitCircle(samples.map(({ p }) => [dot3(p, e1), dot3(p, e2)]));
+  if (!circle || circle.residual > 1e-6 * circle.radius) return null;
+  const origin = [0, 1, 2].map((k) => circle.center[0] * e1[k] + circle.center[1] * e2[k]);
+  return { axis: { origin, direction: axis }, radius: circle.radius };
+}
+
+function collinear(pts, tol) {
+  const [a, b] = [pts[0], pts[pts.length - 1]];
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  if (len < tol) return false;
+  return pts.every(([x, y]) => Math.abs((b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0])) / len < tol);
+}
+
+/** Algebraic least-squares circle through 2D points: {center, radius, residual}. */
+function fitCircle(pts) {
+  let sxx = 0, sxy = 0, syy = 0, sx = 0, sy = 0, n = 0, sxz = 0, syz = 0, sz = 0;
+  for (const [x, y] of pts) {
+    const z = x * x + y * y;
+    sxx += x * x; sxy += x * y; syy += y * y; sx += x; sy += y; n++; sxz += x * z; syz += y * z; sz += z;
+  }
+  // Solve [sxx sxy sx; sxy syy sy; sx sy n] [a b c] = -[sxz syz sz] for x²+y²+ax+by+c=0.
+  const M = [[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, n]];
+  const R = [-sxz, -syz, -sz];
+  const det = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+  const D = det(M);
+  if (Math.abs(D) < 1e-18) return null;
+  const col = (k) => M.map((row, i) => row.map((v, j) => (j === k ? R[i] : v)));
+  const [a, b, c] = [0, 1, 2].map((k) => det(col(k)) / D);
+  const center = [-a / 2, -b / 2];
+  const r2 = center[0] ** 2 + center[1] ** 2 - c;
+  if (!(r2 > 0)) return null;
+  const radius = Math.sqrt(r2);
+  const residual = Math.max(...pts.map(([x, y]) => Math.abs(Math.hypot(x - center[0], y - center[1]) - radius)));
+  return { center, radius, residual };
+}
+
+/** Axis of a cylindrical or conical face: {origin, direction, radius}. */
+export function brepAxisOfFace(face, fallbackRadius = null) {
+  return attempt('axisOf', () => {
+    const g = faceGeometry(face);
+    if (!g.axis || (g.kind !== 'CYLINDRE' && g.kind !== 'CONE')) {
+      throw new GraphError(`axisOf: the face is ${g.kind}, not cylindrical or conical`);
+    }
+    const radius = g.radius ?? fallbackRadius;
+    if (radius == null) throw new GraphError('axisOf: could not measure the face radius');
+    return { origin: g.axis.origin, direction: g.axis.direction, radius };
   });
 }
 
@@ -867,11 +1110,28 @@ export function brepBBox(shape) {
   if (!shape) return null;
   try {
     const target = isSketch(shape) ? placed(shape) : shape;
-    const [min, max] = target.boundingBox.bounds;
-    return { min: [...min], max: [...max] };
+    return tightBounds(target);
   } catch {
     return null;
   }
+}
+
+/**
+ * The bounding box the geometry actually occupies.
+ *
+ * OCCT's default box is the basis surface's box grown by every offset and
+ * tolerance, so a shelled revolve reports itself one wall thickness larger on
+ * every side — a number that fails a fitsIn() the part passes. AddOptimal
+ * bounds the surfaces themselves.
+ */
+export function tightBounds(shape) {
+  const box = new OC.Bnd_Box_1();
+  OC.BRepBndLib.AddOptimal(shape.wrapped, box, true, false);
+  const lo = box.CornerMin();
+  const hi = box.CornerMax();
+  const out = { min: [lo.X(), lo.Y(), lo.Z()], max: [hi.X(), hi.Y(), hi.Z()] };
+  lo.delete(); hi.delete(); box.delete();
+  return out;
 }
 
 /**

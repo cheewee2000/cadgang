@@ -23,7 +23,7 @@
  */
 
 import { GraphError } from './errors.js';
-import { brepKernel, trackBrepShape } from './brep.js';
+import { brepKernel, trackBrepShape, faceGeometry } from './brep.js';
 
 const RAD = Math.PI / 180;
 const AXIS = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
@@ -151,7 +151,8 @@ export function describeEdge(edge, i) {
 /** Describe one face. */
 export function describeFace(face, i) {
   const rc = brepKernel();
-  const kind = face.geomType;
+  const geo = faceGeometry(face);
+  const kind = geo.kind;
   const area = rc.measureArea(face);
   const bbox = readBBox(face);
   const center = readVector(face.center);
@@ -167,13 +168,13 @@ export function describeFace(face, i) {
   // Cylindrical faces are how holes and bosses present themselves, so their
   // radius has to be filterable. Derive it from the face's own extent rather
   // than reaching into the OCCT adaptor.
-  let radius = null;
-  if (kind === 'CYLINDRE') {
+  let radius = geo.radius;
+  if (radius == null && kind === 'CYLINDRE') {
     const span = [0, 1, 2].map((k) => bbox.max[k] - bbox.min[k]);
     // The two largest extents of a cylinder's bbox span its diameter.
     const sorted = [...span].sort((a, b) => b - a);
     radius = sorted[1] / 2;
-  } else if (kind === 'SPHERE') {
+  } else if (radius == null && kind === 'SPHERE') {
     radius = Math.max(...[0, 1, 2].map((k) => bbox.max[k] - bbox.min[k])) / 2;
   }
 

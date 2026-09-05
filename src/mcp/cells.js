@@ -46,8 +46,9 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     helix(r, pitch, height, {center, axis, lefthand})
   hole(shape, [x,y,z], diameter, {depth (omit = through all), direction=[0,0,-1], counterbore:{diameter,depth},
     countersink:{diameter, angle:90}}) — Fusion's Hole: drill from a point on a face
-  thread(shape, cylindricalFaceQuery, pitch, {depth, lefthand, length}) — a modelled 60° V thread over the face's length;
-    boss or hole is read from the face. Built as a twist extrude, so it is fast; the result reopens in Fusion as real geometry.
+  thread(shape, cylindricalFaceQuery, pitch, {depth, lefthand, length}) — a modelled thread (rounded profile, ISO depth) over
+    the face's length; boss or hole is read from the face, and a hollow boss keeps its bore. Fast on solid geometry
+    (~0.1 s); on a SHELLED part every boolean is slow (5–15 s) — thread solids, and shell last or use `length`.
   modifiers: fillet(shape, edgeQuery, radius|fn(edge)); chamfer(shape, edgeQuery, distance | {distances:[a,b], face:faceQuery}
     | {distance, angle, face}); shell(shape, faceQuery|null, thickness) — POSITIVE hollows INWARD, negative grows outward,
     null query seals a void; offset(shape, distance) grows every face (negative shrinks);
@@ -67,7 +68,8 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     distance(a, b) closest approach; length(shape, edgeQuery) total edge length
   NOT available (kernel build lacks the binding): delete/replace face, non-uniform scale, surface tools, sheet metal, text.
 
-q — q.faces(shape) / q.edges(shape), then chain filters:
+q — q.faces(shape) / q.edges(shape), then chain filters. A revolved line reads as cylindrical/conical and a shelled
+  cylinder's inner wall as cylindrical, whatever OCCT calls the surface underneath.
   kinds: planar() cylindrical() conical() spherical() toroidal() | linear() circular() elliptical() | ofKind('PLANE',...)
   direction: along('z'|'+x'|[0,0,1]) for edges; facing('+z') for faces (sign matters: '+z' is the top, 'z' is both)
   measure: ofLength(v,tol) ofArea(v,tol) ofRadius(v,tol) ofDiameter(v,tol) largerThan(v) smallerThan(v)
@@ -101,7 +103,8 @@ sk — 2D sketches under constraint, for profiles a primitive cannot express. sk
   solve({params}) returns {converged, dof, redundant, iterations}; brep.extrude/revolve solve it for you if you did not.
     Starting coordinates only need to be roughly right — the solver pulls them onto the dimensions, and a rough
     pose is what picks between the two answers a tangency or a mirror has.
-  Sketch geometry must form CLOSED loops. Several loops means boundary first, holes cut from it.
+  Sketch geometry must form CLOSED loops. Nesting is read from containment: a loop inside the boundary is a hole,
+    a loop inside a hole is an island, and so on.
   dof > 0 means the sketch is under-constrained: it still built, but a later parameter change may move it
   somewhere you did not intend. Aim for dof 0. 'redundant' means you said something twice; harmless but noise.
 
@@ -145,7 +148,10 @@ export function registerCellTools(server, { call, ok, fail, base }) {
   const paramValue = z.union([z.number(), z.string(), z.boolean()]);
 
   const sketchSchema = z.object({
-    plane: z.enum(['XY', 'XZ', 'YZ', 'YX', 'ZX', 'ZY']).optional(),
+    plane: z.union([
+      z.enum(['XY', 'XZ', 'YZ', 'YX', 'ZX', 'ZY']),
+      z.object({ origin: z.array(z.number()).length(3), normal: z.array(z.number()).length(3), xDir: z.array(z.number()).length(3).optional() }),
+    ]).optional().describe("A named plane, or a {origin, normal, xDir?} object such as brep.planeOf returns"),
     offset: z.number().optional().describe('Distance along the plane normal'),
     points: z.array(z.object({ x: z.number(), y: z.number(), fixed: z.boolean().optional() })),
     entities: z.array(z.object({
