@@ -26,7 +26,6 @@ import { drawOn, eraseEntity, eraseConstraint, dimensionOn } from '../core/sketc
 import * as ops from '../core/ops.js';
 import { meshingBounds } from '../core/sdf.js';
 import { meshStats } from '../core/mesher.js';
-import { toBinarySTL } from '../core/stl.js';
 import { renderPreview } from '../core/render.js';
 import {
   initBrep, beginBrepScope, tessellate, tessellateEdges, exportStep,
@@ -484,7 +483,7 @@ export function cellsRouter(doc, rootDir) {
     return target;
   }
 
-  /** STEP download. Cells are exact all the way through, so this never degrades. */
+  /** STEP download — the only export. Cells are exact all the way through, so this never degrades. */
   r.get('/export/step', async (req, res) => {
     try {
       await withShape(req, async ({ shape, target }) => {
@@ -494,20 +493,6 @@ export function cellsRouter(doc, rootDir) {
         res.setHeader('Content-Disposition', `attachment; filename="${target}.step"`);
         if (savedTo) res.setHeader('X-Saved-To', savedTo);
         res.send(step);
-      }, { requireAssertions: true });
-    } catch (e) { fail(res, e); }
-  });
-
-  r.get('/export/stl', async (req, res) => {
-    try {
-      await withShape(req, ({ shape, target }) => {
-        const t = tessellate(shape, { tolerance: tolerance(req) });
-        const stl = toBinarySTL(t.positions, t.indices, target);
-        const savedTo = saveExport(req.query.file, 'stl', stl);
-        res.setHeader('Content-Type', 'model/stl');
-        res.setHeader('Content-Disposition', `attachment; filename="${target}.stl"`);
-        if (savedTo) res.setHeader('X-Saved-To', savedTo);
-        res.send(stl);
       }, { requireAssertions: true });
     } catch (e) { fail(res, e); }
   });

@@ -214,7 +214,7 @@ evaluation order, dragging their own dependencies with them.
 And the refusal lands **at export, not at render**. A document with a failing
 assertion still builds, still measures, still answers topology questions,
 because looking at the part is how anyone fixes a wall that is too thin. What it
-does not do is leave the building: STEP and STL refuse. The escape hatch is
+does not do is leave the building: STEP export refuses. The escape hatch is
 deleting the assertion cell — an edit the document records — rather than a flag
 on a URL, which it would not.
 

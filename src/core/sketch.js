@@ -38,8 +38,9 @@ const WELD = 1e-6;
  * authored in code can still be dragged.
  */
 export class Sketch {
-  constructor({ plane = 'XY', points = [], entities = [], constraints = [], params = {} } = {}) {
+  constructor({ plane = 'XY', offset = 0, points = [], entities = [], constraints = [], params = {} } = {}) {
     this.plane = plane;
+    this.offset = offset;
     // The cell's parameters, so `s.distance(l, 'width')` works without every
     // call site re-passing them. A sketch is only parametric if the values it
     // reads are the same ones the sliders move.
@@ -188,9 +189,15 @@ export class Sketch {
     return this.report;
   }
 
-  /** Put the sketch on a named plane: 'XY', 'XZ', 'YZ', 'YX', 'ZX', 'ZY'. */
-  on(plane) {
+  /**
+   * Put the sketch on a plane: a name ('XY', 'XZ', 'YZ', 'YX', 'ZX', 'ZY') or a
+   * plane object such as brep.planeOf(shape, faceQuery) returns. `offset`
+   * slides it along the plane normal — a loft's sections are the same sketch
+   * placed at different offsets.
+   */
+  on(plane, offset = 0) {
     this.plane = plane;
+    this.offset = offset;
     return this;
   }
 
@@ -207,6 +214,7 @@ export class Sketch {
   toJSON() {
     return {
       plane: this.plane,
+      ...(this.offset ? { offset: this.offset } : {}),
       points: this.points.map((p) => ({ x: p.x, y: p.y, ...(p.fixed ? { fixed: true } : {}) })),
       entities: this.entities.map((e) => ({ ...e })),
       constraints: this.constraints.map((c) => ({ ...c })),

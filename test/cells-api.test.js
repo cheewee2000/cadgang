@@ -543,14 +543,13 @@ test('a failing assertion refuses the export but not the viewport', async () => 
   assert.equal(r.status, 200);
 
   // It just does not ship.
-  for (const route of ['/export/stl', '/export/step']) {
-    const bad = await api(route);
-    assert.equal(bad.status, 400, `${route} should refuse`);
-    assert.match(bad.data.error, /Refusing to export/);
-    assert.match(bad.data.error, /min wall/);
-  }
+  const bad = await api('/export/step');
+  assert.equal(bad.status, 400, 'export should refuse');
+  assert.match(bad.data.error, /Refusing to export/);
+  assert.match(bad.data.error, /min wall/);
+  assert.equal((await api('/export/stl')).status, 404, 'STEP is the only export');
 
   await api('/toothin', { method: 'DELETE' });
-  const ok = await api('/export/stl');
+  const ok = await api('/export/step');
   assert.equal(ok.status, 200, 'removing the assertion is the explicit escape hatch');
 });

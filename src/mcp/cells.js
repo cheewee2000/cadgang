@@ -31,12 +31,29 @@ ARGUMENTS
            query is better whenever the geometry can describe itself.
   brep, q, sk, assert, topology  as below
 
-brep — box(sx,sy,sz,{center:'xy'|'xyz'|''}) sitting on z=0 unless centered; cylinder(r,h,{center}); sphere(r);
-  union/subtract/intersect(base, ...tools); fillet(shape, edgeQuery, radius); chamfer(shape, edgeQuery, distance);
-  shell(shape, faceQuery|null, thickness) — POSITIVE thickness hollows INWARD, negative grows outward, null query seals a void;
-  extrude(sketch, distance, {symmetric, offset}); revolve(sketch, axis=[0,0,1], {offset});
-  translate(shape,[x,y,z]); rotate(shape, deg, axis=[0,0,1], origin); scale(shape, factor, origin); mirror(shape,'XY'|'XZ'|'YZ', origin);
-  volume(shape); area(shape); bbox(shape) -> {min,max,size}
+brep — every operation is a pure function: shape in, new shape out. Nothing is mutated, so a cell is math all the way down.
+  primitives: box(sx,sy,sz,{center:'xy'|'xyz'|''}) sitting on z=0 unless centered; cylinder(r,h,{center}); sphere(r);
+    torus(majorR, minorR) about z; cone(r1, r2, h, {center}) — r2 = 0 for a point, r1 ≠ r2 for a frustum
+  booleans: union/subtract/intersect(base, ...tools)
+  sketch → solid: extrude(sketch, distance, {symmetric, offset, twist:deg, endScale}) — endScale 0.5 tapers to half size;
+    revolve(sketch, axis=[0,0,1], {offset, origin, angle:360}); loft([sketchA, sketchB, ...], {ruled}) — put each
+    section on its own plane/offset with s.on('XY', 30); sweep(sketch, path, {frenet}) — the profile is placed at the
+    path's start, normal along the path, its own plane ignored; pipe(path, r, {wall}) — a round tube along a path
+  paths (for sweep/pipe): polyline([[x,y,z],...]); spline([[x,y,z],...]) smooth through the points;
+    helix(r, pitch, height, {center, axis, lefthand}) — sweep a profile along it for a coil or a thread
+  hole(shape, [x,y,z], diameter, {depth (omit = through all), direction=[0,0,-1], counterbore:{diameter,depth},
+    countersink:{diameter, angle:90}}) — Fusion's Hole: drill from a point on a face
+  modifiers: fillet(shape, edgeQuery, radius); chamfer(shape, edgeQuery, distance);
+    shell(shape, faceQuery|null, thickness) — POSITIVE thickness hollows INWARD, negative grows outward, null query seals a void;
+    offset(shape, distance) grows every face (negative shrinks); draft(shape, faceQuery, deg, {pull=[0,0,1], neutralAt})
+    tapers the selected faces for mould release, faces staying put on the neutral plane (default: the bottom along pull);
+    split(shape, origin, normal) -> {above, below}
+  patterns: linearPattern(shape, [dx,dy,dz], count); circularPattern(shape, count, {axis, origin, angle:360}) —
+    both return the copies FUSED, so use them on a tool then subtract, or on a boss then union.
+    Fusion's Mirror that keeps both sides is brep.union(s, brep.mirror(s, 'YZ')).
+  placement: translate(shape,[x,y,z]); rotate(shape, deg, axis=[0,0,1], origin); scale(shape, factor, origin); mirror(shape,'XY'|'XZ'|'YZ', origin)
+  planes: planeOf(shape, faceQuery) -> {origin, normal, xDir} for sketching ON a face: sk.sketch().on(brep.planeOf(input, q.faces(input).planar().facing('+z').expect(1)))
+  measures: volume(shape); area(shape); bbox(shape) -> {min,max,size}; centroid(shape) -> [x,y,z]; distance(a, b) closest approach
 
 q — q.faces(shape) / q.edges(shape), then chain filters:
   kinds: planar() cylindrical() conical() spherical() toroidal() | linear() circular() elliptical() | ofKind('PLANE',...)
@@ -61,7 +78,8 @@ sk — 2D sketches under constraint, for profiles a primitive cannot express. sk
   never reads them itself. A dimension typed as 'width' binds the drawn geometry to that slider forever after.
   geometry: point(x,y,{fixed}) -> index; anchor(x,y) a pinned point (every sketch wants at least one);
     line(a,b) / circle(centrePoint, r) / arc(centre, a, b) counter-clockwise from a to b — each returns an entity index;
-    rectangle(x1,y1,x2,y2) -> four already-squared lines; on('XY'|'XZ'|'YZ'|'YX'|'ZX'|'ZY') sets the plane
+    rectangle(x1,y1,x2,y2) -> four already-squared lines; on(plane, offset=0) sets the plane — a name
+    ('XY'|'XZ'|'YZ'|'YX'|'ZX'|'ZY') or a brep.planeOf(...) object — and slides it along the normal
   constraints: coincident(p,p) horizontal(line) vertical(line) distance(line,v) distance(p,p,v)
     distanceX(p,p,v) distanceY(p,p,v) — SIGNED, b minus a; radius(e,v) diameter(e,v) equal(e,f)
     parallel(e,f) perpendicular(e,f) angle(e,f,degrees) tangent(line|curve, curve) pointOn(p,e) concentric(e,f)
@@ -85,7 +103,7 @@ ASSERTION CELLS — add a cell with kind: 'assert' and its program states claims
   export default ({ assert, input }) => { assert.minWall(input, 1.5); assert.watertight(input); };
   It passes 'input' straight through, so it can sit anywhere in the stack without becoming a link in the chain.
   A failed assertion fails the DOCUMENT, not the stack: the geometry still builds and still renders (looking at the
-  part is how you fix it), but STEP and STL exports REFUSE until it passes or the assertion cell is deleted.
+  part is how you fix it), but STEP export REFUSES until it passes or the assertion cell is deleted.
   Claims run as ordinary statements, so the first failure stops the ones after it in the SAME cell — put
   independent claims in separate cells if you want to see all of them at once.
   Write assertions for the things the prompt implied but the code cannot show: a wall that must survive a
@@ -115,6 +133,7 @@ export function registerCellTools(server, { call, ok, fail, base }) {
 
   const sketchSchema = z.object({
     plane: z.enum(['XY', 'XZ', 'YZ', 'YX', 'ZX', 'ZY']).optional(),
+    offset: z.number().optional().describe('Distance along the plane normal'),
     points: z.array(z.object({ x: z.number(), y: z.number(), fixed: z.boolean().optional() })),
     entities: z.array(z.object({
       type: z.enum(['line', 'circle', 'arc']),
@@ -443,26 +462,24 @@ Args:
     'cadgang_cells_export',
     {
       title: 'Export the cell stack',
-      description: `Write the cell stack's solid to exports/<filename>.<step|stl> in the cadgang repo (server-side) and return the path.
+      description: `Write the cell stack's solid to exports/<filename>.step in the cadgang repo (server-side) and return the path.
 
-Cells are exact B-rep the whole way through — there is no field lineage to fall out of — so STEP always works and reopens in Fusion, SolidWorks or OnShape as editable geometry rather than a faceted import. Use STL only for printing.
+STEP is the only export. Cells are exact B-rep the whole way through, so the file reopens in Fusion, SolidWorks or OnShape as editable geometry rather than a faceted import.
 
 Args:
   - filename: base name, no extension
-  - format: 'step' (default) or 'stl'
   - cell: cell to export (defaults to the output/last cell)`,
       inputSchema: {
         filename: z.string().regex(/^[\w.-]+$/, 'Use letters, digits, dot, dash, underscore only'),
-        format: z.enum(['step', 'stl']).default('step'),
         cell: z.string().optional(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ filename, format, cell }) => {
+    async ({ filename, cell }) => {
       try {
         const qs = new URLSearchParams({ file: filename });
         if (cell) qs.set('cell', cell);
-        const res = await fetch(`${base}/api/cells/export/${format}?${qs}`);
+        const res = await fetch(`${base}/api/cells/export/step?${qs}`);
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error || `cadgang API error (HTTP ${res.status})`);
@@ -471,7 +488,7 @@ Args:
         return ok({
           savedTo: res.headers.get('x-saved-to'),
           bytes,
-          format: format === 'step' ? 'STEP AP214 (exact B-rep)' : 'binary STL',
+          format: 'STEP AP214 (exact B-rep)',
         });
       } catch (e) { return fail(e); }
     }

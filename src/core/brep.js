@@ -389,10 +389,17 @@ export function brepSphere(radius) {
 
 export const SKETCH_PLANES = ['XY', 'XZ', 'YZ', 'YX', 'ZX', 'ZY'];
 
+const isVec3 = (v) => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
+
+/** A plane object: {origin, normal, xDir?} — what brep.planeOf() hands back. */
+const isPlaneObject = (p) => p && typeof p === 'object' && isVec3(p.origin) && isVec3(p.normal);
+
 /** A sketch value as it flows through the graph. */
 function sketchValue(drawing, plane, offset) {
-  if (!SKETCH_PLANES.includes(plane)) {
-    throw new GraphError(`Unknown plane '${plane}'. Valid planes: ${SKETCH_PLANES.join(', ')}`);
+  if (!SKETCH_PLANES.includes(plane) && !isPlaneObject(plane)) {
+    throw new GraphError(
+      `Unknown plane '${plane}'. Valid planes: ${SKETCH_PLANES.join(', ')}, or a {origin, normal} object`
+    );
   }
   return { kind: 'sketch', drawing: track(drawing), plane, offset };
 }
@@ -402,8 +409,31 @@ function placed(sketch, shift = 0) {
   if (sketch?.kind !== 'sketch') {
     throw new GraphError("Input 'profile' needs a sketch block (a 2D profile), not a solid");
   }
-  return track(sketch.drawing.clone().sketchOnPlane(sketch.plane, sketch.offset + shift));
+  const along = (sketch.offset || 0) + shift;
+  if (isPlaneObject(sketch.plane)) {
+    const { origin, normal, xDir = null } = sketch.plane;
+    const o = origin.map((c, i) => c + normal[i] * along);
+    return track(sketch.drawing.clone().sketchOnPlane(new (kernel().Plane)(o, xDir, normal)));
+  }
+  return track(sketch.drawing.clone().sketchOnPlane(sketch.plane, along));
 }
+
+/** The plane a planar face lies on, as a plain {origin, normal, xDir} object. */
+export function brepPlaneOfFace(face) {
+  return attempt('planeOf', () => {
+    const pl = kernel().makePlaneFromFace(face);
+    const out = {
+      origin: [...pl.origin.toTuple()],
+      normal: [...pl.zDir.toTuple()],
+      xDir: [...pl.xDir.toTuple()],
+    };
+    pl.delete();
+    return out;
+  });
+}
+
+/** A sketch value from a raw replicad drawing on a named plane (for primitives). */
+export const brepDrawingSketch = (drawing, plane = 'XY', offset = 0) => sketchValue(drawing, plane, offset);
 
 export function sketchRect(plane, offset, width, height, radius, [cx, cy]) {
   const k = kernel();
@@ -507,18 +537,122 @@ function drawLoop(k, loop) {
  * lands centred on every plane without this module needing to know which way
  * any given plane's normal points.
  */
-export function brepExtrude(sketch, distance, symmetric) {
+export function brepExtrude(sketch, distance, symmetric, { twist = 0, endScale = 1 } = {}) {
   if (distance === 0) throw new GraphError('Extrude distance cannot be zero');
+  if (!(endScale > 0)) throw new GraphError('Extrude endScale must be greater than zero');
   return attempt('extrude', () => {
     const height = symmetric ? Math.abs(distance) : distance;
-    return track(placed(sketch, symmetric ? -Math.abs(distance) / 2 : 0).extrude(height));
+    const opts = {};
+    if (twist) opts.twistAngle = twist;
+    if (endScale !== 1) opts.extrusionProfile = { profile: 'linear', endFactor: endScale };
+    return track(placed(sketch, symmetric ? -Math.abs(distance) / 2 : 0).extrude(height, opts));
   });
 }
 
-/** Revolve a sketch a full turn about `axis` (through the origin). */
-export function brepRevolve(sketch, axis) {
+/** Revolve a sketch about `axis` through `origin`, by `angle` degrees (360 = full turn). */
+export function brepRevolve(sketch, axis, { origin = [0, 0, 0], angle = 360 } = {}) {
   if (!axis.some(Boolean)) throw new GraphError('Revolve axis cannot be [0, 0, 0]');
-  return attempt('revolve', () => track(placed(sketch).revolve(axis)));
+  if (!(angle > 0 && angle <= 360)) throw new GraphError('Revolve angle must be in (0, 360]');
+  return attempt('revolve', () => track(placed(sketch).revolve(axis, { origin, angle })));
+}
+
+/** Loft through the sections, each placed on its own plane and offset. */
+export function brepLoft(sketches, { ruled = false } = {}) {
+  if (sketches.length < 2) throw new GraphError('Loft needs at least two sections');
+  return attempt('loft', () => {
+    const wires = sketches.map((s) => placed(s).wire);
+    return track(kernel().loft(wires, { ruled }));
+  });
+}
+
+/**
+ * Sweep a profile along a path.
+ *
+ * The profile's own plane is ignored: it is placed at the path's start with
+ * its normal along the path's tangent, so the same circle sweeps a helix, an
+ * arc or a polyline without the caller computing a start frame.
+ */
+export function brepSweep(sketch, path, { frenet = false } = {}) {
+  if (sketch?.kind !== 'sketch') throw new GraphError('sweep needs a sketch profile');
+  if (path?.kind !== 'path') throw new GraphError('sweep needs a path — brep.polyline, brep.spline or brep.helix');
+  return attempt('sweep', () => {
+    const rc = kernel();
+    const spine = track(path.wire.clone());
+    const start = spine.startPoint;
+    const normal = spine.tangentAt(1e-9).normalize();
+    const plane = new rc.Plane(start, null, normal);
+    const profile = track(sketch.drawing.clone().sketchOnPlane(plane));
+    return track(rc.genericSweep(profile.wire, spine, { frenet, forceProfileSpineOthogonality: true }));
+  });
+}
+
+/** A path value: a wire a profile can be swept along. */
+const pathValue = (wire) => ({ kind: 'path', wire: track(wire) });
+
+export function brepPolyline(points) {
+  if (!Array.isArray(points) || points.length < 2) throw new GraphError('polyline needs at least two points');
+  return attempt('polyline', () => {
+    const rc = kernel();
+    const edges = points.slice(1).map((p, i) => rc.makeLine(points[i], p));
+    return pathValue(rc.assembleWire(edges));
+  });
+}
+
+export function brepSpline(points) {
+  if (!Array.isArray(points) || points.length < 2) throw new GraphError('spline needs at least two points');
+  return attempt('spline', () => {
+    const rc = kernel();
+    return pathValue(rc.assembleWire([rc.makeBSplineApproximation(points, { tolerance: 1e-4 })]));
+  });
+}
+
+export function brepHelix(radius, pitch, height, { center = [0, 0, 0], axis = [0, 0, 1], lefthand = false } = {}) {
+  if (!(radius > 0 && pitch > 0 && height > 0)) throw new GraphError('helix needs radius, pitch and height > 0');
+  return attempt('helix', () => pathValue(kernel().makeHelix(pitch, height, radius, center, axis, lefthand)));
+}
+
+/** Offset every face of a solid outward by `distance` (inward when negative). */
+export function brepOffset(shape, distance) {
+  if (!distance) throw new GraphError('Offset distance cannot be zero');
+  return attempt('offset', () => track(kernel().makeOffset(shape, distance)));
+}
+
+/**
+ * Tilt the selected faces by `angle` degrees about the neutral plane, the way a
+ * mould draft does. Faces are tilted so the solid narrows along `pull`.
+ */
+export function brepDraft(shape, faces, angle, pull, neutralAt) {
+  if (!Number.isFinite(angle) || angle === 0) throw new GraphError('Draft angle must be a non-zero number of degrees');
+  return attempt('draft', () => {
+    const rc = kernel();
+    const builder = new OC.BRepOffsetAPI_DraftAngle_2(shape.wrapped);
+    const dir = new OC.gp_Dir_4(...pull);
+    const pln = new OC.gp_Pln_3(new OC.gp_Pnt_3(...neutralAt), dir);
+    for (const f of faces) {
+      builder.Add(f.wrapped, dir, (angle * Math.PI) / 180, pln, false);
+      if (!builder.AddDone()) {
+        throw new GraphError('draft: a selected face cannot be drafted — it must be planar and meet the neutral plane');
+      }
+    }
+    builder.Build(new OC.Message_ProgressRange_1());
+    const out = track(rc.cast(builder.Shape()));
+    builder.delete();
+    return out;
+  });
+}
+
+/** Centre of mass of a solid. */
+export function brepCentroid(shape) {
+  return attempt('centroid', () => {
+    const props = kernel().measureShapeVolumeProperties(shape);
+    const c = props.centerOfMass;
+    return [c[0], c[1], c[2]];
+  });
+}
+
+/** Exact closest distance between two shapes. */
+export function brepDistanceBetween(a, b) {
+  return attempt('distance', () => kernel().measureDistanceBetween(a, b));
 }
 
 /** Tessellated outline of a sketch, for drawing the profile in the viewport. */
