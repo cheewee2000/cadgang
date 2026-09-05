@@ -85,7 +85,15 @@ test('a query can be counted before it is committed to a cell', async () => {
   });
   assert.equal(r.data.count, 0);
 
-  r = await api('/query', { method: 'POST', body: { cell: 'body', expression: '42' } });
+  // The finishers the docs list work here too, since this is where a query is tried out.
+  r = await api('/query', { method: 'POST', body: { cell: 'body', expression: "q.edges(shape).linear().along('z').count()" } });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.count, 4);
+  r = await api('/query', { method: 'POST', body: { cell: 'body', expression: "q.faces(shape).planar().facing('+z').explain()" } });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.count, 1);
+
+  r = await api('/query', { method: 'POST', body: { cell: 'body', expression: '"forty-two"' } });
   assert.equal(r.status, 400);
   assert.match(r.data.error, /did not produce a query/);
 });
@@ -154,14 +162,18 @@ test('a broken cell fails the request with the cell named', async () => {
     method: 'POST',
     body: { id: 'bust', code: "export default ({ brep, q, input }) => brep.fillet(input, q.faces(input).spherical(), 1);" },
   });
-  const r = await api('/evaluate');
-  assert.equal(r.status, 400);
-  assert.match(r.data.error, /matched no faces/);
-
-  // stopOnError=0 walks the whole stack so one round trip shows everything.
-  const all = await api('/evaluate?stopOnError=0');
+  // By default the whole stack is walked, so one round trip shows every cell's state
+  // and a broken cell never hides the others.
+  const all = await api('/evaluate');
   assert.equal(all.status, 200);
   assert.deepEqual(all.data.cells.map((c) => c.status), ['ok', 'ok', 'error']);
+  assert.match(all.data.cells.at(-1).error, /matched no faces/);
+  assert.equal(all.data.shown, 'round');
+
+  // stopOnError=1 fails the request at the first broken cell, naming it.
+  const r = await api('/evaluate?stopOnError=1');
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /matched no faces/);
 
   await api('/bust', { method: 'DELETE' });
 });

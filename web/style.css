@@ -36,7 +36,7 @@ body { display: flex; flex-direction: column; }
 /* ------------------------------------------------------------ header */
 
 header {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; row-gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-4);
   border-bottom: var(--bw-hair) solid var(--rule);
   background: var(--paper); flex: 0 0 auto;
@@ -59,7 +59,7 @@ header {
 }
 .project-name:hover { opacity: 0.55; color: var(--ink); }
 
-.toolbar { display: flex; align-items: center; gap: var(--sp-3); }
+.toolbar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
 .toolbar label {
   color: var(--ink-faint); display: flex; align-items: center; gap: var(--sp-2);
   text-transform: uppercase; font-size: var(--fs-12); letter-spacing: var(--ls-label);

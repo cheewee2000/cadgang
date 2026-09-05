@@ -178,6 +178,9 @@ export function dimensionOn(data, op, { params = {} } = {}) {
     if (e.type === 'line') {
       sk.distance(op.entity, value);
       label = 'length';
+    } else if (op.kind === 'diameter') {
+      sk.diameter(op.entity, value);
+      label = 'diameter';
     } else {
       sk.radius(op.entity, value);
       label = 'radius';

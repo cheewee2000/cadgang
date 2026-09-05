@@ -169,7 +169,7 @@ export function describeFace(face, i) {
   // radius has to be filterable. Derive it from the face's own extent rather
   // than reaching into the OCCT adaptor.
   let radius = geo.radius;
-  if (radius == null && kind === 'CYLINDRE') {
+  if (radius == null && kind === 'CYLINDER') {
     const span = [0, 1, 2].map((k) => bbox.max[k] - bbox.min[k]);
     // The two largest extents of a cylinder's bbox span its diameter.
     const sorted = [...span].sort((a, b) => b - a);
@@ -242,7 +242,7 @@ function measureMatches(actual, want, tol) {
 
 const FACE_KINDS = {
   planar: 'PLANE',
-  cylindrical: 'CYLINDRE',
+  cylindrical: 'CYLINDER',
   conical: 'CONE',
   spherical: 'SPHERE',
   toroidal: 'TORUS',

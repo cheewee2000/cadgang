@@ -14,6 +14,7 @@ import { ModelDocument } from '../core/document.js';
 import { CellDocument } from '../core/cells.js';
 import { apiRouter } from './api.js';
 import { cellsRouter } from './cells.js';
+import { initBrep } from '../core/brep.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -48,6 +49,9 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use('/api/cells', cellsRouter(cells, ROOT));
+// Load the kernel now rather than on the first geometry request, so /api/health's
+// brepKernel flag means "ready" and the first evaluate does not pay the WASM load.
+initBrep().catch((e) => console.error('B-rep kernel failed to load:', e.message));
 app.use('/api', apiRouter(doc, ROOT, broadcast));
 
 // The v2 cell transcript is its own page rather than a mode inside the node

@@ -32,7 +32,8 @@ ARGUMENTS
   brep, q, sk, assert, topology  as below
 
 brep — every operation is a pure function: shape in, new shape out. Nothing is mutated, so a cell is math all the way down.
-  primitives: box(sx,sy,sz,{center:'xy'|'xyz'|''}) sitting on z=0 unless centered; cylinder(r,h,{center}); sphere(r);
+  primitives: box(sx,sy,sz,{center}) — by DEFAULT centred in X and Y and sitting on z=0 (center:'xy'); center:'xyz' centres
+    it fully; center:'' puts a corner at the origin. cylinder(r,h,{center}) likewise sits on z=0 about the z axis; sphere(r);
     torus(majorR, minorR) about z; cone(r1, r2, h, {center}) — r2 = 0 for a point, r1 ≠ r2 for a frustum;
     coil(r, pitch, height, sectionR, {section:'circle'|'square'|'triangle', lefthand}) — a spring
   booleans: union/subtract/intersect(base, ...tools); interference(a, b) -> shared volume (0 = no clash)
@@ -41,7 +42,9 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     section on its own plane/offset with s.on('XY', 30); sweep(sketch, path, {frenet, xDir, guide, transition}) — the
     profile is placed at the path's start, normal along the path, its own plane ignored; pipe(path, r, {wall});
     emboss(shape, sketch, depth, {cut}) — raise or sink a profile from its plane into the body;
-    rib(shape, [[x,y,z],...]|path, thickness, height, {direction=[0,0,1]}) — a thin wall fused on
+    rib(shape, [[x,y,z],...]|path, thickness, height, {direction=[0,0,1]}) — a thin wall fused on: the path is the wall's
+    FOOT line (put its points on the body), `direction` is the axis the wall stands up along, and the wall is a plain
+    height×thickness rectangle swept along the path, not clipped to the body — size it to end inside the body
   paths (for sweep/pipe/pathPattern): polyline([[x,y,z],...]); spline([[x,y,z],...]) smooth through the points;
     helix(r, pitch, height, {center, axis, lefthand})
   hole(shape, [x,y,z], diameter, {depth (omit = through all), direction=[0,0,-1], counterbore:{diameter,depth},
@@ -60,7 +63,8 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     pathPattern(shape, path, count, {orient:true}) — all return the copies FUSED: pattern a tool then subtract, a boss then union.
     mirror(shape, 'XY'|'XZ'|'YZ', origin, {keep:true}) — keep fuses the image onto the original, as Fusion's Mirror does
   placement: translate(shape,[x,y,z]); rotate(shape, deg, axis=[0,0,1], origin); scale(shape, factor, origin) (uniform only)
-  construct: planeOf(shape, planarFaceQuery) -> {origin, normal, xDir}; plane(origin, normal, xDir?); planeThrough(a, b, c);
+  construct: planeOf(shape, planarFaceQuery) -> {origin, normal, xDir} with origin at the face's CENTRE, so a sketch about
+    (0,0) lands mid-face; plane(origin, normal, xDir?); planeThrough(a, b, c);
     pivotPlane(plane, deg, axis?) — plane at an angle; midplane(shape, faceQueryA, faceQueryB);
     axisOf(shape, cylindricalFaceQuery) -> {origin, direction, radius} for revolve / circularPattern / thread.
     A plane object goes straight into a sketch: sk.sketch().on(brep.planeOf(input, q.faces(input).planar().facing('+z').expect(1)))
@@ -76,6 +80,7 @@ q — q.faces(shape) / q.edges(shape), then chain filters. A revolved line reads
   place: near([x,y,z], dist) inBox([x,y,z],[x,y,z]) atExtreme('+z')
   combine: either(s => s.linear(), s => s.circular()) exclude(s => s.facing('-z')) where(d => d.area > 10)
   finish: expect(n) — ASSERT the count and carry on; count(); one(); all(); explain()
+  Kinds in topology and descriptors: PLANE CYLINDER CONE SPHERE TORUS, then BSPLINE_SURFACE / OFFSET_SURFACE for the rest.
 
 Always end a query with .expect(n). A query that matches an unexpected number of entities then fails the cell loudly instead of quietly building a different part. A query that matches nothing is always an error.
 
@@ -125,7 +130,7 @@ ASSERTION CELLS — add a cell with kind: 'assert' and its program states claims
   Write assertions for the things the prompt implied but the code cannot show: a wall that must survive a
   parameter change, a clearance a part is built to, a volume budget. That is the loop closing.
 
-The program runs in an isolated realm: no filesystem, network, timers, or process, and a wall-clock budget. Standard JS (Math, Array, loops, functions) is available, so arrays of holes, patterns and derived dimensions are ordinary code.
+The program runs in an isolated realm: no filesystem, network, timers, or process, and a wall-clock budget. Standard JS (Math, Array, loops, functions) is available, so arrays of holes, patterns and derived dimensions are ordinary code. console.log(...) works: each line lands in the cell's `logs` in cadgang_cells_evaluate — the way to inspect a plane object, a bbox, or a count while authoring.
 
 THE AUTHORING LOOP — you cannot see the model, so introspection replaces looking:
   1. cadgang_cells_add with the prompt and a first draft of the code

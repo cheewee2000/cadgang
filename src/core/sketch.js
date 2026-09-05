@@ -859,8 +859,13 @@ export function sketchLoops(sk) {
   }
   for (const [node, list] of at) {
     if (list.length !== 2) {
+      const welded = sk.points.map((_, i) => i).filter((i) => i !== node && find(i) === node);
+      const collapsed = welded.filter((i) => !sk.constraints.some((c) => c.type === 'coincident' && ((c.a === i && c.b === node) || (c.b === i && c.a === node))));
+      const hint = collapsed.length
+        ? ` Points ${[node, ...collapsed].join(', ')} have converged to the same place, so their edges now meet there — a dimension probably collapsed part of the profile; check which line each distance is on.`
+        : '';
       throw new GraphError(
-        `Sketch is not a set of closed loops: point ${node} joins ${list.length} edge${list.length === 1 ? '' : 's'}, not 2`
+        `Sketch is not a set of closed loops: point ${node} joins ${list.length} edge${list.length === 1 ? '' : 's'}, not 2.${hint}`
       );
     }
   }

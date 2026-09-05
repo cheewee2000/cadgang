@@ -379,8 +379,8 @@ export function cellsRouter(doc, rootDir) {
   /**
    * Run the stack and report per-cell status, console output, and timings —
    * without shipping any geometry. This is the cheap "did my edit work" call,
-   * and `stopOnError=0` makes it show every broken cell in one pass instead of
-   * one round trip per failure.
+   * and every broken cell is reported in one pass; `stopOnError=1` stops at the
+   * first failure and returns its error alone.
    */
   r.get('/evaluate', async (req, res) => {
     try {
@@ -389,7 +389,7 @@ export function cellsRouter(doc, rootDir) {
       await initBrep();
       const scope = beginBrepScope();
       try {
-        const stopOnError = req.query.stopOnError !== '0';
+        const stopOnError = req.query.stopOnError === '1';
         const run = evaluateCells(doc, target, { stopOnError });
         // Measures follow the same fallback as the viewport: a broken tail cell
         // should not also blank the numbers for the part that did build.
@@ -449,12 +449,21 @@ export function cellsRouter(doc, rootDir) {
           { id: `query:${target}` }
         );
         const result = probe.run(cellApi({ input: shape }));
-        if (!(result instanceof Query)) {
+        if (result instanceof Query) {
+          res.json({ cell: target, source: expression, ...result.explain() });
+        } else if (typeof result === 'number') {
+          res.json({ cell: target, source: expression, count: result });
+        } else if (Array.isArray(result) && result.every((d) => d && typeof d === 'object' && 'kind' in d)) {
+          res.json({ cell: target, source: expression, count: result.length, matched: result });
+        } else if (result && typeof result === 'object' && 'kind' in result) {
+          res.json({ cell: target, source: expression, count: 1, matched: [result] });
+        } else if (result && typeof result === 'object' && 'expression' in result) {
+          res.json({ cell: target, source: expression, ...result });
+        } else {
           throw new GraphError(
             'That expression did not produce a query. Build one with q.faces(shape) or q.edges(shape).'
           );
         }
-        res.json({ cell: target, source: expression, ...result.explain() });
       });
     } catch (e) { fail(res, e); }
   });
@@ -488,7 +497,7 @@ export function cellsRouter(doc, rootDir) {
   function saveExport(fileParam, ext, data) {
     if (!fileParam) return null;
     const safe = String(fileParam).replace(/[^\w.-]/g, '_').replace(new RegExp(`\\.${ext}$`, 'i'), '');
-    const dir = path.join(rootDir, 'exports');
+    const dir = process.env.CADGANG_EXPORTS || path.join(rootDir, 'exports');
     fs.mkdirSync(dir, { recursive: true });
     const target = path.join(dir, `${safe}.${ext}`);
     fs.writeFileSync(target, data);

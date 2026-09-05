@@ -348,7 +348,7 @@ test('an anchor only records a heading where the heading means something', () =>
   inScope(() => {
     const shape = evaluateCells(doc, 'body').value;
     const list = enumerate(shape, 'face');
-    const bore = list.find((e) => e.d.kind === 'CYLINDRE');
+    const bore = list.find((e) => e.d.kind === 'CYLINDER');
     const top = list.find((e) => e.d.kind === 'PLANE');
     assert.ok(bore && top, 'the part has both a bore and a planar face');
 

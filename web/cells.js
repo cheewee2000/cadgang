@@ -356,6 +356,7 @@ function renderStack() {
         ${badge(status)}
         <span class="cell-refs">${refs}</span>
         <span class="cell-ms">${entry?.ms ? `${entry.ms}ms` : ''}</span>
+        <button class="cell-del ghost" title="Delete this cell (Undo brings it back)">×</button>
       </div>
       <textarea class="cell-prompt" rows="2" placeholder="no prompt">${escapeHtml(cell.prompt || '')}</textarea>
       ${hasSketch(cell) ? '<div class="sketch-wrap"><div class="sketch-tools"></div><canvas class="sketch-canvas"></canvas><div class="sketch-note"></div></div>' : ''}
@@ -370,6 +371,13 @@ function renderStack() {
     for (const [name, value] of Object.entries(cell.params || {})) {
       params.append(paramRow(cell.id, name, value));
     }
+
+    el.querySelector('.cell-del').onclick = async () => {
+      try {
+        await api(`/${cell.id}`, { method: 'DELETE' });
+        await refresh();
+      } catch (e) { say(e.message, true); }
+    };
 
     const prompt = el.querySelector('.cell-prompt');
     // Grow to the text. A prompt is a sentence, not a form field, and a stack of

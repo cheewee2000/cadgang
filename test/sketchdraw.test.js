@@ -305,3 +305,10 @@ test('a drawn profile is a profile — it extrudes', () => {
   assert.equal(loops[0].segments.length, 4);
   assert.ok(Math.abs(loopArea(loops[0])) > 900, 'and it encloses roughly 40×25');
 });
+
+test('a dimension on a circle can be its diameter', () => {
+  const sk = { plane: 'XY', points: [{ x: 0, y: 0, fixed: true }], entities: [{ type: 'circle', c: 0, r: 5 }], constraints: [] };
+  const out = dimensionOn(sk, { entity: 0, kind: 'diameter', value: 12 });
+  assert.equal(out.sketch.constraints.at(-1).type, 'diameter');
+  assert.equal(out.sketch.constraints.at(-1).value, 12);
+});

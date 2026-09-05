@@ -265,3 +265,24 @@ test('bbox of a shelled revolve is the geometry, not the offset surface box', ()
   }
   near(after.max[2], 97, 0.001);
 }));
+
+test('planeOf puts the origin at the face centre', () => inScope(() => {
+  const cube = ops.translate(ops.box(10, 10, 10), [5, 5, 0]);
+  const plane = ops.planeOf(cube, q.faces(cube).planar().facing('+x'));
+  [10, 5, 5].forEach((v, i) => near(plane.origin[i], v, 0.001));
+  const boss = ops.extrude(circle(2).on(plane), 3);
+  const c = ops.centroid(boss);
+  near(c[1], 5, 0.01); near(c[2], 5, 0.01);
+}));
+
+test('crossing loops and collapsed points are named, not left to the kernel', () => inScope(() => {
+  const s = new Sketch();
+  s.rectangle(0, 0, 20, 20);
+  s.circle(s.point(20, 10), 5); // pokes through the right edge
+  assert.throws(() => ops.extrude(s, 1), /loops cross each other near \(20\.00/);
+  const t = new Sketch();
+  const a = t.anchor(0, 0); const b = t.point(10, 0); const c = t.point(10, 10); const d = t.point(0, 10);
+  const l1 = t.line(a, b); t.line(b, c); t.line(c, d); t.line(d, a);
+  t.distance(l1, 0.0000001); // collapses b onto a
+  assert.throws(() => ops.extrude(t, 1), /converged to the same place/);
+}));

@@ -420,15 +420,22 @@ function placed(sketch, shift = 0) {
   return track(sketch.drawing.clone().sketchOnPlane(sketch.plane, along));
 }
 
-/** The plane a planar face lies on, as a plain {origin, normal, xDir} object. */
+/**
+ * The plane a planar face lies on, as a plain {origin, normal, xDir} object.
+ * The origin is the face's CENTRE, so a sketch drawn about (0, 0) lands in the
+ * middle of the face — OCCT's own plane origin is a parametric corner, which
+ * put a "centred" cutout half off the wall.
+ */
 export function brepPlaneOfFace(face) {
   return attempt('planeOf', () => {
     const pl = kernel().makePlaneFromFace(face);
+    const centre = face.center;
     const out = {
-      origin: [...pl.origin.toTuple()],
+      origin: [...centre.toTuple()],
       normal: [...pl.zDir.toTuple()],
       xDir: [...pl.xDir.toTuple()],
     };
+    centre.delete?.();
     pl.delete();
     return out;
   });
@@ -515,6 +522,17 @@ export function brepSketchLoops(loops, plane, offset) {
         );
       }
     }
+    for (let i = 0; i < outlines.length; i++) {
+      for (let j = i + 1; j < outlines.length; j++) {
+        const hit = outlinesCross(outlines[i], outlines[j]);
+        if (hit) {
+          throw new GraphError(
+            `Sketch loops cross each other near (${hit[0].toFixed(2)}, ${hit[1].toFixed(2)}) — ` +
+            'a hole must lie entirely inside its boundary, and two shapes may not overlap'
+          );
+        }
+      }
+    }
     const drawn = loops.map((loop) => drawLoop(k, loop));
     let acc = drawn[0];
     for (let i = 1; i < loops.length; i++) {
@@ -549,6 +567,24 @@ function loopOutline(loop) {
     }
   }
   return pts;
+}
+
+/** The first place two closed polylines cross, or null. Touching at a point does not count. */
+function outlinesCross(a, b) {
+  const cross = (o, p, r) => (p[0] - o[0]) * (r[1] - o[1]) - (p[1] - o[1]) * (r[0] - o[0]);
+  for (let i = 0; i < a.length; i++) {
+    const p1 = a[i]; const p2 = a[(i + 1) % a.length];
+    for (let j = 0; j < b.length; j++) {
+      const q1 = b[j]; const q2 = b[(j + 1) % b.length];
+      const d1 = cross(p1, p2, q1); const d2 = cross(p1, p2, q2); const d3 = cross(q1, q2, p1); const d4 = cross(q1, q2, p2);
+      // Touching counts: a sampled arc lands exactly on the line it crosses often enough.
+      if (d1 * d2 <= 0 && d3 * d4 <= 0 && !(d1 === 0 && d2 === 0)) {
+        const t = d1 === d2 ? 0 : d1 / (d1 - d2);
+        return [q1[0] + t * (q2[0] - q1[0]), q1[1] + t * (q2[1] - q1[1])];
+      }
+    }
+  }
+  return null;
 }
 
 /** The first place a closed polyline crosses itself, or null. Adjacent segments share a vertex and are skipped. */
@@ -727,7 +763,7 @@ export function faceGeometry(face) {
   try {
     return classifySurface(adaptor, face);
   } catch {
-    return { kind: face.geomType, axis: null, radius: null };
+    return { kind: faceKindName(face.geomType), axis: null, radius: null };
   } finally {
     adaptor.delete?.();
   }
@@ -750,9 +786,13 @@ const distToAxis = (p, { origin, direction }) => {
   return Math.hypot(...d.map((c, k) => c - t * direction[k]));
 };
 
+/** replicad names the kind in French; the descriptors speak the query vocabulary. */
+export const faceKindName = (k) => (k === 'CYLINDRE' ? 'CYLINDER' : k);
+
 function classifySurface(adaptor, face) {
-  const kind = face.geomType;
-  if (kind === 'CYLINDRE') {
+  const raw = face.geomType;
+  const kind = faceKindName(raw);
+  if (raw === 'CYLINDRE') {
     const c = adaptor.Cylinder(); const out = { kind, axis: axisOf(c.Axis()), radius: c.Radius() }; c.delete?.(); return out;
   }
   if (kind === 'CONE') {
@@ -769,7 +809,7 @@ function classifySurface(adaptor, face) {
 
   const samples = sampleFace(face);
   const cyl = fitCylinder(samples);
-  if (cyl) return { kind: 'CYLINDRE', ...cyl };
+  if (cyl) return { kind: 'CYLINDER', ...cyl };
   if (kind === 'REVOLUTION_SURFACE') {
     const axis = axisOf(adaptor.AxeOfRevolution());
     const profile = samples.map(({ p }) => [dot3(sub3(p, axis.origin), axis.direction), distToAxis(p, axis)]);
@@ -859,7 +899,7 @@ function fitCircle(pts) {
 export function brepAxisOfFace(face, fallbackRadius = null) {
   return attempt('axisOf', () => {
     const g = faceGeometry(face);
-    if (!g.axis || (g.kind !== 'CYLINDRE' && g.kind !== 'CONE')) {
+    if (!g.axis || (g.kind !== 'CYLINDER' && g.kind !== 'CONE')) {
       throw new GraphError(`axisOf: the face is ${g.kind}, not cylindrical or conical`);
     }
     const radius = g.radius ?? fallbackRadius;
