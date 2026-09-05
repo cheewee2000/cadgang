@@ -749,6 +749,30 @@ export function brepTwistedSolid({ drawing, p0, direction, span, pitch, lefthand
   });
 }
 
+/**
+ * A sweep steered by a guide rail. replicad's sweep only lets the rail set the
+ * profile's twist (BRepFill_NoContact); a rail is for keeping the profile in
+ * touch with it as it goes, which is OCCT's KeepContact mode — so the pipe
+ * shell is built here directly, with the same sequence replicad uses.
+ */
+function guidedSweep(profileWire, spine, rail, { contact = true, transition = 'right' } = {}) {
+  const rc = kernel();
+  const builder = new OC.BRepOffsetAPI_MakePipeShell(spine.wrapped);
+  const modes = {
+    transformed: OC.BRepBuilderAPI_TransitionMode.BRepBuilderAPI_Transformed,
+    round: OC.BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RoundCorner,
+    right: OC.BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RightCorner,
+  };
+  if (modes[transition]) builder.SetTransitionMode(modes[transition]);
+  builder.SetMode_5(rail.wrapped, false, contact ? OC.BRepFill_TypeOfContact.BRepFill_Contact : OC.BRepFill_TypeOfContact.BRepFill_NoContact);
+  builder.Add_1(profileWire.wrapped, contact, transition === 'round');
+  builder.Build(new OC.Message_ProgressRange_1());
+  builder.MakeSolid();
+  const shape = rc.cast(builder.Shape());
+  builder.delete();
+  return shape;
+}
+
 /** Point and unit tangent at parameter `t` in [0, 1] along a path. */
 export function brepPathAt(path, t) {
   if (path?.kind !== 'path') throw new GraphError('expected a path — brep.polyline, brep.spline or brep.helix');
