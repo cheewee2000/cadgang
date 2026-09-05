@@ -38,7 +38,9 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     it fully; center:'' puts a corner at the origin. cylinder(r,h,{center}) likewise sits on z=0 about the z axis; sphere(r);
     torus(majorR, minorR) about z; cone(r1, r2, h, {center}) — r2 = 0 for a point, r1 ≠ r2 for a frustum;
     coil(r, pitch, height, sectionR, {section:'circle'|'square'|'triangle', lefthand}) — a spring
-  booleans: union/subtract/intersect(base, ...tools); interference(a, b) -> shared volume (0 = no clash)
+  booleans: union/subtract/intersect(base, ...tools); interference(a, b) -> shared volume (0 = no clash).
+    A union of bodies that do not touch is a MULTI-BODY result (a gap under 0.01 mm is a gap): measures report
+    \`bodies\`, and assert.singleBody(shape) refuses it — write that assertion for any part meant to be one piece.
   sketch → solid: extrude(sketch, distance, {symmetric, offset, twist:deg, endScale}) — endScale 0.5 tapers to half size;
     revolve(sketch, axis=[0,0,1], {offset, origin, angle:360}); loft([sketchA, sketchB, ...], {ruled}) — put each
     section on its own plane/offset with s.on('XY', 30); a loft's side edges are splines even when straight, so query
@@ -74,7 +76,8 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     pivotPlane(plane, deg, axis?) — plane at an angle; midplane(shape, faceQueryA, faceQueryB);
     axisOf(shape, cylindricalFaceQuery) -> {origin, direction, radius} for revolve / circularPattern / thread.
     A plane object goes straight into a sketch: sk.sketch().on(brep.planeOf(input, q.faces(input).planar().facing('+z').expect(1)))
-  measures: volume(shape); area(shape); bbox(shape) -> {min,max,size}; centroid(shape) -> [x,y,z]; mass(shape, g/cm³) -> grams;
+  measures: volume(shape); area(shape); bbox(shape) -> {min,max,size}; bodies(shape) -> count of separate solids;
+    centroid(shape) -> [x,y,z]; mass(shape, g/cm³) -> grams;
     distance(a, b) closest approach; length(shape, edgeQuery) total edge length
   NOT available (kernel build lacks the binding): delete/replace face, non-uniform scale, surface tools, sheet metal, text.
 
@@ -127,6 +130,7 @@ assert — machine-checkable intent. Each one MEASURES, records the number in th
   clearance(shape, queryA, queryB, mm) — exact closest approach between two sets of faces or edges; both queries are
     resolved on \`shape\`, so union the parts first and write queries that pick each part's faces on the combined body.
   watertight(shape) — the mesh that would be exported is closed. Judged on the tessellation, which is what ships.
+  singleBody(shape) — the result is ONE connected solid, not a compound of parts that never met.
 
 ASSERTION CELLS — add a cell with kind: 'assert' and its program states claims instead of building geometry.
   export default ({ assert, input }) => { assert.minWall(input, 1.5); assert.watertight(input); };

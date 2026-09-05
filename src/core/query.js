@@ -23,7 +23,7 @@
  */
 
 import { GraphError } from './errors.js';
-import { brepKernel, trackBrepShape, faceGeometry } from './brep.js';
+import { brepKernel, trackBrepShape, faceGeometry, tightBounds } from './brep.js';
 
 const RAD = Math.PI / 180;
 const AXIS = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
@@ -244,7 +244,7 @@ export function enumerate(shape, type) {
 export function topology(shape) {
   const faces = enumerate(shape, 'face').map((e) => e.d);
   const edges = enumerate(shape, 'edge').map((e) => e.d);
-  const bbox = readBBox(shape);
+  const bbox = tightBounds(shape);
   return {
     bbox: { min: r4v(bbox.min), max: r4v(bbox.max) },
     counts: { faces: faces.length, edges: edges.length },

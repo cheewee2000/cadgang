@@ -70,6 +70,7 @@ const brep = Object.freeze({
   bbox: ops.bbox,
   centroid: ops.centroid,
   distance: ops.distance,
+  bodies: ops.bodies,
 });
 
 /** The `q` namespace: face and edge queries. */
@@ -154,6 +155,15 @@ function assertions(sink) {
       return record({
         label: 'clearance', ok: c.value >= limit, value: round(c.value), limit, unit: 'mm',
         message: `Clearance is ${c.value.toFixed(3)} mm, under the ${limit} mm minimum`,
+      });
+    },
+
+    /** The result must be ONE connected solid — a union of bodies that never touch is two. */
+    singleBody(shape) {
+      const n = ops.bodies(shape);
+      return record({
+        label: 'single body', ok: n === 1, value: n, limit: 1, unit: null,
+        message: `The result is ${n} separate bodies, not one — the parts do not touch (a gap under the kernel tolerance counts as a gap)`,
       });
     },
 

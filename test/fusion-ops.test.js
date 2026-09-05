@@ -336,3 +336,17 @@ test('a loft reports its straight side edges as lines, and its shelled bbox stay
   for (const k of [0, 1, 2]) { near(after.min[k], before.min[k], 0.001); near(after.max[k], before.max[k], 0.001); }
   assert.ok(Math.abs(after.max[0] - 40) < 0.02, `outer wall still at 40: ${after.max[0]}`);
 }));
+
+test('a union of bodies that do not touch is counted, and the assertion says so', () => inScope(() => {
+  const a = ops.cylinder(6, 10);
+  const b = ops.translate(ops.cylinder(6, 10), [0, 0, 10.05]);
+  const both = ops.union(a, b);
+  assert.equal(ops.bodies(both), 2);
+  assert.equal(ops.bodies(ops.union(a, ops.translate(ops.cylinder(6, 10), [0, 0, 9]))), 1);
+  const sink = [];
+  const api = cellApi({ checked: sink });
+  assert.throws(() => api.assert.singleBody(both), /2 separate bodies/);
+  assert.equal(sink.at(-1).value, 2);
+  api.assert.singleBody(a);
+  assert.equal(sink.at(-1).ok, true);
+}));

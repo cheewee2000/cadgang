@@ -582,5 +582,5 @@ function pickSource(doc, id) {
 /** Cheap facts about a result that a text-only client can act on. */
 function measuresOf(shape) {
   const { min, max, size } = ops.bbox(shape);
-  return { volume: ops.volume(shape), area: ops.area(shape), bbox: { min, max, size } };
+  return { volume: ops.volume(shape), area: ops.area(shape), bbox: { min, max, size }, bodies: ops.bodies(shape) };
 }

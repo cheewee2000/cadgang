@@ -757,7 +757,7 @@ async function refresh({ structural = true } = {}) {
 
   const m = evaluation?.measures;
   $('#measures').textContent = m
-    ? `vol ${fmt(m.volume)} mm³ · area ${fmt(m.area)} mm² · bbox ${m.bbox.size.map(fmt).join(' × ')} mm`
+    ? `vol ${fmt(m.volume)} mm³ · area ${fmt(m.area)} mm² · bbox ${m.bbox.size.map(fmt).join(' × ')} mm${m.bodies > 1 ? ` · ${m.bodies} BODIES` : ''}`
     : '';
 
   if (!doc.cells.length) { setGeometry(null); $('#stats').textContent = ''; return; }

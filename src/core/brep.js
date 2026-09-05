@@ -1050,6 +1050,15 @@ export function brepDraft(shape, faces, angle, pull, neutralAt) {
   });
 }
 
+/** How many separate solids a result holds: a union of bodies that do not touch is two. */
+export function brepBodies(shape) {
+  return attempt('bodies', () => {
+    let n = 0;
+    for (const _ of kernel().iterTopo(shape.wrapped, 'solid')) n++;
+    return n;
+  });
+}
+
 /** Centre of mass of a solid. */
 export function brepCentroid(shape) {
   return attempt('centroid', () => {

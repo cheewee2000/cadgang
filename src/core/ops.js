@@ -41,6 +41,7 @@ import {
   brepSimplify,
   brepEdgeLength,
   brepTwistedSolid,
+  brepBodies,
   tightBounds,
   requireSolid,
 } from './brep.js';
@@ -753,6 +754,11 @@ export function interference(a, b) {
     const common = track(borrow(a, 'a').intersect(borrow(b, 'b')));
     try { return kernelOf().measureVolume(common); } catch { return 0; }
   });
+}
+
+/** Number of separate solid bodies in the result (1 for one connected part). */
+export function bodies(shape) {
+  return brepBodies(requireSolid(shape, 'shape'));
 }
 
 export function centroid(shape) {
