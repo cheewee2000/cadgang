@@ -67,6 +67,7 @@ process.on('uncaughtException', (e) => console.error('uncaught exception:', e?.s
 // brepKernel flag means "ready" and the first evaluate does not pay the WASM load.
 initBrep().catch((e) => console.error('B-rep kernel failed to load:', e.message));
 app.use('/api', apiRouter(doc, ROOT, broadcast, cells));
+app.use('/api', (req, res) => res.status(404).json({ error: `No such API route: ${req.method} ${req.originalUrl}` }));
 // Whatever else goes wrong on the API answers in its own shape, never as HTML.
 app.use('/api', (err, req, res, next) => {
   if (res.headersSent) return next(err);

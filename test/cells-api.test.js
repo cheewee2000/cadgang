@@ -580,3 +580,12 @@ test('a cell that never reads input stands alone, and an errored assertion is na
   assert.match(step.data.error, /1 assertion failing — claim:/);
   await api('/document/clear', { method: 'POST' });
 });
+
+test('a form-encoded POST is refused, and an unknown API route answers as JSON', async () => {
+  const res = await fetch(base, { method: 'POST', body: 'prompt=hi', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /application\/json/);
+  const nope = await fetch(`${base}/nope/nothing/here`);
+  assert.equal(nope.status, 404);
+  assert.match((await nope.json()).error, /No such API route/);
+});

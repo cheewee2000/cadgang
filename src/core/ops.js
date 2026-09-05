@@ -91,7 +91,8 @@ function finderFor(query, shape, opName) {
 const positive = (op, values) => {
   for (const [name, v] of Object.entries(values)) {
     if (!(typeof v === 'number' && Number.isFinite(v) && v > 0)) {
-      throw new GraphError(`${op}: ${name} must be a positive number, got ${JSON.stringify(v)}`);
+      const shown = typeof v === 'string' ? JSON.stringify(v) : Array.isArray(v) ? `[${v}]` : String(v);
+      throw new GraphError(`${op}: ${name} must be a positive number, got ${shown}`);
     }
   }
 };

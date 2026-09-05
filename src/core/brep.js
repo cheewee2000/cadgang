@@ -369,7 +369,10 @@ export const isField = (v) => v === FIELD_VALUE;
  * where a solid belongs, and the one-way bridge having already been crossed.
  */
 export function requireSolid(shape, slot) {
-  if (!shape) throw new GraphError(`Input '${slot}' needs a connected B-rep block`);
+  if (shape === undefined) {
+    throw new GraphError(`Input '${slot}' is undefined — a ref name may be misspelled (inputs.<id>), or the value was never assigned`);
+  }
+  if (!shape) throw new GraphError(`Input '${slot}' is empty — the cell it comes from did not build`);
   if (isSketch(shape)) {
     throw new GraphError(`Input '${slot}' got a 2D sketch — extrude or revolve it into a solid first`);
   }

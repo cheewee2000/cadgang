@@ -106,7 +106,7 @@ export function cellsRouter(doc, rootDir) {
    */
   const tolerance = (req, shape = null) => {
     const t = parseFloat(req.query.tolerance ?? '');
-    if (Number.isFinite(t) && t > 0) return Math.min(t, 5);
+    if (Number.isFinite(t) && t > 0) return Math.min(Math.max(t, 0.001), 5);
     if (!shape) return 0.01;
     try {
       const { min, max } = tightBounds(shape);
@@ -134,6 +134,11 @@ export function cellsRouter(doc, rootDir) {
   });
 
   r.post('/', (req, res) => {
+    // A body that carried nothing (no JSON content type, a form post) would
+    // become an empty cell reported as ok, and only fail later in evaluate.
+    if (!req.is('json') && !Object.keys(req.body || {}).length) {
+      return fail(res, new GraphError('Send the cell as JSON with content-type: application/json'));
+    }
     try { res.json(doc.addCell(req.body || {})); } catch (e) { fail(res, e); }
   });
 
@@ -536,10 +541,15 @@ export function cellsRouter(doc, rootDir) {
           pitch: parseFloat(req.query.pitch ?? '25'),
         });
         res.setHeader('Content-Type', 'image/png');
+        res.setHeader('X-Width', String(Math.max(64, Math.min(1600, parseInt(req.query.width || '640', 10)))));
+        res.setHeader('X-Height', String(Math.max(64, Math.min(1200, parseInt(req.query.height || '480', 10)))));
         res.send(png);
       });
     } catch (e) { fail(res, e); }
   });
+
+  // Anything else under this router is a typo, and answers as JSON like the rest.
+  r.use((req, res) => res.status(404).json({ error: `No such API route: ${req.method} ${req.originalUrl}` }));
 
   return r;
 }
