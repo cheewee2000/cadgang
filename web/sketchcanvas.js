@@ -781,8 +781,12 @@ export function sketchCanvas({ sketch, canvas, note, tools, ui = {}, solve, save
     if (!w || !h || (w === boxWidth && h === boxHeight)) return;
     boxWidth = w; boxHeight = h;
     // A held view survives the panel being dragged: the frame changed, but not
-    // the person's mind about where they were looking.
-    if (!ui.pinned) fit();
+    // the person's mind about where they were looking. And a REMOUNT at the
+    // same size — every persisted draw re-renders the stack — is not a resize
+    // at all: re-fitting there moves the corner out from under the pointer.
+    const sameFrame = ui.frame && ui.frame[0] === w && ui.frame[1] === h;
+    if (!ui.pinned && !(sameFrame && hadView)) fit();
+    ui.frame = [w, h];
     draw2d();
   }).observe(canvas);
 

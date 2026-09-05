@@ -1,6 +1,6 @@
 {
   "name": "cadgang",
-  "version": "0.7.0-alpha.18",
+  "version": "0.7.0-alpha.19",
   "description": "cadgang — a web-based CAD tool with two lineages in one node graph: exact B-rep (STEP) and implicit fields (STL), driven by an MCP server",
   "type": "module",
   "private": true,
@@ -9,7 +9,8 @@
     "cadgang-mcp-server": "src/mcp/index.js"
   },
   "scripts": {
-    "start": "node src/server/index.js",
+    "start": "node src/server/supervise.js",
+    "serve": "node src/server/index.js",
     "mcp": "node src/mcp/index.js",
     "demo": "node examples/demo.js",
     "test": "node --test test/*.test.js"

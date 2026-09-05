@@ -49,6 +49,11 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use('/api/cells', cellsRouter(cells, ROOT));
+// A stray rejection or exception anywhere must not take every open document
+// down with it: log it and keep serving. The supervisor restarts a real crash.
+process.on('unhandledRejection', (e) => console.error('unhandled rejection:', e?.stack || e));
+process.on('uncaughtException', (e) => console.error('uncaught exception:', e?.stack || e));
+
 // Load the kernel now rather than on the first geometry request, so /api/health's
 // brepKernel flag means "ready" and the first evaluate does not pay the WASM load.
 initBrep().catch((e) => console.error('B-rep kernel failed to load:', e.message));

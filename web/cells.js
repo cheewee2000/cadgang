@@ -832,7 +832,10 @@ function connect() {
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     // Only cell traffic matters here; the v1 graph shares the socket.
-    if (msg.type === 'cells_changed' && msg.revision !== doc.revision) refresh();
+    // Non-structural on purpose: a real change of structure is caught by the
+    // signature check inside, while a drawn line or a turned knob must not
+    // remount every canvas on the page.
+    if (msg.type === 'cells_changed' && msg.revision !== doc.revision) refresh({ structural: false });
   };
   // Claude Code authoring in the background is the normal case, so a dropped
   // socket must not leave the transcript silently stale.

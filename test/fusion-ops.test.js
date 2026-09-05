@@ -319,3 +319,9 @@ test('a sweep guide rail steers the profile', () => inScope(() => {
   near(plain.size[2], 4);
   assert.ok(guided.size[2] > 6, `the rail lifted the profile: ${guided.size[2]}`);
 }));
+
+test('primitives refuse non-positive sizes', () => inScope(() => {
+  assert.throws(() => ops.box(-10, 10, 10), /box: sx must be a positive number/);
+  assert.throws(() => ops.cylinder(5, 0), /cylinder: height must be a positive number/);
+  assert.throws(() => ops.sphere('big'), /sphere: radius must be a positive number/);
+}));

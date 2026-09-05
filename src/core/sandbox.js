@@ -53,15 +53,24 @@ const ARGS = '__cadgangArgs';
  */
 export function transformCellSource(code) {
   const src = String(code ?? '');
+  // An export is recognised at any statement boundary — the start of the
+  // source, a line, or after a semicolon — so a one-line module is as valid
+  // as a formatted one.
   let out = src.replace(
-    /^[ \t]*export[ \t]+const[ \t]+params[ \t]*=/m,
-    `const params = ${CARRIER}.params =`
+    /(^|[;\n])[ \t]*export[ \t]+const[ \t]+params[ \t]*=/,
+    (_, lead) => `${lead}const params = ${CARRIER}.params =`
   );
-  out = out.replace(/^[ \t]*export[ \t]+default[ \t]+/m, `${CARRIER}.default = `);
-  const leftover = out.match(/^[ \t]*export\b.*/m);
+  out = out.replace(/(^|[;\n])[ \t]*export[ \t]+default[ \t]+/, (_, lead) => `${lead}${CARRIER}.default = `);
+  // A dynamic import cannot be refused from inside the realm: Node invokes the
+  // loader callback in a microtask, so the failure lands after the cell has
+  // returned, as a process-level exception. Refuse it before it can run.
+  if (/\bimport\s*\(/.test(out)) {
+    throw new GraphError('import() is not available in a cell program — the API is passed in as arguments');
+  }
+  const leftover = out.match(/(?:^|[;\n])[ \t]*(export\b.*)/);
   if (leftover) {
     throw new GraphError(
-      `A cell may only 'export const params' and 'export default'. Found: ${leftover[0].trim()}`
+      `A cell may only 'export const params' and 'export default'. Found: ${leftover[1].trim()}`
     );
   }
   if (!out.includes(`${CARRIER}.default`)) {
@@ -140,6 +149,9 @@ export function compileCell(code, { id = 'cell', timeoutMs = RUN_TIMEOUT_MS } = 
         if (err instanceof GraphError) throw err;
         if (/Script execution timed out/i.test(err.message)) {
           throw new GraphError(`Cell '${id}' ran longer than ${timeoutMs}ms and was stopped`);
+        }
+        if (err.code === 'ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG' || /dynamic import callback/i.test(err.message)) {
+          throw new GraphError(`Cell '${id}': import() is not available in a cell program — the API is passed in as arguments`);
         }
         throw new GraphError(`Cell '${id}' threw: ${err.message}`);
       } finally {

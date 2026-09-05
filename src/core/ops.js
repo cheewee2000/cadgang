@@ -87,7 +87,16 @@ function finderFor(query, shape, opName) {
 // ------------------------------------------------------------------ primitives
 
 /** Box centred in X/Y, sitting on z = 0. `center: 'xyz'` centres it fully. */
+const positive = (op, values) => {
+  for (const [name, v] of Object.entries(values)) {
+    if (!(typeof v === 'number' && Number.isFinite(v) && v > 0)) {
+      throw new GraphError(`${op}: ${name} must be a positive number, got ${JSON.stringify(v)}`);
+    }
+  }
+};
+
 export function box(sx, sy, sz, { center = 'xy' } = {}) {
+  positive('box', { sx, sy, sz });
   return attempt('box', () => {
     const rc = kernelOf();
     let s = track(rc.makeBaseBox(sx, sy, sz));
@@ -99,6 +108,7 @@ export function box(sx, sy, sz, { center = 'xy' } = {}) {
 }
 
 export function cylinder(radius, height, { center = '' } = {}) {
+  positive('cylinder', { radius, height });
   return attempt('cylinder', () => {
     const rc = kernelOf();
     let s = track(rc.makeCylinder(radius, height));
@@ -108,6 +118,7 @@ export function cylinder(radius, height, { center = '' } = {}) {
 }
 
 export function sphere(radius) {
+  positive('sphere', { radius });
   return attempt('sphere', () => track(kernelOf().makeSphere(radius)));
 }
 
