@@ -35,8 +35,25 @@ import {
   brepDistanceBetween,
   brepPlaneOfFace,
   brepDrawingSketch,
+  brepPathAt,
+  brepFacePrism,
+  brepAxisOfFace,
+  brepSimplify,
+  brepEdgeLength,
   requireSolid,
 } from './brep.js';
+
+const vsub = (a, b) => a.map((c, i) => c - b[i]);
+const vadd = (a, b) => a.map((c, i) => c + b[i]);
+const vmul = (a, k) => a.map((c) => c * k);
+const vdot = (a, b) => a.reduce((t, c, i) => t + c * b[i], 0);
+const vcross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const vnorm = (a) => { const n = Math.hypot(...a); if (!(n > 0)) throw new GraphError('Direction cannot be [0, 0, 0]'); return vmul(a, 1 / n); };
+/** Rotate vector `v` by `deg` about unit axis `k` (Rodrigues). */
+const vrot = (v, k, deg) => {
+  const t = (deg * Math.PI) / 180; const c = Math.cos(t); const s = Math.sin(t);
+  return vadd(vadd(vmul(v, c), vmul(vcross(k, v), s)), vmul(k, vdot(k, v) * (1 - c)));
+};
 import { Query } from './query.js';
 import { Sketch } from './sketch.js';
 
@@ -157,6 +174,11 @@ export function fillet(shape, query, radius) {
   });
 }
 
+/**
+ * Chamfer the selected edges. `distance` is a number for a symmetric chamfer,
+ * `{distances: [a, b], face: faceQuery}` for an asymmetric one (a is measured
+ * on the selected face), or `{distance, angle, face}` for distance-and-angle.
+ */
 export function chamfer(shape, query, distance) {
   if (typeof distance === 'number' && distance <= 0) {
     throw new GraphError('Chamfer distance must be greater than zero');
@@ -164,7 +186,14 @@ export function chamfer(shape, query, distance) {
   return attempt('chamfer', () => {
     const s = borrow(shape, 'shape');
     const { finder } = finderFor(query, s, 'chamfer');
-    return track(s.chamfer(distance, finder));
+    let config = distance;
+    if (distance && typeof distance === 'object') {
+      if (!distance.face) throw new GraphError('An asymmetric chamfer needs `face`: the query for the face its first distance is measured on');
+      const { finder: faceFinder } = finderFor(distance.face, s, 'chamfer face');
+      config = { ...distance, selectedFace: faceFinder };
+      delete config.face;
+    }
+    return track(s.chamfer(config, finder));
   });
 }
 
@@ -195,8 +224,17 @@ export function scale(shape, factor, origin = [0, 0, 0]) {
   return attempt('scale', () => track(borrow(shape, 'shape').scale(factor, origin)));
 }
 
-export function mirror(shape, plane = 'XY', origin = [0, 0, 0]) {
-  return attempt('mirror', () => track(borrow(shape, 'shape').mirror(plane, origin)));
+/** Mirror across a plane; `keep: true` fuses the mirror image onto the original, as Fusion's Mirror does. */
+export function mirror(shape, plane = 'XY', origin = [0, 0, 0], { keep = false } = {}) {
+  return attempt('mirror', () => {
+    const image = track(borrow(shape, 'shape').mirror(plane, origin));
+    return keep ? track(borrow(shape, 'shape').fuse(image)) : image;
+  });
+}
+
+/** Merge coplanar faces and collinear edges (patterns and push-pulls leave seams behind). */
+export function simplify(shape) {
+  return brepSimplify(borrow(shape, 'shape'));
 }
 
 /** Rotate a shape so its +Z axis points along `dir` (no-op when dir is already +Z). */
@@ -299,8 +337,158 @@ export function draft(shape, query, angle, { pull = [0, 0, 1], neutralAt = null 
   });
 }
 
-/** Cut the solid by a plane; returns the two halves `{ above, below }` (either may be empty). */
+/**
+ * Fusion's Press Pull on planar faces: move the selected faces out by
+ * `distance` (adding material) or in when negative (removing it).
+ */
+export function pushPull(shape, query, distance) {
+  if (!distance) throw new GraphError('pushPull distance cannot be zero');
+  return attempt('pushPull', () => {
+    let s = borrow(shape, 'shape');
+    const matched = query.resolveOn(s);
+    if (!matched.length) throw new GraphError(`pushPull: ${query.expression} matched no faces`);
+    for (const { element, d } of matched) {
+      if (d.kind !== 'PLANE' || !d.normal) throw new GraphError('pushPull only moves planar faces; use offset() for a whole body');
+      const prism = brepFacePrism(element, vmul(d.normal, distance));
+      s = track(distance > 0 ? s.fuse(prism) : s.cut(prism));
+    }
+    return s;
+  });
+}
+
+/** `count` copies spaced evenly along a path, each turned to follow it (`orient: false` keeps them upright). */
+export function pathPattern(shape, path, count, { orient = true } = {}) {
+  if (!(Number.isInteger(count) && count >= 1)) throw new GraphError('pathPattern count must be a whole number ≥ 1');
+  return attempt('pathPattern', () => {
+    const s = borrow(shape, 'shape');
+    const first = brepPathAt(path, 0);
+    let acc = s;
+    for (let i = 1; i < count; i++) {
+      const { point, tangent } = brepPathAt(path, i / (count - 1));
+      let copy = track(s.clone().translate(...vsub(point, first.point)));
+      if (orient) {
+        const dot = Math.max(-1, Math.min(1, vdot(first.tangent, tangent)));
+        const axis = vcross(first.tangent, tangent);
+        if (Math.hypot(...axis) > 1e-9) copy = track(copy.rotate((Math.acos(dot) * 180) / Math.PI, point, axis));
+      }
+      acc = track(acc.fuse(copy));
+    }
+    return acc;
+  });
+}
+
+/**
+ * A thin wall along a path, `height` tall along `direction` and `thickness`
+ * thick, fused onto the body — Fusion's Rib. The path is a list of [x,y,z]
+ * points on the body (the rib's foot) or a path value.
+ */
+export function rib(shape, path, thickness, height, { direction = [0, 0, 1] } = {}) {
+  if (!(thickness > 0 && height > 0)) throw new GraphError('rib needs thickness > 0 and height > 0');
+  return attempt('rib', () => {
+    const rc = kernelOf();
+    const spine = Array.isArray(path) ? brepPolyline(path) : path;
+    const profile = brepDrawingSketch(rc.drawRectangle(height, thickness).translate(height / 2, 0));
+    const wall = brepSweep(profile, spine, { xDir: vnorm(direction) });
+    return track(borrow(shape, 'shape').fuse(wall));
+  });
+}
+
+/** Raise (or with `cut`, sink) a sketch profile from its plane into the body by `depth`. */
+export function emboss(shape, sketch, depth, { cut = false } = {}) {
+  if (!(depth > 0)) throw new GraphError('emboss depth must be greater than zero');
+  return attempt('emboss', () => {
+    const s = borrow(shape, 'shape');
+    const relief = extrude(sketch, cut ? -depth : depth);
+    return track(cut ? s.cut(relief) : s.fuse(relief));
+  });
+}
+
+/**
+ * Cut a modelled V thread into a cylindrical face — a boss (external) or a
+ * hole (internal); which one is read by probing for material just outside the
+ * face. `depth` defaults to the ISO 60° thread depth for the pitch, and the
+ * thread runs the face's full length unless `length` says otherwise.
+ *
+ * Built as a TWIST EXTRUDE of the thread's cross-section, not as a groove
+ * swept along a helix and booleaned against the cylinder: that boolean is a
+ * helical surface–surface intersection the kernel takes minutes over, where
+ * the twisted solid only ever meets the part on planar ends.
+ */
+export function thread(shape, query, pitch, { depth = null, lefthand = false, length = null } = {}) {
+  if (!(pitch > 0)) throw new GraphError('thread pitch must be greater than zero');
+  return attempt('thread', () => {
+    const rc = kernelOf();
+    const s = borrow(shape, 'shape');
+    const matched = query.resolveOn(s);
+    if (matched.length !== 1) throw new GraphError(`thread: the query must match exactly one cylindrical face (matched ${matched.length})`);
+    const { element, d } = matched[0];
+    const { origin, direction, radius } = brepAxisOfFace(element);
+    const h = depth ?? 0.6134 * pitch;
+    if (!(h > 0 && h < radius)) throw new GraphError('thread depth must be positive and less than the radius');
+    const onAxis = (p) => vadd(origin, vmul(direction, vdot(vsub(p, origin), direction)));
+    const lo = vdot(vsub(d.bbox.min, origin), direction);
+    const hi = vdot(vsub(d.bbox.max, origin), direction);
+    const start = Math.min(lo, hi);
+    const span = length ?? Math.abs(hi - lo);
+    if (!(span > 0)) throw new GraphError('thread: the face has no length along its axis');
+    const p0 = vadd(origin, vmul(direction, start));
+    // Boss or hole? Probe just outside the face radius, mid-span: material there means a hole.
+    // A partial face's centre is off-axis and gives a radial inside its own arc; a full
+    // cylinder's centre sits on the axis, and then any perpendicular will do.
+    const centreRadial = vsub(d.center, onAxis(d.center));
+    const radial = Math.hypot(...centreRadial) > 1e-6 ? vnorm(centreRadial)
+      : vnorm(vcross(direction, Math.abs(direction[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0]));
+    const probeAt = vadd(vadd(p0, vmul(direction, span / 2)), vmul(radial, radius + 0.3 * h));
+    const probe = track(track(rc.makeSphere(0.1 * h)).translate(...probeAt));
+    let external = true;
+    try { external = !(rc.measureVolume(track(s.clone().intersect(probe))) > 0); } catch { /* empty intersection */ }
+    // Cross-section: radius varies as a triangle wave over one turn — crest at the original
+    // surface (nudged off it so no face is coincident), root `h` into the material.
+    const out = external ? 1 : -1;
+    const root = radius - out * 0.05;
+    const N = 48;
+    const pts = Array.from({ length: N }, (_, i) => {
+      const u = i / N; const a = 2 * Math.PI * u;
+      const rr = root - out * h * (u < 0.5 ? 2 * u : 2 - 2 * u);
+      return [rr * Math.cos(a), rr * Math.sin(a)];
+    });
+    pts.push(pts[0]);
+    const section = track(rc.drawPointsInterpolation(pts).sketchOnPlane(new rc.Plane(p0, null, direction)));
+    const spine = track(rc.assembleWire([rc.makeLine(p0, vadd(p0, vmul(direction, span)))]));
+    const aux = brepHelix(1, pitch, span, { center: p0, axis: direction, lefthand });
+    const twisted = track(rc.genericSweep(section.wire, spine, { auxiliarySpine: track(aux.wire.clone()) }));
+    if (!external) return track(s.cut(twisted));
+    let core = track(cylinder(radius + 0.01, span));
+    core = alignZ(core, direction);
+    core = track(core.translate(...p0));
+    return track(track(s.cut(core)).fuse(twisted));
+  });
+}
+
+/** A spring: a round (or 'square' / 'triangle') section of radius `sectionR` wound on a helix. */
+export function coil(radius, pitch, height, sectionR, { section = 'circle', lefthand = false } = {}) {
+  if (!(sectionR > 0 && sectionR < radius)) throw new GraphError('coil sectionR must be > 0 and smaller than the coil radius');
+  return attempt('coil', () => {
+    const rc = kernelOf();
+    const drawing = section === 'square' ? rc.drawRectangle(2 * sectionR, 2 * sectionR)
+      : section === 'triangle' ? rc.drawPolysides(sectionR, 3)
+      : rc.drawCircle(sectionR);
+    return brepSweep(brepDrawingSketch(drawing), brepHelix(radius, pitch, height, { lefthand }), { frenet: true });
+  });
+}
+
+/**
+ * Cut the solid in two. By a plane — split(shape, origin, normal) — or by a
+ * tool body — split(shape, tool) — returning `{ above, below }`: for a tool,
+ * `above` is the part inside it. Either half may be empty.
+ */
 export function split(shape, origin, normal) {
+  if (origin && typeof origin.clone === 'function') {
+    return attempt('split', () => ({
+      above: track(borrow(shape, 'shape').intersect(borrow(origin, 'tool'))),
+      below: track(borrow(shape, 'shape').cut(borrow(origin, 'tool'))),
+    }));
+  }
   return attempt('split', () => {
     const s = borrow(shape, 'shape');
     const L = Math.hypot(...bbox(s).size) * 2 + 1;
@@ -388,6 +576,53 @@ export const helix = (radius, pitch, height, options) => brepHelix(radius, pitch
 
 // ------------------------------------------------------------------- planes
 
+/** A plane from an origin and normal (optional xDir picks the sketch's x axis). */
+export function plane(origin, normal, xDir = null) {
+  const n = vnorm(normal);
+  if (xDir) {
+    const x = vnorm(xDir);
+    if (Math.abs(vdot(x, n)) > 1e-6) throw new GraphError('plane xDir must be perpendicular to the normal');
+    return { origin: [...origin], normal: n, xDir: x };
+  }
+  return { origin: [...origin], normal: n };
+}
+
+/** The plane through three points; x runs from a to b. */
+export function planeThrough(a, b, c) {
+  const ab = vsub(b, a); const ac = vsub(c, a);
+  const n = vcross(ab, ac);
+  if (Math.hypot(...n) < 1e-9) throw new GraphError('planeThrough: the three points are collinear');
+  return plane(a, n, ab);
+}
+
+/** Rotate a plane by `deg` about an axis through its origin (default: its own x axis) — Fusion's Plane at Angle. */
+export function pivotPlane(pl, deg, axis = null) {
+  const k = vnorm(axis || pl.xDir || vcross(pl.normal, Math.abs(pl.normal[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0]));
+  return {
+    origin: [...pl.origin],
+    normal: vrot(pl.normal, k, deg),
+    ...(pl.xDir ? { xDir: vrot(pl.xDir, k, deg) } : {}),
+  };
+}
+
+/** The plane halfway between two parallel planar faces. */
+export function midplane(shape, queryA, queryB) {
+  const a = planeOf(shape, queryA);
+  const b = planeOf(shape, queryB);
+  if (Math.abs(Math.abs(vdot(a.normal, b.normal)) - 1) > 1e-6) throw new GraphError('midplane: the two faces are not parallel');
+  return plane(vmul(vadd(a.origin, b.origin), 0.5), a.normal, a.xDir);
+}
+
+/** The axis of a cylindrical or conical face: {origin, direction, radius} — for revolve, circularPattern, or thread. */
+export function axisOf(shape, query) {
+  return attempt('axisOf', () => {
+    const s = borrow(shape, 'shape');
+    const { elements } = finderFor(query, s, 'axisOf');
+    if (elements.length !== 1) throw new GraphError(`axisOf: the query matched ${elements.length} faces; it must match exactly one`);
+    return brepAxisOfFace(elements[0]);
+  });
+}
+
 /** The plane of one planar face, ready for `sketch.on(plane)`. */
 export function planeOf(shape, query) {
   return attempt('planeOf', () => {
@@ -409,6 +644,28 @@ export function volume(shape) {
 
 export function area(shape) {
   return attempt('area', () => kernelOf().measureArea(requireSolid(shape, 'shape')));
+}
+
+/** Mass in grams for a density in g/cm³ (volumes are mm³). */
+export function mass(shape, density) {
+  if (!(density > 0)) throw new GraphError('mass needs a density in g/cm³');
+  return (volume(shape) * density) / 1000;
+}
+
+/** Total length of the edges a query selects. */
+export function length(shape, query) {
+  return attempt('length', () => {
+    const s = borrow(shape, 'shape');
+    return finderFor(query, s, 'length').elements.reduce((t, e) => t + brepEdgeLength(e), 0);
+  });
+}
+
+/** Volume shared by two bodies — 0 means no interference. */
+export function interference(a, b) {
+  return attempt('interference', () => {
+    const common = track(borrow(a, 'a').intersect(borrow(b, 'b')));
+    try { return kernelOf().measureVolume(common); } catch { return 0; }
+  });
 }
 
 export function centroid(shape) {

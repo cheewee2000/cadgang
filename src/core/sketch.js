@@ -141,6 +141,41 @@ export class Sketch {
 
   // -------------------------------------------------------------- constraints
 
+  /** A regular polygon of `n` sides on a circle of radius `r` about (cx, cy); returns its line indices. */
+  polygon(cx, cy, n, r) {
+    if (!(Number.isInteger(n) && n >= 3)) throw new GraphError('polygon needs at least 3 sides');
+    const pts = Array.from({ length: n }, (_, i) => {
+      const a = (2 * Math.PI * i) / n;
+      return this.point(cx + r * Math.cos(a), cy + r * Math.sin(a));
+    });
+    const lines = pts.map((p, i) => this.line(p, pts[(i + 1) % n]));
+    for (let i = 1; i < n; i++) this.equal(lines[0], lines[i]);
+    return lines;
+  }
+
+  /** A slot of radius `r` whose semicircle centres are (x1, y1) and (x2, y2); returns [line, arc, line, arc]. */
+  slot(x1, y1, x2, y2, r) {
+    const len = Math.hypot(x2 - x1, y2 - y1);
+    if (!(len > 0 && r > 0)) throw new GraphError('slot needs distinct centres and r > 0');
+    const [nx, ny] = [-(y2 - y1) / len * r, (x2 - x1) / len * r];
+    const c1 = this.point(x1, y1);
+    const c2 = this.point(x2, y2);
+    const p1 = this.point(x1 + nx, y1 + ny);
+    const p2 = this.point(x2 + nx, y2 + ny);
+    const p3 = this.point(x2 - nx, y2 - ny);
+    const p4 = this.point(x1 - nx, y1 - ny);
+    const l1 = this.line(p1, p2);
+    const a1 = this.arc(c2, p3, p2);
+    const l2 = this.line(p3, p4);
+    const a2 = this.arc(c1, p1, p4);
+    this.radius(a1, r);
+    this.equal(a1, a2);
+    this.tangent(l1, a1);
+    this.tangent(l2, a2);
+    this.parallel(l1, l2);
+    return [l1, a1, l2, a2];
+  }
+
   coincident(a, b) { return this.#add({ type: 'coincident', a, b }); }
   horizontal(e) { return this.#add({ type: 'horizontal', e }); }
   vertical(e) { return this.#add({ type: 'vertical', e }); }

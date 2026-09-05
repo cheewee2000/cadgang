@@ -572,18 +572,72 @@ export function brepLoft(sketches, { ruled = false } = {}) {
  * its normal along the path's tangent, so the same circle sweeps a helix, an
  * arc or a polyline without the caller computing a start frame.
  */
-export function brepSweep(sketch, path, { frenet = false } = {}) {
+export function brepSweep(sketch, path, { frenet = false, xDir = null, guide = null, transition = 'right' } = {}) {
   if (sketch?.kind !== 'sketch') throw new GraphError('sweep needs a sketch profile');
   if (path?.kind !== 'path') throw new GraphError('sweep needs a path — brep.polyline, brep.spline or brep.helix');
+  if (guide && guide.kind !== 'path') throw new GraphError('sweep guide must be a path');
   return attempt('sweep', () => {
     const rc = kernel();
     const spine = track(path.wire.clone());
     const start = spine.startPoint;
     const normal = spine.tangentAt(1e-9).normalize();
-    const plane = new rc.Plane(start, null, normal);
+    const plane = new rc.Plane(start, xDir, normal);
     const profile = track(sketch.drawing.clone().sketchOnPlane(plane));
-    return track(rc.genericSweep(profile.wire, spine, { frenet, forceProfileSpineOthogonality: true }));
+    const config = { frenet, transitionMode: transition, forceProfileSpineOthogonality: true };
+    if (guide) config.auxiliarySpine = track(guide.wire.clone());
+    return track(rc.genericSweep(profile.wire, spine, config));
   });
+}
+
+/** Point and unit tangent at parameter `t` in [0, 1] along a path. */
+export function brepPathAt(path, t) {
+  if (path?.kind !== 'path') throw new GraphError('expected a path — brep.polyline, brep.spline or brep.helix');
+  return attempt('path sample', () => ({
+    point: [...path.wire.pointAt(t).toTuple()],
+    tangent: [...path.wire.tangentAt(t).normalize().toTuple()],
+  }));
+}
+
+/** Extrude one face of a solid along a vector; the caller fuses or cuts it. */
+export function brepFacePrism(face, vector) {
+  return attempt('face extrude', () => track(kernel().basicFaceExtrusion(face, new (kernel().Vector)(vector))));
+}
+
+/** Axis of a cylindrical or conical face: {origin, direction, radius}. */
+export function brepAxisOfFace(face) {
+  return attempt('axisOf', () => {
+    const kind = face.geomType;
+    if (kind !== 'CYLINDRE' && kind !== 'CONE') {
+      throw new GraphError(`axisOf: the face is ${kind}, not cylindrical or conical`);
+    }
+    const adaptor = face._geomAdaptor();
+    const surf = kind === 'CYLINDRE' ? adaptor.Cylinder() : adaptor.Cone();
+    const ax = surf.Axis();
+    const loc = ax.Location();
+    const dir = ax.Direction();
+    const out = {
+      origin: [loc.X(), loc.Y(), loc.Z()],
+      direction: [dir.X(), dir.Y(), dir.Z()],
+      radius: kind === 'CYLINDRE' ? surf.Radius() : surf.RefRadius(),
+    };
+    for (const o of [loc, dir, ax, surf, adaptor]) o.delete?.();
+    return out;
+  });
+}
+
+/** Merge coplanar faces and collinear edges left behind by booleans and patterns. */
+export function brepSimplify(shape) {
+  return attempt('simplify', () => {
+    const u = new OC.ShapeUpgrade_UnifySameDomain_2(shape.wrapped, true, true, false);
+    u.Build();
+    const out = track(kernel().cast(u.Shape()));
+    u.delete();
+    return out;
+  });
+}
+
+export function brepEdgeLength(edge) {
+  return attempt('length', () => kernel().measureLength(edge));
 }
 
 /** A path value: a wire a profile can be swept along. */

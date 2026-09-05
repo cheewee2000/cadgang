@@ -33,27 +33,39 @@ ARGUMENTS
 
 brep — every operation is a pure function: shape in, new shape out. Nothing is mutated, so a cell is math all the way down.
   primitives: box(sx,sy,sz,{center:'xy'|'xyz'|''}) sitting on z=0 unless centered; cylinder(r,h,{center}); sphere(r);
-    torus(majorR, minorR) about z; cone(r1, r2, h, {center}) — r2 = 0 for a point, r1 ≠ r2 for a frustum
-  booleans: union/subtract/intersect(base, ...tools)
+    torus(majorR, minorR) about z; cone(r1, r2, h, {center}) — r2 = 0 for a point, r1 ≠ r2 for a frustum;
+    coil(r, pitch, height, sectionR, {section:'circle'|'square'|'triangle', lefthand}) — a spring
+  booleans: union/subtract/intersect(base, ...tools); interference(a, b) -> shared volume (0 = no clash)
   sketch → solid: extrude(sketch, distance, {symmetric, offset, twist:deg, endScale}) — endScale 0.5 tapers to half size;
     revolve(sketch, axis=[0,0,1], {offset, origin, angle:360}); loft([sketchA, sketchB, ...], {ruled}) — put each
-    section on its own plane/offset with s.on('XY', 30); sweep(sketch, path, {frenet}) — the profile is placed at the
-    path's start, normal along the path, its own plane ignored; pipe(path, r, {wall}) — a round tube along a path
-  paths (for sweep/pipe): polyline([[x,y,z],...]); spline([[x,y,z],...]) smooth through the points;
-    helix(r, pitch, height, {center, axis, lefthand}) — sweep a profile along it for a coil or a thread
+    section on its own plane/offset with s.on('XY', 30); sweep(sketch, path, {frenet, xDir, guide, transition}) — the
+    profile is placed at the path's start, normal along the path, its own plane ignored; pipe(path, r, {wall});
+    emboss(shape, sketch, depth, {cut}) — raise or sink a profile from its plane into the body;
+    rib(shape, [[x,y,z],...]|path, thickness, height, {direction=[0,0,1]}) — a thin wall fused on
+  paths (for sweep/pipe/pathPattern): polyline([[x,y,z],...]); spline([[x,y,z],...]) smooth through the points;
+    helix(r, pitch, height, {center, axis, lefthand})
   hole(shape, [x,y,z], diameter, {depth (omit = through all), direction=[0,0,-1], counterbore:{diameter,depth},
     countersink:{diameter, angle:90}}) — Fusion's Hole: drill from a point on a face
-  modifiers: fillet(shape, edgeQuery, radius); chamfer(shape, edgeQuery, distance);
-    shell(shape, faceQuery|null, thickness) — POSITIVE thickness hollows INWARD, negative grows outward, null query seals a void;
-    offset(shape, distance) grows every face (negative shrinks); draft(shape, faceQuery, deg, {pull=[0,0,1], neutralAt})
-    tapers the selected faces for mould release, faces staying put on the neutral plane (default: the bottom along pull);
-    split(shape, origin, normal) -> {above, below}
-  patterns: linearPattern(shape, [dx,dy,dz], count); circularPattern(shape, count, {axis, origin, angle:360}) —
-    both return the copies FUSED, so use them on a tool then subtract, or on a boss then union.
-    Fusion's Mirror that keeps both sides is brep.union(s, brep.mirror(s, 'YZ')).
-  placement: translate(shape,[x,y,z]); rotate(shape, deg, axis=[0,0,1], origin); scale(shape, factor, origin); mirror(shape,'XY'|'XZ'|'YZ', origin)
-  planes: planeOf(shape, faceQuery) -> {origin, normal, xDir} for sketching ON a face: sk.sketch().on(brep.planeOf(input, q.faces(input).planar().facing('+z').expect(1)))
-  measures: volume(shape); area(shape); bbox(shape) -> {min,max,size}; centroid(shape) -> [x,y,z]; distance(a, b) closest approach
+  thread(shape, cylindricalFaceQuery, pitch, {depth, lefthand, length}) — a modelled 60° V thread over the face's length;
+    boss or hole is read from the face. Built as a twist extrude, so it is fast; the result reopens in Fusion as real geometry.
+  modifiers: fillet(shape, edgeQuery, radius|fn(edge)); chamfer(shape, edgeQuery, distance | {distances:[a,b], face:faceQuery}
+    | {distance, angle, face}); shell(shape, faceQuery|null, thickness) — POSITIVE hollows INWARD, negative grows outward,
+    null query seals a void; offset(shape, distance) grows every face (negative shrinks);
+    pushPull(shape, planarFaceQuery, distance) — Press Pull: move faces out (+) or in (−);
+    draft(shape, faceQuery, deg, {pull=[0,0,1], neutralAt}) tapers faces for mould release, faces staying put on the
+    neutral plane (default: the bottom along pull); split(shape, origin, normal) | split(shape, toolShape) -> {above, below};
+    simplify(shape) merges coplanar faces and collinear edges a pattern or pushPull left behind
+  patterns: linearPattern(shape, [dx,dy,dz], count); circularPattern(shape, count, {axis, origin, angle:360});
+    pathPattern(shape, path, count, {orient:true}) — all return the copies FUSED: pattern a tool then subtract, a boss then union.
+    mirror(shape, 'XY'|'XZ'|'YZ', origin, {keep:true}) — keep fuses the image onto the original, as Fusion's Mirror does
+  placement: translate(shape,[x,y,z]); rotate(shape, deg, axis=[0,0,1], origin); scale(shape, factor, origin) (uniform only)
+  construct: planeOf(shape, planarFaceQuery) -> {origin, normal, xDir}; plane(origin, normal, xDir?); planeThrough(a, b, c);
+    pivotPlane(plane, deg, axis?) — plane at an angle; midplane(shape, faceQueryA, faceQueryB);
+    axisOf(shape, cylindricalFaceQuery) -> {origin, direction, radius} for revolve / circularPattern / thread.
+    A plane object goes straight into a sketch: sk.sketch().on(brep.planeOf(input, q.faces(input).planar().facing('+z').expect(1)))
+  measures: volume(shape); area(shape); bbox(shape) -> {min,max,size}; centroid(shape) -> [x,y,z]; mass(shape, g/cm³) -> grams;
+    distance(a, b) closest approach; length(shape, edgeQuery) total edge length
+  NOT available (kernel build lacks the binding): delete/replace face, non-uniform scale, surface tools, sheet metal, text.
 
 q — q.faces(shape) / q.edges(shape), then chain filters:
   kinds: planar() cylindrical() conical() spherical() toroidal() | linear() circular() elliptical() | ofKind('PLANE',...)
@@ -74,11 +86,12 @@ sk — 2D sketches under constraint, for profiles a primitive cannot express. sk
   Their gestures are stored as constrained geometry (a snapped corner becomes one shared point, a near-level
   line becomes horizontal), so the profile they draw survives the parameter changes you write.
   They can also DIMENSION on that canvas, and a dimension's value may be the NAME OF ONE OF THIS CELL'S PARAMS —
-  so declare the params you want them to drive (`export const params = { width: 40 }`) even when the program
+  so declare the params you want them to drive (\`export const params = { width: 40 }\`) even when the program
   never reads them itself. A dimension typed as 'width' binds the drawn geometry to that slider forever after.
   geometry: point(x,y,{fixed}) -> index; anchor(x,y) a pinned point (every sketch wants at least one);
     line(a,b) / circle(centrePoint, r) / arc(centre, a, b) counter-clockwise from a to b — each returns an entity index;
-    rectangle(x1,y1,x2,y2) -> four already-squared lines; on(plane, offset=0) sets the plane — a name
+    rectangle(x1,y1,x2,y2) -> four already-squared lines; polygon(cx,cy,sides,r) -> lines, equal-sided;
+    slot(x1,y1,x2,y2,r) -> [line, arc, line, arc], tangent and parallel; on(plane, offset=0) sets the plane — a name
     ('XY'|'XZ'|'YZ'|'YX'|'ZX'|'ZY') or a brep.planeOf(...) object — and slides it along the normal
   constraints: coincident(p,p) horizontal(line) vertical(line) distance(line,v) distance(p,p,v)
     distanceX(p,p,v) distanceY(p,p,v) — SIGNED, b minus a; radius(e,v) diameter(e,v) equal(e,f)

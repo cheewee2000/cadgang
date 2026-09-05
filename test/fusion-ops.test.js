@@ -132,3 +132,106 @@ test('every operation is reachable from a cell program', () => inScope(() => {
   const s = api.sk.sketch().on('XY', 5);
   assert.equal(s.offset, 5);
 }));
+
+// ------------------------------------------------------------ second batch
+
+test('chamfer takes two distances measured from a named face', () => inScope(() => {
+  const cube = ops.box(10, 10, 10);
+  const top = q.faces(cube).planar().facing('+z');
+  const edges = q.edges(cube).linear().along('x').atExtreme('+z');
+  const c = ops.chamfer(cube, edges, { distances: [4, 1], face: top });
+  // two chamfers, each a 4×1 right triangle prism 10 long
+  near(ops.volume(c), 1000 - 2 * (0.5 * 4 * 1 * 10));
+}));
+
+test('mirror keep, pushPull, and simplify', () => inScope(() => {
+  const half = ops.box(10, 10, 10);
+  const whole = ops.mirror(ops.translate(half, [5, 0, 0]), 'YZ', [0, 0, 0], { keep: true });
+  near(ops.volume(whole), 2000);
+  const pushed = ops.pushPull(half, q.faces(half).planar().facing('+z'), 5);
+  near(ops.volume(pushed), 1500);
+  const pulled = ops.pushPull(half, q.faces(half).planar().facing('+x'), -3);
+  near(ops.volume(pulled), 700);
+  const row = ops.linearPattern(ops.box(10, 10, 10), [10, 0, 0], 3);
+  const tidy = ops.simplify(row);
+  near(ops.volume(tidy), 3000);
+  assert.ok(q.faces(tidy).count() <= q.faces(row).count() && q.faces(tidy).count() === 6, 'simplify merges the coplanar faces');
+}));
+
+test('pathPattern spaces copies along a path and turns them', () => inScope(() => {
+  const peg = ops.box(2, 2, 2, { center: 'xyz' });
+  const line = ops.pathPattern(peg, ops.polyline([[0, 0, 0], [30, 0, 0]]), 4);
+  near(ops.volume(line), 32);
+  near(ops.bbox(line).max[0], 31);
+  const bent = ops.pathPattern(ops.box(4, 1, 1, { center: 'xyz' }), ops.polyline([[0, 0, 0], [20, 0, 0], [20, 20, 0]]), 3);
+  const b = ops.bbox(bent);
+  near(b.max[1], 22, 0.05); // the last copy turned to follow +y
+}));
+
+test('rib, emboss and coil', () => inScope(() => {
+  const plate = ops.box(40, 40, 4);
+  const ribbed = ops.rib(plate, [[-15, 0, 4], [15, 0, 4]], 2, 6);
+  near(ops.volume(ribbed), 6400 + 30 * 2 * 6);
+  const boss = ops.emboss(plate, circle(5, 'XY', 4), 3);
+  near(ops.volume(boss), 6400 + Math.PI * 25 * 3);
+  const pocket = ops.emboss(plate, circle(5, 'XY', 4), 2, { cut: true });
+  near(ops.volume(pocket), 6400 - Math.PI * 25 * 2);
+  const spring = ops.coil(10, 6, 30, 1);
+  near(ops.volume(spring), Math.PI * 1 * 5 * Math.hypot(2 * Math.PI * 10, 6), 0.05);
+  const square = ops.coil(10, 6, 30, 1, { section: 'square' });
+  near(ops.volume(square), 4 * 5 * Math.hypot(2 * Math.PI * 10, 6), 0.05);
+}));
+
+test('thread cuts a helical groove on a boss and in a hole', () => inScope(() => {
+  const bolt = ops.cylinder(5, 20);
+  const threaded = ops.thread(bolt, q.faces(bolt).cylindrical(), 1.5);
+  const v = ops.volume(threaded);
+  assert.ok(v < Math.PI * 25 * 20 && v > Math.PI * 25 * 20 * 0.7, `external thread removed a groove: ${v}`);
+  near(ops.bbox(threaded).size[2], 20);
+  const left = ops.thread(bolt, q.faces(bolt).cylindrical(), 1.5, { lefthand: true });
+  near(ops.volume(left), v);
+  // a boss on a base keeps its base
+  const stud = ops.union(ops.box(30, 30, 5), ops.translate(ops.cylinder(5, 20), [0, 0, 5]));
+  const studded = ops.thread(stud, q.faces(stud).cylindrical(), 1.5);
+  near(ops.volume(studded), 4500 + v);
+  const nut = ops.hole(ops.box(20, 20, 10), [0, 0, 10], 8);
+  const tapped = ops.thread(nut, q.faces(nut).cylindrical(), 1.25);
+  const nv = ops.volume(tapped);
+  assert.ok(nv < ops.volume(nut) && nv > ops.volume(nut) * 0.9, `internal thread cut into the wall: ${nv}`);
+}));
+
+test('planes, axes and measures', () => inScope(() => {
+  const p = ops.plane([0, 0, 5], [0, 0, 2]);
+  assert.deepEqual(p.normal, [0, 0, 1]);
+  const pt = ops.planeThrough([0, 0, 0], [10, 0, 0], [0, 10, 0]);
+  assert.deepEqual(pt.normal, [0, 0, 1]);
+  const tilted = ops.pivotPlane(pt, 90);
+  near(tilted.normal[1], -1);
+  const cube = ops.box(10, 10, 10);
+  const mid = ops.midplane(cube, q.faces(cube).planar().facing('+x'), q.faces(cube).planar().facing('-x'));
+  near(mid.origin[0], 0);
+  const peg = ops.translate(ops.cylinder(3, 8), [12, 0, 0]);
+  const ax = ops.axisOf(peg, q.faces(peg).cylindrical());
+  near(ax.radius, 3);
+  near(ax.origin[0], 12);
+  near(Math.abs(ax.direction[2]), 1);
+  // a solid on a tilted plane extrudes along its normal
+  const tiltedBox = ops.extrude(square(4).on(ops.pivotPlane(ops.plane([0, 0, 0], [0, 0, 1]), 90)), 10);
+  near(ops.bbox(tiltedBox).size[0], 10); // the normal was turned from +z to +x
+  near(ops.mass(cube, 2.7), 2.7);
+  near(ops.length(cube, q.edges(cube).linear()), 120);
+  near(ops.interference(cube, ops.translate(cube, [5, 0, 0])), 500);
+  near(ops.interference(cube, ops.translate(cube, [50, 0, 0])), 0);
+  const { above, below } = ops.split(cube, ops.translate(cube, [5, 0, 0]));
+  near(ops.volume(above), 500);
+  near(ops.volume(below), 500);
+}));
+
+test('sketch polygon and slot are closed profiles', () => inScope(() => {
+  const s = new Sketch();
+  s.polygon(0, 0, 6, 10);
+  near(ops.volume(ops.extrude(s, 2)), (3 * Math.sqrt(3) / 2) * 100 * 2);
+  const t = new Sketch();
+  t.slot(-10, 0, 10, 0, 3);
+  near(ops.volume(ops.extrude(t, 1)), 20 * 6 + Math.PI * 9);
+}));
