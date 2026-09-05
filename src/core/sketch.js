@@ -204,7 +204,9 @@ export class Sketch {
   #requirePoints(what, ...idx) {
     for (const i of idx) {
       if (!Number.isInteger(i) || i < 0 || i >= this.points.length) {
-        throw new GraphError(`${what}: ${i} is not a point in this sketch`);
+        throw new GraphError(
+          `${what}: ${Array.isArray(i) ? `[${i}]` : i} is not a point in this sketch — pass the index that s.point(x, y) or s.anchor(x, y) returned, not coordinates`
+        );
       }
     }
   }

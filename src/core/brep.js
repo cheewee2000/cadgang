@@ -680,7 +680,7 @@ export function brepLoft(sketches, { ruled = false } = {}) {
  * its normal along the path's tangent, so the same circle sweeps a helix, an
  * arc or a polyline without the caller computing a start frame.
  */
-export function brepSweep(sketch, path, { frenet = false, xDir = null, guide = null, transition = 'right' } = {}) {
+export function brepSweep(sketch, path, { frenet = false, xDir = null, guide = null, transition = 'right', contact = true } = {}) {
   if (sketch?.kind !== 'sketch') throw new GraphError('sweep needs a sketch profile');
   if (path?.kind !== 'path') throw new GraphError('sweep needs a path — brep.polyline, brep.spline or brep.helix');
   if (guide && guide.kind !== 'path') throw new GraphError('sweep guide must be a path');
@@ -692,7 +692,7 @@ export function brepSweep(sketch, path, { frenet = false, xDir = null, guide = n
     const plane = new rc.Plane(start, xDir, normal);
     const profile = track(sketch.drawing.clone().sketchOnPlane(plane));
     const config = { frenet, transitionMode: transition, forceProfileSpineOthogonality: true };
-    if (guide) config.auxiliarySpine = track(guide.wire.clone());
+    if (guide) return track(guidedSweep(profile.wire, spine, track(guide.wire.clone()), { contact, transition }));
     return track(rc.genericSweep(profile.wire, spine, config));
   });
 }
@@ -728,6 +728,30 @@ export function brepTwistedRing({ section, spine, aux, cylinderRadius, waveInsid
     for (const o of [shell, w0, w1, wall, cap0, cap1]) track(o);
     return track(rc.makeSolid([shell, cap0, cap1, wall]));
   });
+}
+
+/**
+ * A sweep steered by a guide rail. replicad's sweep only lets the rail set the
+ * profile's twist (BRepFill_NoContact); a rail is for keeping the profile in
+ * touch with it as it goes, which is OCCT's KeepContact mode — so the pipe
+ * shell is built here directly, with the same sequence replicad uses.
+ */
+function guidedSweep(profileWire, spine, rail, { contact = true, transition = 'right' } = {}) {
+  const rc = kernel();
+  const builder = new OC.BRepOffsetAPI_MakePipeShell(spine.wrapped);
+  const modes = {
+    transformed: OC.BRepBuilderAPI_TransitionMode.BRepBuilderAPI_Transformed,
+    round: OC.BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RoundCorner,
+    right: OC.BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RightCorner,
+  };
+  if (modes[transition]) builder.SetTransitionMode(modes[transition]);
+  builder.SetMode_5(rail.wrapped, false, contact ? OC.BRepFill_TypeOfContact.BRepFill_Contact : OC.BRepFill_TypeOfContact.BRepFill_NoContact);
+  builder.Add_1(profileWire.wrapped, contact, transition === 'round');
+  builder.Build(new OC.Message_ProgressRange_1());
+  builder.MakeSolid();
+  const shape = rc.cast(builder.Shape());
+  builder.delete();
+  return shape;
 }
 
 /** Point and unit tangent at parameter `t` in [0, 1] along a path. */
@@ -951,7 +975,18 @@ export function brepHelix(radius, pitch, height, { center = [0, 0, 0], axis = [0
 /** Offset every face of a solid outward by `distance` (inward when negative). */
 export function brepOffset(shape, distance) {
   if (!distance) throw new GraphError('Offset distance cannot be zero');
-  return attempt('offset', () => track(kernel().makeOffset(shape, distance)));
+  return attempt('offset', () => {
+    try {
+      return track(kernel().makeOffset(shape, distance));
+    } catch (e) {
+      if (distance < 0 && /null|not type/i.test(String(e?.message))) {
+        throw new GraphError(
+          `offset by ${distance} mm left nothing: every wall of the part is thinner than ${2 * -distance} mm, so shrinking it that far collapses it`
+        );
+      }
+      throw e;
+    }
+  });
 }
 
 /**

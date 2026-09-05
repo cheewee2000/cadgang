@@ -286,3 +286,36 @@ test('crossing loops and collapsed points are named, not left to the kernel', ()
   t.distance(l1, 0.0000001); // collapses b onto a
   assert.throws(() => ops.extrude(t, 1), /converged to the same place/);
 }));
+
+test('a loft with corners still shells, by offset when OCCT refuses', () => inScope(() => {
+  const sq = new Sketch(); sq.rectangle(-20, -20, 20, 20);
+  const ci = new Sketch().on('XY', 40); ci.circle(ci.anchor(0, 0), 15);
+  const adapter = ops.loft([sq, ci]);
+  const duct = ops.shell(adapter, q.faces(adapter).planar(), 1.5);
+  const v = ops.volume(duct);
+  assert.ok(v > 5000 && v < 10000, `a 1.5 mm wall duct: ${v}`);
+  assert.equal(q.faces(duct).planar().count(), 2, 'both ends open: two rims');
+  const cup = ops.shell(adapter, q.faces(adapter).planar().facing('+z'), 1.5);
+  assert.ok(ops.volume(cup) > v, 'one end closed keeps its floor');
+}));
+
+test('errors name the cause: collapsed offset, curved draft, a split that misses, a coordinate for a point', () => inScope(() => {
+  const box = ops.box(30, 30, 30);
+  const hollow = ops.shell(box, q.faces(box).planar().facing('+z'), 2);
+  assert.throws(() => ops.offset(hollow, -1), /thinner than 2 mm/);
+  const cyl = ops.cylinder(10, 20);
+  assert.throws(() => ops.draft(cyl, q.faces(cyl).cylindrical(), 5), /only planar faces can be drafted/);
+  assert.throws(() => ops.split(box, ops.translate(cyl, [100, 0, 0])), /does not cut the body/);
+  assert.throws(() => ops.split(box, [0, 0, 100], [0, 0, 1]), /does not cut the body/);
+  const s = new Sketch();
+  assert.throws(() => s.circle([0, 0], 5), /pass the index that s\.point/);
+}));
+
+test('a sweep guide rail steers the profile', () => inScope(() => {
+  const rect = new Sketch(); rect.rectangle(-2, -3, 2, 3);
+  const path = ops.polyline([[0, 0, 0], [50, 0, 0]]);
+  const plain = ops.bbox(ops.sweep(rect, path));
+  const guided = ops.bbox(ops.sweep(rect, path, { guide: ops.spline([[0, 0, 3], [25, 0, 13], [50, 0, 3]]) }));
+  near(plain.size[2], 4);
+  assert.ok(guided.size[2] > 6, `the rail lifted the profile: ${guided.size[2]}`);
+}));

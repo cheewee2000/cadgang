@@ -207,10 +207,44 @@ export function shell(shape, query, thickness) {
   if (!thickness) throw new GraphError('Shell thickness cannot be zero');
   return attempt('shell', () => {
     const s = borrow(shape, 'shape');
-    if (query == null) return track(s.shell(thickness));
-    const { finder } = finderFor(query, s, 'shell');
-    return track(s.shell(thickness, finder));
+    try {
+      if (query == null) return track(s.shell(thickness));
+      const { finder } = finderFor(query, s, 'shell');
+      return track(s.shell(thickness, finder));
+    } catch (e) {
+      let original = e;
+      try { attempt('shell', () => { throw e; }); } catch (g) { original = g; }
+      return shellByOffset(s, query, thickness, original);
+    }
   });
+}
+
+/**
+ * Shell the hard way, when OCCT's own shell refuses (it does on any loft
+ * with corners): hollow with a whole-body offset, then open each chosen face
+ * by pushing the cavity's matching face out through the wall. Only planar
+ * faces can be opened this way, so anything else keeps the original error.
+ */
+function shellByOffset(s, query, thickness, original) {
+  const inward = thickness > 0;
+  const t = Math.abs(thickness);
+  const opened = query == null ? [] : query.resolveOn(s);
+  if (opened.some(({ d }) => d.kind !== 'PLANE' || !d.normal)) {
+    throw new GraphError(`${original.message} — and the fallback (offset then open) can only open planar faces`);
+  }
+  const inner = inward ? brepOffset(s, -t) : s;
+  const outer = inward ? s : brepOffset(s, t);
+  let result = track(outer.clone().cut(inner));
+  for (const { d } of opened) {
+    // The cavity face that sits under this one: same heading, nearest centre.
+    const under = q.faces(inner).planar().facing(d.normal).all()
+      .sort((a, b) => Math.hypot(...vsub(a.center, d.center)) - Math.hypot(...vsub(b.center, d.center)))[0];
+    if (!under) throw new GraphError(`${original.message} — the fallback found no cavity face under the one to open`);
+    const face = q.faces(inner).planar().facing(d.normal).resolveOn(inner).find((m) => m.d.i === under.i)?.element;
+    const plug = brepFacePrism(face, vmul(d.normal, t + 0.01));
+    result = track(result.cut(plug));
+  }
+  return result;
 }
 
 export function translate(shape, [x, y, z]) {
@@ -329,6 +363,9 @@ export function offset(shape, distance) {
 export function draft(shape, query, angle, { pull = [0, 0, 1], neutralAt = null } = {}) {
   return attempt('draft', () => {
     const s = borrow(shape, 'shape');
+    const matched = query.resolveOn(s);
+    const bent = matched.find(({ d }) => d.kind !== 'PLANE');
+    if (bent) throw new GraphError(`draft: face ${bent.d.i} is ${bent.d.kind}; only planar faces can be drafted`);
     const faces = finderFor(query, s, 'draft').elements;
     let at = neutralAt;
     if (!at) {
@@ -519,11 +556,16 @@ export function coil(radius, pitch, height, sectionR, { section = 'circle', left
  * `above` is the part inside it. Either half may be empty.
  */
 export function split(shape, origin, normal) {
+  const checked = (halves, what) => {
+    const empty = Object.entries(halves).filter(([, h]) => { try { return !(kernelOf().measureVolume(h) > 1e-9); } catch { return true; } });
+    if (empty.length) throw new GraphError(`split: the ${what} does not cut the body (the '${empty[0][0]}' half is empty)`);
+    return halves;
+  };
   if (origin && typeof origin.clone === 'function') {
-    return attempt('split', () => ({
+    return attempt('split', () => checked({
       above: track(borrow(shape, 'shape').intersect(borrow(origin, 'tool'))),
       below: track(borrow(shape, 'shape').cut(borrow(origin, 'tool'))),
-    }));
+    }, 'tool'));
   }
   return attempt('split', () => {
     const s = borrow(shape, 'shape');
@@ -534,10 +576,10 @@ export function split(shape, origin, normal) {
       b = alignZ(b, normal);
       return track(b.translate(...origin));
     };
-    return {
+    return checked({
       above: track(s.clone().intersect(half(1))),
       below: track(s.clone().intersect(half(-1))),
-    };
+    }, 'plane');
   });
 }
 
@@ -588,8 +630,8 @@ export function loft(sketches, { ruled = false } = {}) {
 }
 
 /** Sweep a sketch profile along a path from brep.polyline / brep.spline / brep.helix. */
-export function sweep(sketch, path, { frenet = false } = {}) {
-  return brepSweep(placedProfile(sketch, 'sweep'), path, { frenet });
+export function sweep(sketch, path, options = {}) {
+  return brepSweep(placedProfile(sketch, 'sweep'), path, options);
 }
 
 /** A round tube of `radius` along the path; `wall` > 0 hollows it to that wall thickness. */

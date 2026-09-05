@@ -40,7 +40,8 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
   sketch → solid: extrude(sketch, distance, {symmetric, offset, twist:deg, endScale}) — endScale 0.5 tapers to half size;
     revolve(sketch, axis=[0,0,1], {offset, origin, angle:360}); loft([sketchA, sketchB, ...], {ruled}) — put each
     section on its own plane/offset with s.on('XY', 30); sweep(sketch, path, {frenet, xDir, guide, transition}) — the
-    profile is placed at the path's start, normal along the path, its own plane ignored; pipe(path, r, {wall});
+    profile is placed at the path's start, normal along the path, its own plane ignored; `guide` is a second path
+    the profile keeps touching as it goes (a rail), so it tilts and slides to follow it; pipe(path, r, {wall});
     emboss(shape, sketch, depth, {cut}) — raise or sink a profile from its plane into the body;
     rib(shape, [[x,y,z],...]|path, thickness, height, {direction=[0,0,1]}) — a thin wall fused on: the path is the wall's
     FOOT line (put its points on the body), `direction` is the axis the wall stands up along, and the wall is a plain
@@ -54,7 +55,7 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     (~0.1 s); on a SHELLED part every boolean is slow (5–15 s) — thread solids, and shell last or use `length`.
   modifiers: fillet(shape, edgeQuery, radius|fn(edge)); chamfer(shape, edgeQuery, distance | {distances:[a,b], face:faceQuery}
     | {distance, angle, face}); shell(shape, faceQuery|null, thickness) — POSITIVE hollows INWARD, negative grows outward,
-    null query seals a void; offset(shape, distance) grows every face (negative shrinks);
+    null query seals a void; lofts and other cornered curved bodies shell by whole-body offset, which can only OPEN planar faces; offset(shape, distance) grows every face (negative shrinks);
     pushPull(shape, planarFaceQuery, distance) — Press Pull: move faces out (+) or in (−);
     draft(shape, faceQuery, deg, {pull=[0,0,1], neutralAt}) tapers faces for mould release, faces staying put on the
     neutral plane (default: the bottom along pull); split(shape, origin, normal) | split(shape, toolShape) -> {above, below};

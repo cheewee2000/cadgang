@@ -260,7 +260,8 @@ export function checkCellResult(value, id) {
     );
   }
   if (typeof value.clone !== 'function') {
-    throw new GraphError(`Cell '${id}' returned a ${typeof value}, not a shape`);
+    const what = typeof value;
+    throw new GraphError(`Cell '${id}' returned ${/^[aeiou]/.test(what) ? 'an' : 'a'} ${what}, not a shape`);
   }
   return value;
 }
