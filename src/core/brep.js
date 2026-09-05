@@ -698,60 +698,55 @@ export function brepSweep(sketch, path, { frenet = false, xDir = null, guide = n
 }
 
 /**
- * A twisted ring built from faces, with no boolean: the section wire swept
- * along `spine` under the twist of `aux` gives the lateral shell; the other
- * wall is a plain cylinder of `cylinderRadius` about the same axis; the two
- * planar caps close it. `waveInside` puts the swept wall on the inside (an
- * internal thread's teeth) and the cylinder outside.
+ * A twisted solid built from faces, with no boolean, ONE TURN AT A TIME.
  *
- * Built this way because every boolean that touches the swept BSpline
- * surface costs seconds, where sewing costs nothing and the ring then meets
- * the part only on planar caps and one plain cylinder.
+ * The section drawing is swept along `direction` for `span`, turning once
+ * per `pitch`, as a series of one-turn shells sewn together: a single sweep
+ * over twenty turns is one BSpline face the mesher spends a minute and 650k
+ * triangles on, where twenty one-turn faces mesh in under a second. Each
+ * piece starts exactly where the last ended (a whole turn brings the section
+ * back to itself), so the pieces sew on plain planar wires.
+ *
+ * With `cylinderRadius`, the solid is a ring: the other wall is a plain
+ * cylinder about the same axis and the caps are annuli. `waveInside` puts
+ * the swept wall on the inside (an internal thread's teeth). Every boolean
+ * that touches the swept surface costs seconds, where sewing costs nothing
+ * and the result then meets the part only on planar caps and one cylinder.
  */
-export function brepTwistedRing({ section, spine, aux, cylinderRadius, waveInside, p0, direction, span }) {
-  return attempt('twisted ring', () => {
+export function brepTwistedSolid({ drawing, p0, direction, span, pitch, lefthand = false, cylinderRadius = null, waveInside = false }) {
+  return attempt('twisted solid', () => {
     const rc = kernel();
-    const [shell, w0, w1] = rc.genericSweep(section.wire, spine, { auxiliarySpine: aux }, true);
-    const p1 = p0.map((c, k) => c + direction[k] * span);
-    const flip = direction.map((c) => -c);
-    // A wire becomes a hole by running the other way; a circle drawn with the reversed normal does.
-    const circle = (at, reversed) => rc.assembleWire([rc.makeCircle(cylinderRadius, at, reversed ? flip : direction)]);
-    const wall = rc.loft([circle(p0, false), circle(p1, false)], { ruled: true }, true);
-    let cap0; let cap1;
-    if (waveInside) {
-      cap0 = rc.makeFace(circle(p0, false), [track(new rc.Wire(OC.TopoDS.Wire_1(w0.wrapped.Reversed())))]);
-      cap1 = rc.makeFace(circle(p1, false), [track(new rc.Wire(OC.TopoDS.Wire_1(w1.wrapped.Reversed())))]);
-    } else {
-      cap0 = rc.makeFace(w0, [circle(p0, true)]);
-      cap1 = rc.makeFace(w1, [circle(p1, true)]);
+    const at = (z) => p0.map((c, k) => c + direction[k] * z);
+    const parts = [];
+    let first = null; let last = null;
+    for (let z0 = 0; z0 < span - 1e-9; z0 += pitch) {
+      const len = Math.min(pitch, span - z0);
+      const section = track(drawing.clone().sketchOnPlane(new rc.Plane(at(z0), null, direction)));
+      const spine = track(rc.assembleWire([rc.makeLine(at(z0), at(z0 + len))]));
+      const aux = track(rc.makeHelix(pitch, len, 1, at(z0), direction, lefthand));
+      const [shell, w0, w1] = rc.genericSweep(section.wire, spine, { auxiliarySpine: aux }, true);
+      track(shell); track(w0); track(w1);
+      parts.push(shell);
+      if (!first) first = w0;
+      last = w1;
     }
-    for (const o of [shell, w0, w1, wall, cap0, cap1]) track(o);
-    return track(rc.makeSolid([shell, cap0, cap1, wall]));
+    const p1 = at(span);
+    if (cylinderRadius == null) {
+      parts.push(track(rc.makeFace(first)), track(rc.makeFace(last)));
+    } else {
+      const flip = direction.map((c) => -c);
+      // A wire becomes a hole by running the other way; a circle drawn with the reversed normal does.
+      const circle = (o, reversed) => track(rc.assembleWire([rc.makeCircle(cylinderRadius, o, reversed ? flip : direction)]));
+      parts.push(track(rc.loft([circle(p0, false), circle(p1, false)], { ruled: true }, true)));
+      if (waveInside) {
+        parts.push(track(rc.makeFace(circle(p0, false), [track(new rc.Wire(OC.TopoDS.Wire_1(first.wrapped.Reversed())))])));
+        parts.push(track(rc.makeFace(circle(p1, false), [track(new rc.Wire(OC.TopoDS.Wire_1(last.wrapped.Reversed())))])));
+      } else {
+        parts.push(track(rc.makeFace(first, [circle(p0, true)])), track(rc.makeFace(last, [circle(p1, true)])));
+      }
+    }
+    return track(rc.makeSolid(parts));
   });
-}
-
-/**
- * A sweep steered by a guide rail. replicad's sweep only lets the rail set the
- * profile's twist (BRepFill_NoContact); a rail is for keeping the profile in
- * touch with it as it goes, which is OCCT's KeepContact mode — so the pipe
- * shell is built here directly, with the same sequence replicad uses.
- */
-function guidedSweep(profileWire, spine, rail, { contact = true, transition = 'right' } = {}) {
-  const rc = kernel();
-  const builder = new OC.BRepOffsetAPI_MakePipeShell(spine.wrapped);
-  const modes = {
-    transformed: OC.BRepBuilderAPI_TransitionMode.BRepBuilderAPI_Transformed,
-    round: OC.BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RoundCorner,
-    right: OC.BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RightCorner,
-  };
-  if (modes[transition]) builder.SetTransitionMode(modes[transition]);
-  builder.SetMode_5(rail.wrapped, false, contact ? OC.BRepFill_TypeOfContact.BRepFill_Contact : OC.BRepFill_TypeOfContact.BRepFill_NoContact);
-  builder.Add_1(profileWire.wrapped, contact, transition === 'round');
-  builder.Build(new OC.Message_ProgressRange_1());
-  builder.MakeSolid();
-  const shape = rc.cast(builder.Shape());
-  builder.delete();
-  return shape;
 }
 
 /** Point and unit tangent at parameter `t` in [0, 1] along a path. */
@@ -1148,10 +1143,22 @@ export async function importStepExact(buffer) {
  *
  * tolerance is the maximum chord deviation in mm.
  */
+/**
+ * Triangles above this from a COARSE pass mean the shape is dense enough that
+ * the fine pass would run the kernel out of memory — a twenty-turn thread
+ * meshed at 0.01 mm grew the WASM heap to 2 GB and took the process down. The
+ * coarse mesh is what such a shape gets; everything ordinary is refined.
+ */
+const MESH_BUDGET = 40000;
+const COARSE = 0.1;
+
 export function tessellate(shape, { tolerance = 0.01, angularTolerance = 0.3 } = {}) {
   requireSolid(shape, 'shape');
   return attempt('tessellation', () => {
-    const mesh = shape.mesh({ tolerance, angularTolerance });
+    let mesh = shape.mesh({ tolerance: Math.max(tolerance, COARSE), angularTolerance });
+    if (tolerance < COARSE && mesh.triangles.length / 3 <= MESH_BUDGET) {
+      mesh = shape.mesh({ tolerance, angularTolerance });
+    }
     const groups = mesh.faceGroups ?? [];
     return {
       positions: Float32Array.from(mesh.vertices),

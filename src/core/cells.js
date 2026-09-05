@@ -626,7 +626,7 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
     if (cell.code == null) {
       entry.status = 'error';
       entry.error = `Cell '${cell.id}' has a prompt but no compiled program yet`;
-      if (stopOnError) throw new GraphError(entry.error);
+      if (stopOnError) throw new GraphError(entry.error.includes(`'${cell.id}'`) ? entry.error : `Cell '${cell.id}': ${entry.error}`);
       continue;
     }
     if (hasUnresolvedSelections(cell)) {
@@ -635,7 +635,7 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
         .filter(([, s]) => !isResolved(s))
         .map(([n, s]) => `${n} (${s.type})`);
       entry.error = `Cell '${cell.id}' is waiting for a pick: ${names.join(', ')}`;
-      if (stopOnError) throw new GraphError(entry.error);
+      if (stopOnError) throw new GraphError(entry.error.includes(`'${cell.id}'`) ? entry.error : `Cell '${cell.id}': ${entry.error}`);
       continue;
     }
 

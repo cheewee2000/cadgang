@@ -40,7 +40,7 @@ import {
   brepAxisOfFace,
   brepSimplify,
   brepEdgeLength,
-  brepTwistedRing,
+  brepTwistedSolid,
   tightBounds,
   requireSolid,
 } from './brep.js';
@@ -495,17 +495,16 @@ export function thread(shape, query, pitch, { depth = null, lefthand = false, le
       return [rr * Math.cos(a), rr * Math.sin(a)];
     });
     pts.push(pts[0]);
-    const section = track(rc.drawPointsInterpolation(pts).sketchOnPlane(new rc.Plane(p0, null, direction)));
-    const spine = track(rc.assembleWire([rc.makeLine(p0, vadd(p0, vmul(direction, span)))]));
-    const aux = track(brepHelix(1, pitch, span, { center: p0, axis: direction, lefthand }).wire.clone());
+    const drawing = track(rc.drawPointsInterpolation(pts));
     const TT = (label, fn) => { const t = Date.now(); const r = fn(); if (process.env.CADGANG_TIMING) console.error('thread', label, Date.now() - t, 'ms'); return r; };
     const along = (shape) => track(alignZ(track(shape), direction).translate(...p0));
+    const twisted = (opts) => brepTwistedSolid({ drawing, p0, direction, span, pitch, lefthand, ...opts });
     // Every boolean that touches the twisted surface costs seconds, so the part only ever
     // meets it on planar caps and a plain cylinder: cut a band out of the part with an
-    // ordinary cylinder, build the threaded ring from faces (no boolean), fuse it back.
+    // ordinary cylinder, build the threaded solid from faces (no boolean), fuse it back.
     if (!external) {
       const rOut = radius + h + Math.max(0.1, 0.25 * h);
-      const ring = TT('ring', () => brepTwistedRing({ section, spine, aux, cylinderRadius: rOut, waveInside: true, p0, direction, span }));
+      const ring = TT('ring', () => twisted({ cylinderRadius: rOut, waveInside: true }));
       const widened = TT('widen bore', () => track(s.cut(along(cylinder(rOut, span)))));
       return TT('fuse ring', () => track(widened.fuse(ring)));
     }
@@ -517,11 +516,9 @@ export function thread(shape, query, pitch, { depth = null, lefthand = false, le
       .filter((f) => overlapsSpan(f.bbox, origin, direction, start, start + span))
       .map((f) => f.radius);
     const rIn = bore.length ? Math.max(...bore) : null;
-    const twisted = rIn == null
-      ? TT('sweep', () => track(rc.genericSweep(section.wire, spine, { auxiliarySpine: aux })))
-      : TT('ring', () => brepTwistedRing({ section, spine, aux, cylinderRadius: rIn, waveInside: false, p0, direction, span }));
+    const solid = TT('twisted', () => twisted(rIn == null ? {} : { cylinderRadius: rIn }));
     const cutBand = TT('cut band', () => track(s.cut(along(cylinder(radius + 0.01, span)))));
-    return TT('fuse', () => track(cutBand.fuse(twisted)));
+    return TT('fuse', () => track(cutBand.fuse(solid)));
   });
 }
 
