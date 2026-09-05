@@ -66,7 +66,13 @@ process.on('uncaughtException', (e) => console.error('uncaught exception:', e?.s
 // Load the kernel now rather than on the first geometry request, so /api/health's
 // brepKernel flag means "ready" and the first evaluate does not pay the WASM load.
 initBrep().catch((e) => console.error('B-rep kernel failed to load:', e.message));
-app.use('/api', apiRouter(doc, ROOT, broadcast));
+app.use('/api', apiRouter(doc, ROOT, broadcast, cells));
+// Whatever else goes wrong on the API answers in its own shape, never as HTML.
+app.use('/api', (err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  console.error('API error:', err?.stack || err);
+  res.status(err?.status || 500).json({ error: err?.message || String(err) });
+});
 
 // The v2 cell transcript is its own page rather than a mode inside the node
 // editor — the two documents share a server and nothing else.

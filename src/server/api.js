@@ -23,7 +23,7 @@ const PKG_VERSION = (() => {
   }
 })();
 
-export function apiRouter(doc, rootDir, broadcast = () => {}) {
+export function apiRouter(doc, rootDir, broadcast = () => {}, cellsDoc = null) {
   const r = express.Router();
 
   const fail = (res, err, code = 400) =>
