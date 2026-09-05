@@ -312,3 +312,15 @@ test('a dimension on a circle can be its diameter', () => {
   assert.equal(out.sketch.constraints.at(-1).type, 'diameter');
   assert.equal(out.sketch.constraints.at(-1).value, 12);
 });
+
+test('two-point dimensions take a constraint name, and a point can be pinned', () => {
+  const sk = { plane: 'XY', points: [{ x: 0, y: 0 }, { x: 10, y: 3 }], entities: [{ type: 'line', a: 0, b: 1 }], constraints: [] };
+  const out = dimensionOn(sk, { points: [0, 1], constraint: 'distanceX', value: 12 });
+  assert.equal(out.sketch.constraints.at(-1).type, 'distanceX');
+  assert.throws(() => dimensionOn(sk, { points: [0, 1], constraint: 'sideways', value: 1 }), /'distance', 'distanceX' or 'distanceY'/);
+  const pinned = dimensionOn(sk, { points: [0], constraint: 'fixed' });
+  assert.equal(pinned.sketch.points[0].fixed, true);
+  const onXZ = drawOn({ plane: 'XY', points: [], entities: [], constraints: [] }, { tool: 'rectangle', from: [0, 0], to: [10, 5], plane: 'XZ' });
+  assert.equal(onXZ.sketch.plane, 'XZ');
+  assert.equal(onXZ.sketch.entities.length, 4);
+});

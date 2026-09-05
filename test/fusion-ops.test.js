@@ -350,3 +350,13 @@ test('a union of bodies that do not touch is counted, and the assertion says so'
   api.assert.singleBody(a);
   assert.equal(sink.at(-1).ok, true);
 }));
+
+test('revolve refuses a profile whose plane does not hold the axis; arcs report radii; a drafted wall still faces', () => inScope(() => {
+  const flat = new Sketch(); flat.rectangle(5, 0, 10, 20);
+  assert.throws(() => ops.revolve(flat, [0, 0, 1]), /does not contain the axis/);
+  const rounded = ops.fillet(ops.box(20, 20, 10), q.edges(ops.box(20, 20, 10)).linear().along('z'), 3);
+  const arcs = q.edges(rounded).circular().all();
+  assert.ok(arcs.length >= 8 && arcs.every((e) => Math.abs(e.radius - 3) < 1e-6), 'every fillet arc knows its radius');
+  const drafted = ops.draft(ops.box(20, 20, 10), q.faces(ops.box(20, 20, 10)).planar().facing('-y'), 3);
+  assert.equal(q.faces(drafted).planar().facing('-y').count(), 1, 'a 3° wall is still the -y wall');
+}));

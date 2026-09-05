@@ -55,7 +55,9 @@ export function drawOn(data, op, { params = {}, snap = 0 } = {}) {
   const soft = [];   // constraints this draw guessed at, newest last
   const notes = [];  // what it did, in words, for the canvas to echo back
 
-  const tool = op?.tool;
+  // A drawn sketch starts on XY; a draw may say otherwise, once, up front.
+  if (op?.plane) sk.plane = op.plane;
+  const tool = op?.tool === 'rectangle' ? 'rect' : op?.tool;
   switch (tool) {
     case 'line': {
       const a = resolve(sk, op.from, snap, soft, notes);
@@ -112,7 +114,7 @@ export function drawOn(data, op, { params = {}, snap = 0 } = {}) {
     }
     default:
       throw new GraphError(
-        `Unknown drawing tool '${tool}'. Use line, rect, circle, or arc.`
+        `Unknown drawing tool '${tool}'. Use line {from,to}, rect {from,to}, circle {center,radius}, or arc {center,from,to} (points are [x,y]).`
       );
   }
 
@@ -157,7 +159,8 @@ export function dimensionOn(data, op, { params = {} } = {}) {
   const sk = new Sketch({ ...(data || {}), params });
   const before = solveSketch(sk, { params });
 
-  const value = dimensionValue(op?.value, params);
+  const pinning = op?.constraint === 'fixed' || op?.kind === 'fixed';
+  const value = pinning ? null : dimensionValue(op?.value, params);
   let label;
 
   if (Number.isInteger(op?.constraint)) {
@@ -185,6 +188,11 @@ export function dimensionOn(data, op, { params = {} } = {}) {
       sk.radius(op.entity, value);
       label = 'radius';
     }
+  } else if (Array.isArray(op?.points) && op.points.length === 1 && (op.constraint === 'fixed' || op.kind === 'fixed')) {
+    const [i] = op.points;
+    if (!Number.isInteger(i) || !sk.points[i]) throw new GraphError(`This sketch has no point ${i}`);
+    sk.points[i].fixed = true;
+    label = 'fixed';
   } else if (Array.isArray(op?.points) && op.points.length === 2) {
     const [a, b] = op.points;
     for (const i of [a, b]) {
@@ -193,11 +201,13 @@ export function dimensionOn(data, op, { params = {} } = {}) {
       }
     }
     if (a === b) throw new GraphError('A dimension needs two different points');
-    if (op.axis === 'x') { sk.distanceX(a, b, value); label = 'horizontal gap'; }
-    else if (op.axis === 'y') { sk.distanceY(a, b, value); label = 'vertical gap'; }
-    else { sk.distance(a, b, value); label = 'distance'; }
+    const which = op.constraint ?? op.kind ?? (op.axis === 'x' ? 'distanceX' : op.axis === 'y' ? 'distanceY' : 'distance');
+    if (which === 'distanceX') { sk.distanceX(a, b, value); label = 'horizontal gap'; }
+    else if (which === 'distanceY') { sk.distanceY(a, b, value); label = 'vertical gap'; }
+    else if (which === 'distance') { sk.distance(a, b, value); label = 'distance'; }
+    else throw new GraphError(`A two-point dimension is 'distance', 'distanceX' or 'distanceY', not '${which}'`);
   } else {
-    throw new GraphError('A dimension needs an entity, or two points');
+    throw new GraphError("A dimension needs an entity, two points, or one point with constraint 'fixed'");
   }
 
   const report = solveSketch(sk, { params });

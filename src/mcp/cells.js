@@ -84,7 +84,8 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
 q — q.faces(shape) / q.edges(shape), then chain filters. A revolved line reads as cylindrical/conical and a shelled
   cylinder's inner wall as cylindrical, whatever OCCT calls the surface underneath.
   kinds: planar() cylindrical() conical() spherical() toroidal() | linear() circular() elliptical() | ofKind('PLANE',...)
-  direction: along('z'|'+x'|[0,0,1]) for edges; facing('+z') for faces (sign matters: '+z' is the top, 'z' is both)
+  direction: along('z'|'+x'|[0,0,1]) for edges; facing('+z', toleranceDeg=5) for faces (sign matters: '+z' is the top,
+    'z' is both) — a drafted wall is a few degrees off its axis, so pass a wider tolerance or use .atExtreme()
   measure: ofLength(v,tol) ofArea(v,tol) ofRadius(v,tol) ofDiameter(v,tol) largerThan(v) smallerThan(v)
   place: near([x,y,z], dist) inBox([x,y,z],[x,y,z]) atExtreme('+z')
   combine: either(s => s.linear(), s => s.circular()) exclude(s => s.facing('-z')) where(d => d.area > 10)
@@ -94,7 +95,9 @@ q — q.faces(shape) / q.edges(shape), then chain filters. A revolved line reads
 Always end a query with .expect(n). A query that matches an unexpected number of entities then fails the cell loudly instead of quietly building a different part. A query that matches nothing is always an error.
 
 sk — 2D sketches under constraint, for profiles a primitive cannot express. sk.sketch() starts an empty one;
-  sk.saved() returns the sketch stored on THIS cell — the one the user DRAWS AND DRAGS in the canvas;
+  sk.saved() returns the sketch stored on THIS cell — the one the user DRAWS AND DRAGS in the canvas. Constraints and
+  s.on(plane) the CODE adds to it apply when the cell builds and are NOT written back to the stored sketch (the canvas
+  stays the human's); a drawn sketch is on XY unless the draw or the code says otherwise;
   sk.hasSaved() tests for it. A cell whose code calls sk.saved() gets a drawing canvas in the transcript,
   whether or not a sketch is stored yet, and the user draws lines, rectangles, circles and arcs into it there.
   So when the profile is a shape someone should draw rather than describe — an outline, a bracket, a cam —
@@ -117,7 +120,10 @@ sk — 2D sketches under constraint, for profiles a primitive cannot express. sk
     That is the whole point of a sketch over a point list — write the intent, not the coordinates.
   solve({params}) returns {converged, dof, redundant, iterations}; brep.extrude/revolve solve it for you if you did not.
     Starting coordinates only need to be roughly right — the solver pulls them onto the dimensions, and a rough
-    pose is what picks between the two answers a tangency or a mirror has.
+    pose is what picks between the two answers a tangency or a mirror has. So for TANGENT ARCS start close: put the
+    arc's centre and ends near where they belong, or the solver keeps a wrong branch (a huge arc, a crossed loop).
+    Solved positions are persisted, so a parameter round-trip can settle on a different valid branch; write queries
+    that survive that (.atExtreme, .near, .largerThan) rather than exact lengths.
   Sketch geometry must form CLOSED loops. Nesting is read from containment: a loop inside the boundary is a hole,
     a loop inside a hole is an island, and so on.
   dof > 0 means the sketch is under-constrained: it still built, but a later parameter change may move it

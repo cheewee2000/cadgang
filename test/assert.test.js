@@ -335,3 +335,13 @@ test('a check written below the last modelling cell still runs', () => {
     assert.ok(run.value, 'and the geometry is still the body');
   });
 });
+
+test('an assertion cell that cannot run its claim does not count as passing', () => {
+  const doc = new CellDocument();
+  doc.addCell({ id: 'box', code: 'export default ({ brep }) => brep.box(10, 10, 10);' });
+  doc.addCell({ id: 'claim', kind: 'assert', code: 'export default ({ assert, inputs }) => assert.minWall(inputs.nothing, 1);' });
+  const run = inScope(() => evaluateCells(doc, doc.terminal, { stopOnError: false }));
+  const claim = run.report.find((e) => e.id === 'claim');
+  assert.equal(claim.status, 'failed');
+  assert.equal(run.assertionsPass, false);
+});

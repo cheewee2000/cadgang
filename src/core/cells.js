@@ -713,7 +713,8 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
     assertions,
     // The one flag exports look at. A document with a failed assertion still
     // renders; it just does not ship.
-    assertionsPass: assertions.every((c) => c.ok),
+    // An assertion cell that could not even run its claim has not passed it.
+    assertionsPass: assertions.every((c) => c.ok) && !report.some((e) => e.status === 'failed'),
     target: targetId,
     // The deepest cell that actually produced a shape. When the newest cell is
     // broken — the normal state mid-edit — this is what the viewport should

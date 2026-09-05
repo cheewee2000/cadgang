@@ -32,7 +32,7 @@ const AXIS = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
 // filleted or booleaned face carry accumulated error; measures are relative
 // because a 0.01mm slop means something different on a 2mm hole and a 200mm
 // plate.
-const ANGLE_TOL_DEG = 1;
+const ANGLE_TOL_DEG = 5; // a drafted wall is a few degrees off its axis and is still that wall
 const MEASURE_REL_TOL = 1e-3;
 const POSITION_TOL = 1e-6;
 
@@ -133,7 +133,7 @@ export function describeEdge(edge, i) {
   const direction = kind === 'LINE' ? unit(readVector(edge.tangentAt(0))) : null;
   // Full circles are the overwhelmingly common curved edge (holes, fillet
   // seams) and their radius is the thing anyone wants to filter on.
-  const radius = kind === 'CIRCLE' && closed ? length / (2 * Math.PI) : null;
+  const radius = kind === 'CIRCLE' ? circleRadius(edge, closed, length) : null;
 
   return {
     i,
@@ -149,6 +149,19 @@ export function describeEdge(edge, i) {
     bbox: { min: r4v(bbox.min), max: r4v(bbox.max) },
     anchor: anchorOf(kind, length, bbox.center, direction),
   };
+}
+
+/** An arc's radius from the curve itself; a full circle's from its length when the adaptor is not bound. */
+function circleRadius(edge, closed, length) {
+  try {
+    const adaptor = edge._geomAdaptor();
+    const circ = adaptor.Circle();
+    const r = circ.Radius();
+    circ.delete?.(); adaptor.delete?.();
+    return r;
+  } catch {
+    return closed ? length / (2 * Math.PI) : null;
+  }
 }
 
 /** Every sample of the curve lies on the chord between its ends, to a millionth of its length. */

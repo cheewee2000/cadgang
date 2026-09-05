@@ -629,7 +629,18 @@ export function extrude(sketch, distance, { symmetric = false, offset = 0, twist
 }
 
 /** Revolve a solved sketch about `axis` through `origin`, by `angle` degrees. */
+const PLANE_NORMALS = { XY: [0, 0, 1], YX: [0, 0, -1], XZ: [0, -1, 0], ZX: [0, 1, 0], YZ: [1, 0, 0], ZY: [-1, 0, 0] };
+
 export function revolve(sketch, axis = [0, 0, 1], { offset = 0, origin = [0, 0, 0], angle = 360 } = {}) {
+  // A profile revolved about an axis that is not in its plane sweeps a flat
+  // disc of no volume — a wrong part that reads as a built one.
+  const normal = typeof sketch?.plane === 'string' ? PLANE_NORMALS[sketch.plane] : sketch?.plane?.normal;
+  if (normal && Math.abs(vdot(vnorm(normal), vnorm(axis))) > 1e-6) {
+    throw new GraphError(
+      `revolve: the sketch plane ${typeof sketch.plane === 'string' ? `'${sketch.plane}'` : ''} does not contain the axis [${axis}] — ` +
+      'a profile revolved about z belongs on XZ or YZ (s.on(\'XZ\')), not XY'
+    );
+  }
   return brepRevolve(placedProfile(sketch, 'revolve', offset), axis, { origin, angle });
 }
 

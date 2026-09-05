@@ -1,6 +1,6 @@
 {
   "name": "cadgang",
-  "version": "0.7.0-alpha.21",
+  "version": "0.7.0-alpha.22",
   "description": "cadgang — a web-based CAD tool with two lineages in one node graph: exact B-rep (STEP) and implicit fields (STL), driven by an MCP server",
   "type": "module",
   "private": true,

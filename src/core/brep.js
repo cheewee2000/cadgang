@@ -181,7 +181,7 @@ function occtMessage(thrown) {
  * cause, and the kernel's phrase after it for the record.
  */
 const OCCT_MEANINGS = [
-  [/StartSol echec|PerformSurf Not Implemented|BRepFilletAPI|ChFi3d/i,
+  [/StartSol echec|PerformSurf|Failed processing|BRepFilletAPI|ChFi3d/i,
     'the radius or distance is too large for the neighbouring faces — reduce it, or fillet/chamfer fewer edges at once'],
   [/hasn't gp_Pnt|TopoDS_Vertex/i,
     'the two bodies meet on coincident geometry too closely — move them apart by more than 0.01 mm, or overlap them'],
