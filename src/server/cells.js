@@ -62,10 +62,14 @@ export function cellsRouter(doc, rootDir) {
     await initBrep();
     const scope = beginBrepScope();
     try {
-      const run = evaluateCells(doc, target, { stopOnError: !partial });
+      // Walk the whole chain: a broken cell above the target only matters if the
+      // target needed what it made. A box built from scratch under a half-drawn
+      // sketch still has a topology to report.
+      const run = evaluateCells(doc, target, { stopOnError: false });
       const shown = run.value ? target : partial ? run.lastGood : null;
       if (!shown) {
-        const failed = run.report.find((c) => c.status !== 'ok');
+        const mine = run.report.find((c) => c.id === target && c.status !== 'ok');
+        const failed = mine || run.report.find((c) => c.status !== 'ok');
         throw new GraphError(failed?.error || `Cell '${target}' produced no geometry`);
       }
       // A failed assertion stops an EXPORT and nothing else. The model still
@@ -75,10 +79,12 @@ export function cellsRouter(doc, rootDir) {
       // explicit: delete the assertion cell, which is an edit the document
       // records, rather than a flag on a URL that it does not.
       if (requireAssertions && !run.assertionsPass) {
-        const failed = run.assertions.filter((c) => !c.ok);
+        const failed = run.assertions.filter((c) => !c.ok)
+          .map((c) => `${c.cell}: ${c.label} ${c.value}${c.unit ? ' ' + c.unit : ''} vs ${c.limit}`);
+        // An assertion cell that could not run its claim is a claim unmet.
+        for (const e of run.report) if (e.status === 'failed' && !run.assertions.some((c) => c.cell === e.id && !c.ok)) failed.push(`${e.id}: ${e.error}`);
         throw new GraphError(
-          `Refusing to export: ${failed.length} assertion${failed.length === 1 ? '' : 's'} failing — ` +
-          failed.map((c) => `${c.cell}: ${c.label} ${c.value}${c.unit ? ' ' + c.unit : ''} vs ${c.limit}`).join('; ')
+          `Refusing to export: ${failed.length} assertion${failed.length === 1 ? '' : 's'} failing — ${failed.join('; ')}`
         );
       }
       return await body({
@@ -582,5 +588,9 @@ function pickSource(doc, id) {
 /** Cheap facts about a result that a text-only client can act on. */
 function measuresOf(shape) {
   const { min, max, size } = ops.bbox(shape);
-  return { volume: ops.volume(shape), area: ops.area(shape), bbox: { min, max, size }, bodies: ops.bodies(shape) };
+  const r4 = (v) => Math.round(v * 1e4) / 1e4;
+  return {
+    volume: r4(ops.volume(shape)), area: r4(ops.area(shape)),
+    bbox: { min: min.map(r4), max: max.map(r4), size: size.map(r4) }, bodies: ops.bodies(shape),
+  };
 }

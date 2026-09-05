@@ -23,9 +23,10 @@ Hoist every number a human might want to turn into 'params'. Changing a param re
 
 ARGUMENTS
   p        the current parameter values (numbers, strings, booleans only)
-  input    the previous cell's solid — the running "that" ("subtract that from the body"). It is ALWAYS the cell just
-           above, so a side branch (a spring built beside the part) becomes the next cell's input unless that cell
-           declares refs — name what you mean whenever the stack forks.
+  input    the previous cell's solid — the running "that" ("subtract that from the body"). It is the cell just
+           above whenever the program mentions input, so a side branch (a spring built beside the part) becomes the
+           next cell's input unless that cell declares refs — name what you mean whenever the stack forks. A broken
+           cell above only breaks the cells that read what it made: a program that never touches input still builds.
   inputs   results keyed by cell id, when the cell declares explicit refs
   sel      the user's picks, as ready-made queries — sel.lip goes straight into brep.chamfer(input, sel.lip, 2).
            Declare what you need with selections: {"lip": "edge"} and the cell parks until someone clicks
@@ -126,8 +127,9 @@ sk — 2D sketches under constraint, for profiles a primitive cannot express. sk
     that survive that (.atExtreme, .near, .largerThan) rather than exact lengths.
   Sketch geometry must form CLOSED loops. Nesting is read from containment: a loop inside the boundary is a hole,
     a loop inside a hole is an island, and so on.
-  dof > 0 means the sketch is under-constrained: it still built, but a later parameter change may move it
-  somewhere you did not intend. Aim for dof 0. 'redundant' means you said something twice; harmless but noise.
+  dof > 0 means the sketch is under-constrained: it built, but the solver chose the free part of the shape for you —
+  possibly on the FIRST solve, not only after a parameter change — so an under-constrained hook can come out a wedge
+  that satisfies every constraint you wrote. Aim for dof 0, and look at the preview whenever dof is not. 'redundant' means you said something twice; harmless but noise.
 
 assert — machine-checkable intent. Each one MEASURES, records the number in the transcript, and throws if it misses.
   ok(cond, msg); volumeUnder(shape, mm³); volumeOver(shape, mm³); fitsIn(shape, [x,y,z])

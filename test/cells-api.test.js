@@ -565,3 +565,18 @@ test('a failing assertion refuses the export but not the viewport', async () => 
   const ok = await api('/export/step');
   assert.equal(ok.status, 200, 'removing the assertion is the explicit escape hatch');
 });
+
+test('a cell that never reads input stands alone, and an errored assertion is named at export', async () => {
+  await api('/document/clear', { method: 'POST' });
+  await api('/', { method: 'POST', body: { id: 'broken', code: 'export default ({ brep, sk }) => brep.extrude(sk.saved(), 5);' } });
+  await api('/', { method: 'POST', body: { id: 'fresh', code: 'export default ({ brep }) => brep.box(10, 10, 10);' } });
+  const topo = await api('/topology?cell=fresh');
+  assert.equal(topo.status, 200, 'a broken cell above does not block a cell that starts from scratch');
+  assert.equal(topo.data.counts.faces, 6);
+
+  await api('/', { method: 'POST', body: { id: 'claim', kind: 'assert', code: 'export default ({ assert, inputs }) => assert.minWall(inputs.nothing, 1);' } });
+  const step = await api('/export/step?cell=fresh');
+  assert.equal(step.status, 400);
+  assert.match(step.data.error, /1 assertion failing — claim:/);
+  await api('/document/clear', { method: 'POST' });
+});
