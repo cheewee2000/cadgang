@@ -40,11 +40,11 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
   sketch → solid: extrude(sketch, distance, {symmetric, offset, twist:deg, endScale}) — endScale 0.5 tapers to half size;
     revolve(sketch, axis=[0,0,1], {offset, origin, angle:360}); loft([sketchA, sketchB, ...], {ruled}) — put each
     section on its own plane/offset with s.on('XY', 30); sweep(sketch, path, {frenet, xDir, guide, transition}) — the
-    profile is placed at the path's start, normal along the path, its own plane ignored; `guide` is a second path
+    profile is placed at the path's start, normal along the path, its own plane ignored; \`guide\` is a second path
     the profile keeps touching as it goes (a rail), so it tilts and slides to follow it; pipe(path, r, {wall});
     emboss(shape, sketch, depth, {cut}) — raise or sink a profile from its plane into the body;
     rib(shape, [[x,y,z],...]|path, thickness, height, {direction=[0,0,1]}) — a thin wall fused on: the path is the wall's
-    FOOT line (put its points on the body), `direction` is the axis the wall stands up along, and the wall is a plain
+    FOOT line (put its points on the body), \`direction\` is the axis the wall stands up along, and the wall is a plain
     height×thickness rectangle swept along the path, not clipped to the body — size it to end inside the body
   paths (for sweep/pipe/pathPattern): polyline([[x,y,z],...]); spline([[x,y,z],...]) smooth through the points;
     helix(r, pitch, height, {center, axis, lefthand})
@@ -52,7 +52,7 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     countersink:{diameter, angle:90}}) — Fusion's Hole: drill from a point on a face
   thread(shape, cylindricalFaceQuery, pitch, {depth, lefthand, length}) — a modelled thread (rounded profile, ISO depth) over
     the face's length; boss or hole is read from the face, and a hollow boss keeps its bore. Fast on solid geometry
-    (~0.1 s); on a SHELLED part every boolean is slow (5–15 s) — thread solids, and shell last or use `length`.
+    (~0.1 s); on a SHELLED part every boolean is slow (5–15 s) — thread solids, and shell last or use \`length\`.
   modifiers: fillet(shape, edgeQuery, radius|fn(edge)); chamfer(shape, edgeQuery, distance | {distances:[a,b], face:faceQuery}
     | {distance, angle, face}); shell(shape, faceQuery|null, thickness) — POSITIVE hollows INWARD, negative grows outward,
     null query seals a void; lofts and other cornered curved bodies shell by whole-body offset, which can only OPEN planar faces; offset(shape, distance) grows every face (negative shrinks);
@@ -97,7 +97,8 @@ sk — 2D sketches under constraint, for profiles a primitive cannot express. sk
   so declare the params you want them to drive (\`export const params = { width: 40 }\`) even when the program
   never reads them itself. A dimension typed as 'width' binds the drawn geometry to that slider forever after.
   geometry: point(x,y,{fixed}) -> index; anchor(x,y) a pinned point (every sketch wants at least one);
-    line(a,b) / circle(centrePoint, r) / arc(centre, a, b) counter-clockwise from a to b — each returns an entity index;
+    line(a,b) / circle(c, r) / arc(c, a, b) counter-clockwise from a to b — a, b, c are POINT INDICES from point()/anchor(),
+    never coordinates; each returns an entity index;
     rectangle(x1,y1,x2,y2) -> four already-squared lines; polygon(cx,cy,sides,r) -> lines, equal-sided;
     slot(x1,y1,x2,y2,r) -> [line, arc, line, arc], tangent and parallel; on(plane, offset=0) sets the plane — a name
     ('XY'|'XZ'|'YZ'|'YX'|'ZX'|'ZY') or a brep.planeOf(...) object — and slides it along the normal
@@ -118,7 +119,8 @@ assert — machine-checkable intent. Each one MEASURES, records the number in th
   ok(cond, msg); volumeUnder(shape, mm³); volumeOver(shape, mm³); fitsIn(shape, [x,y,z])
   minWall(shape, mm) — thinnest wall anywhere, by casting rays into the solid from all over its surface. SAMPLED:
     biased low by tessellation (safe direction), and a thin spot smaller than the sample spacing can hide.
-  clearance(shape, queryA, queryB, mm) — exact closest approach between two sets of faces or edges.
+  clearance(shape, queryA, queryB, mm) — exact closest approach between two sets of faces or edges; both queries are
+    resolved on \`shape\`, so union the parts first and write queries that pick each part's faces on the combined body.
   watertight(shape) — the mesh that would be exported is closed. Judged on the tessellation, which is what ships.
 
 ASSERTION CELLS — add a cell with kind: 'assert' and its program states claims instead of building geometry.
@@ -131,7 +133,7 @@ ASSERTION CELLS — add a cell with kind: 'assert' and its program states claims
   Write assertions for the things the prompt implied but the code cannot show: a wall that must survive a
   parameter change, a clearance a part is built to, a volume budget. That is the loop closing.
 
-The program runs in an isolated realm: no filesystem, network, timers, or process, and a wall-clock budget. Standard JS (Math, Array, loops, functions) is available, so arrays of holes, patterns and derived dimensions are ordinary code. console.log(...) works: each line lands in the cell's `logs` in cadgang_cells_evaluate — the way to inspect a plane object, a bbox, or a count while authoring.
+The program runs in an isolated realm: no filesystem, network, timers, or process, and a wall-clock budget. Standard JS (Math, Array, loops, functions) is available, so arrays of holes, patterns and derived dimensions are ordinary code. console.log(...) works: each line lands in the cell's \`logs\` in cadgang_cells_evaluate — the way to inspect a plane object, a bbox, or a count while authoring.
 
 THE AUTHORING LOOP — you cannot see the model, so introspection replaces looking:
   1. cadgang_cells_add with the prompt and a first draft of the code
