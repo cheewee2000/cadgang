@@ -109,7 +109,7 @@ export function apiRouter(doc, rootDir, broadcast = () => {}) {
   });
 
   r.get('/health', (req, res) => res.json({
-    ok: true, revision: doc.revision, version: PKG_VERSION,
+    ok: true, revision: doc.revision, cellsRevision: cellsDoc?.revision ?? null, version: PKG_VERSION,
     brepKernel: brepReady(), brep: brepStats(),
   }));
 

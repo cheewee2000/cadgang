@@ -23,7 +23,9 @@ Hoist every number a human might want to turn into 'params'. Changing a param re
 
 ARGUMENTS
   p        the current parameter values (numbers, strings, booleans only)
-  input    the previous cell's solid — the running "that" ("subtract that from the body")
+  input    the previous cell's solid — the running "that" ("subtract that from the body"). It is ALWAYS the cell just
+           above, so a side branch (a spring built beside the part) becomes the next cell's input unless that cell
+           declares refs — name what you mean whenever the stack forks.
   inputs   results keyed by cell id, when the cell declares explicit refs
   sel      the user's picks, as ready-made queries — sel.lip goes straight into brep.chamfer(input, sel.lip, 2).
            Declare what you need with selections: {"lip": "edge"} and the cell parks until someone clicks
@@ -39,7 +41,8 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
   booleans: union/subtract/intersect(base, ...tools); interference(a, b) -> shared volume (0 = no clash)
   sketch → solid: extrude(sketch, distance, {symmetric, offset, twist:deg, endScale}) — endScale 0.5 tapers to half size;
     revolve(sketch, axis=[0,0,1], {offset, origin, angle:360}); loft([sketchA, sketchB, ...], {ruled}) — put each
-    section on its own plane/offset with s.on('XY', 30); sweep(sketch, path, {frenet, xDir, guide, transition}) — the
+    section on its own plane/offset with s.on('XY', 30); a loft's side edges are splines even when straight, so query
+    its corners with .ofLength(v, tol) or .near(...) rather than .linear(); sweep(sketch, path, {frenet, xDir, guide, transition}) — the
     profile is placed at the path's start, normal along the path, its own plane ignored; \`guide\` is a second path
     the profile keeps touching as it goes (a rail), so it tilts and slides to follow it; pipe(path, r, {wall});
     emboss(shape, sketch, depth, {cut}) — raise or sink a profile from its plane into the body;
@@ -50,9 +53,11 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     helix(r, pitch, height, {center, axis, lefthand})
   hole(shape, [x,y,z], diameter, {depth (omit = through all), direction=[0,0,-1], counterbore:{diameter,depth},
     countersink:{diameter, angle:90}}) — Fusion's Hole: drill from a point on a face
-  thread(shape, cylindricalFaceQuery, pitch, {depth, lefthand, length}) — a modelled thread (rounded profile, ISO depth) over
-    the face's length; boss or hole is read from the face, and a hollow boss keeps its bore. Fast on solid geometry
-    (~0.1 s); on a SHELLED part every boolean is slow (5–15 s) — thread solids, and shell last or use \`length\`.
+  thread(shape, cylindricalFaceQuery, pitch, {length: AXIAL extent (default: the face's), depth: RADIAL groove depth
+    (default ISO for the pitch — rarely set), lefthand}) — a modelled thread with a rounded profile; boss or hole is read
+    from the face, and a hollow boss keeps its bore. Fast on solid geometry (~0.1 s); on a SHELLED part every boolean
+    is slow (5–15 s), and any boolean AFTER the thread that touches it is slow too — so thread LAST, after patterns and
+    decorations, and shell before threading or use length to keep the thread clear of curved inner surfaces.
   modifiers: fillet(shape, edgeQuery, radius|fn(edge)); chamfer(shape, edgeQuery, distance | {distances:[a,b], face:faceQuery}
     | {distance, angle, face}); shell(shape, faceQuery|null, thickness) — POSITIVE hollows INWARD, negative grows outward,
     null query seals a void; lofts and other cornered curved bodies shell by whole-body offset, which can only OPEN planar faces; offset(shape, distance) grows every face (negative shrinks);

@@ -119,8 +119,11 @@ function anchorOf(kind, measure, center, extra) {
 /** Describe one edge. `i` is the enumeration index — valid only for this
  *  resolution pass and never persisted. */
 export function describeEdge(edge, i) {
-  const kind = edge.geomType;
+  let kind = edge.geomType;
   const length = edge.length;
+  // A loft's side edges are splines even when dead straight; a query for the
+  // "vertical corners" should still find them.
+  if ((kind === 'BSPLINE_CURVE' || kind === 'BEZIER_CURVE') && length > 0 && isStraight(edge, length)) kind = 'LINE';
   const bbox = readBBox(edge);
   const start = readVector(edge.startPoint);
   const end = readVector(edge.endPoint);
@@ -146,6 +149,24 @@ export function describeEdge(edge, i) {
     bbox: { min: r4v(bbox.min), max: r4v(bbox.max) },
     anchor: anchorOf(kind, length, bbox.center, direction),
   };
+}
+
+/** Every sample of the curve lies on the chord between its ends, to a millionth of its length. */
+function isStraight(edge, length) {
+  try {
+    const a = readVector(edge.startPoint); const b = readVector(edge.endPoint);
+    const chord = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const cl = Math.hypot(...chord);
+    if (cl < 1e-9) return false;
+    for (const t of [0.2, 0.4, 0.6, 0.8]) {
+      const p = readVector(edge.pointAt(t));
+      const d = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
+      const s = (d[0] * chord[0] + d[1] * chord[1] + d[2] * chord[2]) / cl;
+      const off = Math.hypot(d[0] - (s * chord[0]) / cl, d[1] - (s * chord[1]) / cl, d[2] - (s * chord[2]) / cl);
+      if (off > 1e-6 * length) return false;
+    }
+    return true;
+  } catch { return false; }
 }
 
 /** Describe one face. */

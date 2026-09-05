@@ -133,8 +133,8 @@ export function torus(major, minor) {
 
 /** Cone (or frustum) sitting on z = 0: radius `r1` at the base, `r2` at height `h`. */
 export function cone(r1, r2, h, { center = '' } = {}) {
-  if (!(h > 0) || r1 < 0 || r2 < 0 || (r1 === 0 && r2 === 0)) {
-    throw new GraphError('cone needs h > 0 and at least one non-zero radius');
+  if (!(h > 0) || !(r1 >= 0) || !(r2 >= 0) || (r1 === 0 && r2 === 0)) {
+    throw new GraphError(`cone needs h > 0 and radii ≥ 0 with at least one non-zero, got r1=${r1}, r2=${r2}, h=${h}`);
   }
   return attempt('cone', () => {
     const rc = kernelOf();
@@ -548,7 +548,8 @@ function overlapsSpan(bbox, origin, direction, lo, hi) {
 
 /** A spring: a round (or 'square' / 'triangle') section of radius `sectionR` wound on a helix. */
 export function coil(radius, pitch, height, sectionR, { section = 'circle', lefthand = false } = {}) {
-  if (!(sectionR > 0 && sectionR < radius)) throw new GraphError('coil sectionR must be > 0 and smaller than the coil radius');
+  positive('coil', { radius, pitch, height, sectionR });
+  if (!(sectionR < radius)) throw new GraphError('coil sectionR must be smaller than the coil radius');
   return attempt('coil', () => {
     const rc = kernelOf();
     const drawing = section === 'square' ? rc.drawRectangle(2 * sectionR, 2 * sectionR)
@@ -658,7 +659,7 @@ export function pipe(path, radius, { wall = 0 } = {}) {
 
 export const polyline = (points) => brepPolyline(points);
 export const spline = (points) => brepSpline(points);
-export const helix = (radius, pitch, height, options) => brepHelix(radius, pitch, height, options);
+export const helix = (radius, pitch, height, options) => { positive('helix', { radius, pitch, height }); return brepHelix(radius, pitch, height, options); };
 
 // ------------------------------------------------------------------- planes
 

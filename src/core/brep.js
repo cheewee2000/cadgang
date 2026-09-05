@@ -174,9 +174,27 @@ function occtMessage(thrown) {
 }
 
 /** Wrap any kernel failure as a GraphError naming the operation that failed. */
+/**
+ * What the kernel's own words mean to a modeller. OCCT reports a fillet that
+ * cannot fit as "StartSol echec" and two bodies meeting on the same surface as
+ * a vertex without a point; the person who asked for the fillet needs the
+ * cause, and the kernel's phrase after it for the record.
+ */
+const OCCT_MEANINGS = [
+  [/StartSol echec|PerformSurf Not Implemented|BRepFilletAPI|ChFi3d/i,
+    'the radius or distance is too large for the neighbouring faces — reduce it, or fillet/chamfer fewer edges at once'],
+  [/hasn't gp_Pnt|TopoDS_Vertex/i,
+    'the two bodies meet on coincident geometry too closely — move them apart by more than 0.01 mm, or overlap them'],
+  [/self-?intersect/i, 'the result would intersect itself'],
+  [/BRep_API: command not done/i, 'the kernel could not build this — the inputs are probably degenerate (zero size, a profile crossing itself, or faces that cannot be offset)'],
+  [/out of memory|IncAllocator/i, 'the kernel ran out of memory on this shape — simplify it, or split the operation into cells'],
+];
+
 function toGraphError(op, thrown) {
   if (thrown instanceof GraphError) return thrown;
-  return new GraphError(`${op} failed: ${occtMessage(thrown)}`);
+  const raw = occtMessage(thrown);
+  const meaning = OCCT_MEANINGS.find(([re]) => re.test(raw))?.[1];
+  return new GraphError(meaning ? `${op} failed: ${meaning} (kernel: ${raw})` : `${op} failed: ${raw}`);
 }
 
 /** Run an OCCT call, translating its failure mode into a GraphError. */
@@ -1231,6 +1249,19 @@ export function brepBBox(shape) {
  * bounds the surfaces themselves.
  */
 export function tightBounds(shape) {
+  // Offset and spline surfaces still come back a few tenths too big from the
+  // analytic box; their triangulation is the honest extent, to its deflection.
+  const faces = Array.isArray(shape.faces) ? shape.faces : [];
+  const curvedFree = faces.every((f) => ['PLANE', 'CYLINDRE', 'CONE', 'SPHERE', 'TORUS'].includes(f.geomType));
+  if (faces.length && !curvedFree) {
+    const tol = 0.01;
+    const { positions } = tessellate(shape, { tolerance: tol });
+    const min = [Infinity, Infinity, Infinity]; const max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < positions.length; i += 3) {
+      for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], positions[i + k]); max[k] = Math.max(max[k], positions[i + k]); }
+    }
+    return { min: min.map((v) => v - tol), max: max.map((v) => v + tol) };
+  }
   const box = new OC.Bnd_Box_1();
   OC.BRepBndLib.AddOptimal(shape.wrapped, box, true, false);
   const lo = box.CornerMin();

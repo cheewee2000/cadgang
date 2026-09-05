@@ -25,6 +25,16 @@ import { compileCell, normalizeParams } from './sandbox.js';
 import { cellApi, checkCellResult } from './cellapi.js';
 
 const CELL_ID = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+const PROMPT_LIMIT = 20000;
+
+/** A prompt is a paragraph, not a payload. */
+function promptText(prompt) {
+  const text = String(prompt ?? '');
+  if (text.length > PROMPT_LIMIT) {
+    throw new GraphError(`A prompt is at most ${PROMPT_LIMIT} characters; this one is ${text.length}`);
+  }
+  return text;
+}
 const UNDO_LIMIT = 100;
 const UNDO_COALESCE_MS = 800;
 const SELECTION_TYPES = new Set(['face', 'edge']);
@@ -67,6 +77,9 @@ function validateKind(kind) {
 function validateId(id) {
   if (!CELL_ID.test(String(id ?? ''))) {
     throw new GraphError(`Cell id '${id}' must match ${CELL_ID} — it is used as a reference name`);
+  }
+  if (id.length > 64) {
+    throw new GraphError(`Cell id '${id.slice(0, 20)}…' is ${id.length} characters; keep ids under 64`);
   }
   return String(id);
 }
@@ -272,7 +285,7 @@ export class CellDocument {
     const cell = {
       id: cellId,
       kind: validateKind(kind),
-      prompt: String(prompt ?? ''),
+      prompt: promptText(prompt),
       refs: cleanRefs,
       selections: cleanSelections,
       sketch,
@@ -326,8 +339,8 @@ export class CellDocument {
     if (cleanParams) cell.params = { ...cell.params, ...cleanParams };
 
     let base = cell.status === CELL_STATUS.awaitingPick ? CELL_STATUS.ok : cell.status;
-    if (prompt !== undefined && String(prompt) !== cell.prompt) {
-      cell.prompt = String(prompt);
+    if (prompt !== undefined && promptText(prompt) !== cell.prompt) {
+      cell.prompt = promptText(prompt);
       if (cell.code != null) base = CELL_STATUS.stale;
     }
     if (code !== undefined && code !== cell.code) {
@@ -679,7 +692,8 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
       if (asserting) {
         results.set(cell.id, input);
       } else if (stopOnError) {
-        throw err instanceof GraphError ? err : new GraphError(err.message);
+        const msg = String(err.message || err);
+        throw new GraphError(msg.includes(`'${cell.id}'`) ? msg : `Cell '${cell.id}': ${msg}`);
       }
     } finally {
       entry.ms = Date.now() - started;

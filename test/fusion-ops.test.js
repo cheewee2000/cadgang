@@ -325,3 +325,14 @@ test('primitives refuse non-positive sizes', () => inScope(() => {
   assert.throws(() => ops.cylinder(5, 0), /cylinder: height must be a positive number/);
   assert.throws(() => ops.sphere('big'), /sphere: radius must be a positive number/);
 }));
+
+test('a loft reports its straight side edges as lines, and its shelled bbox stays put', () => inScope(() => {
+  const a = new Sketch(); a.rectangle(-40, -30, 40, 30);
+  const b = new Sketch().on('XY', 60); b.rectangle(-25, -20, 25, 20);
+  const body = ops.loft([a, b]);
+  assert.equal(q.edges(body).linear().count(), 12, 'four corners plus two rectangles');
+  const hollow = ops.shell(body, q.faces(body).planar().facing('-z'), 2);
+  const before = ops.bbox(body); const after = ops.bbox(hollow);
+  for (const k of [0, 1, 2]) { near(after.min[k], before.min[k], 0.001); near(after.max[k], before.max[k], 0.001); }
+  assert.ok(Math.abs(after.max[0] - 40) < 0.02, `outer wall still at 40: ${after.max[0]}`);
+}));

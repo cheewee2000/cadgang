@@ -49,6 +49,15 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use('/api/cells', cellsRouter(cells, ROOT));
+// A body that is not JSON (a literal NaN, a stray comma) is a client error in
+// the API's own shape, not Express's HTML page with a stack trace on it.
+app.use('/api', (err, req, res, next) => {
+  if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+    return res.status(400).json({ error: `Request body is not valid JSON: ${err.message}` });
+  }
+  if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Request body is too large' });
+  return next(err);
+});
 // A stray rejection or exception anywhere must not take every open document
 // down with it: log it and keep serving. The supervisor restarts a real crash.
 process.on('unhandledRejection', (e) => console.error('unhandled rejection:', e?.stack || e));

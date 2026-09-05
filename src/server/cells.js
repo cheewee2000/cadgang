@@ -26,7 +26,7 @@ import { drawOn, eraseEntity, eraseConstraint, dimensionOn } from '../core/sketc
 import * as ops from '../core/ops.js';
 import { meshingBounds } from '../core/sdf.js';
 import { meshStats } from '../core/mesher.js';
-import { renderPreview } from '../core/render.js';
+import { renderMesh } from '../core/render.js';
 import {
   initBrep, beginBrepScope, tessellate, tessellateEdges, exportStep, tightBounds,
   brepDistance, brepBBox,
@@ -518,15 +518,12 @@ export function cellsRouter(doc, rootDir) {
     } catch (e) { fail(res, e); }
   });
 
-  /**
-   * Raymarched PNG preview. The raymarcher wants a distance field, which the
-   * one-way bridge derives from the exact solid — the same path a B-rep block
-   * takes in v1, so cells get previews for free.
-   */
+  /** PNG preview: the exact solid's tessellation, rasterised with its edges drawn over. */
   r.get('/preview.png', async (req, res) => {
     try {
       await withShape(req, ({ shape }) => {
-        const png = renderPreview(brepDistance(shape, { tolerance: tolerance(req, shape) }), meshingBounds(brepBBox(shape)), {
+        const tol = tolerance(req, shape);
+        const png = renderMesh(tessellate(shape, { tolerance: tol }), tessellateEdges(shape, { tolerance: tol }), brepBBox(shape), {
           width: parseInt(req.query.width || '640', 10),
           height: parseInt(req.query.height || '480', 10),
           yaw: parseFloat(req.query.yaw ?? '-35'),
