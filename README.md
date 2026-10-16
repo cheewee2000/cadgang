@@ -41,20 +41,20 @@ Open http://localhost:4477 — the viewport live-updates (WebSocket) whenever th
 `/view` opens any STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, GLB, FBX or **DXF** file: drop it on the page, press ⌘O, or on a Mac double-click it in Finder. `mac/build.sh` builds `dist/cadgang.app`, a WKWebView shell around the same server (it adopts a dev server already on :4477); its **Default** button makes cadgang the Finder's app for every type above.
 
 - **Bodies** panel: one row per STEP body (or DXF layer); tick to hide, click a name to solo, shift-click for all. **Explode** slides bodies apart.
-- **Section**: Off/X/Y/Z, drag the cut face or the slider, **Flip** the kept side. Cuts are capped, so hollow walls read as rings.
-- **Measure** (two clicks), **markup** (pen, arrow, note, erase; anchored on the model and visible to Claude through `cadgang_screen`), looks (shaded, metal, plastic, glass, x-ray, normals), ortho, edges, wire, grid, dark theme.
+- **Section**: Off/X/Y/Z, drag the cut face or the slider, **Invert** the kept side. Cuts are capped, so hollow walls read as rings.
+- **Measure** (two clicks), **markup** (pen, arrow, note, erase; anchored on the model and visible to Claude through `cadgang_screen`), looks (shaded, metal, plastic, glass, x-ray, normals), ortho, edges, wire, grid, **Color** (a hue per body or layer), dark theme.
 - **Undo/redo** (⌘Z / ⇧⌘Z) covers every view change and every stroke. **Right-click** opens the command menu; every button shows its hotkey on hover.
 - Rotation has no limits. Scroll rotates, shift-scroll pans, pinch zooms, double-click re-centres.
-- **DXF** drawings are paper: drag and scroll pan, two-finger spin turns in 90° steps (`[` `]` on a keyboard), **Other side** (B) flips the sheet. Lines, polylines with bulges, circles, arcs, ellipses, splines and block inserts are drawn; text, dimensions and hatches are skipped and counted.
-- Look, edges, wire, grid and ortho persist across sessions.
+- **DXF** drawings are paper: drag and scroll pan, two-finger spin turns in 90° steps (`[` `]` on a keyboard), **Flip** (B) turns the sheet over. Lines, polylines with bulges, circles, arcs, ellipses, splines and block inserts are drawn; text, dimensions and hatches are skipped and counted.
+- Look, edges, wire, grid, color and ortho persist across sessions.
 
 | Key | Action | Key | Action |
 |---|---|---|---|
 | F | Fit | X Y Z | Section axis (again: off) |
-| E W G O | Edges, Wire, Grid, Ortho | I / Esc | Flip section / section off |
+| E W G O C | Edges, Wire, Grid, Ortho, Color | I / Esc | Invert section / section off |
 | L | Next look | 1–7 | Front, back, top, bottom, right, left, iso |
 | M | Measure | P A N R ⌫ | Pen, Arrow, Note, Erase, Clear markup |
-| B | Other side | [ ] | Turn 90° |
+| B | Flip drawing over | [ ] | Turn 90° |
 | D | Dark / light | ⌘O ⌘Z ⇧⌘Z | Open, Undo, Redo |
 
 ## The editor

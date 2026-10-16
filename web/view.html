@@ -29,11 +29,12 @@
       <input id="fileInput" type="file" multiple hidden
         accept=".step,.stp,.iges,.igs,.brep,.stl,.obj,.ply,.3mf,.gltf,.glb,.fbx,.dxf" />
       <button id="fitBtn" class="ghost" title="Fit the model (F)">Fit</button>
-      <button id="sideBtn" class="ghost" hidden title="See the drawing from the other side">Other side</button>
+      <button id="sideBtn" class="ghost" hidden title="Flip the drawing over">Flip</button>
       <span class="sep"></span>
       <button id="edgesBtn" class="ghost on" title="Edges (E)">Edges</button>
       <button id="wireBtn" class="ghost" title="Wireframe (W)">Wire</button>
       <button id="gridBtn" class="ghost on" title="Grid (G)">Grid</button>
+      <button id="colorBtn" class="ghost" title="A colour per body or layer">Color</button>
       <button id="orthoBtn" class="ghost" title="Orthographic (O)">Ortho</button>
       <select id="look" class="ghost" title="Render preset">
         <option value="shaded">Shaded</option><option value="metal">Metal</option><option value="plastic">Plastic</option>
@@ -45,7 +46,7 @@
       <span class="sect" id="sectAxis" data-axis="" title="Section plane: pick an axis, slide it or drag the cut face, flip the kept side">Section
         <button class="ghost on" data-sect="">Off</button><button class="ghost" data-sect="x">X</button><button class="ghost" data-sect="y">Y</button><button class="ghost" data-sect="z">Z</button>
         <input id="sectPos" type="range" min="0" max="1000" value="500" disabled />
-        <button id="sectFlip" class="ghost" title="Flip which side is kept" disabled>Flip</button>
+        <button id="sectFlip" class="ghost" title="Invert which side is kept" disabled>Invert</button>
       </span>
       <span class="sep"></span>
       <label class="sect" title="Slide the bodies apart from the assembly centre">Explode
@@ -72,7 +73,7 @@
       <div id="drop" class="drop">
         <div id="loadError" class="load-error"></div>
         <div>Drop a STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, FBX or DXF file here.</div>
-        <div class="drop-hint">Scroll: rotate · Shift-scroll: pan · Pinch: zoom · Double-click: centre · Right-click: menu and hotkeys · ⌘Z undo · DXF: pan, spin to turn, B for the other side</div>
+        <div class="drop-hint">Scroll: rotate · Shift-scroll: pan · Pinch: zoom · Double-click: centre · Right-click: menu and hotkeys · ⌘Z undo · DXF: pan, spin to turn, B to flip over</div>
       </div>
     </div>
   </main>

@@ -23,7 +23,7 @@ import { parseDxf } from './dxf.js';
 import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
 
 const $ = (s) => document.querySelector(s);
-const ui = { edges: true, wire: false, grid: true, look: 'shaded', ortho: false, flat: false }; // flat: a 2D drawing is open
+const ui = { edges: true, wire: false, grid: true, look: 'shaded', ortho: false, flat: false, color: false }; // flat: a 2D drawing is open
 const section = { plane: new THREE.Plane(new THREE.Vector3(0, 0, -1), 0), axis: '', flip: 1 };
 const CAD_EXT = /\.(step|stp|iges|igs|brep)$/i;
 
@@ -63,9 +63,17 @@ const PRESETS = {
   xray: () => new THREE.MeshBasicMaterial({ color: 0x2f5d8a, transparent: true, opacity: 0.18, depthWrite: false }),
   normals: () => new THREE.MeshNormalMaterial(),
 };
+// One hue per body or layer when COLOR is on; golden-ratio spacing keeps any count apart.
+const partColor = (i) => new THREE.Color().setHSL((i * 0.618034) % 1, 0.6, 0.5);
 function styleMesh(m) {
-  if (m.isLine) { m.material.clippingPlanes = section.axis && bbox ? [section.plane] : []; return; } // a drawing keeps its ink
+  const i = model.children.indexOf(m);
+  if (m.isLine) {   // a drawing keeps its ink unless coloured by layer
+    m.material.color.set(ui.color ? partColor(i) : inkColor());
+    m.material.clippingPlanes = section.axis && bbox ? [section.plane] : [];
+    return;
+  }
   const mat = PRESETS[ui.look]();
+  if (ui.color && mat.color) mat.color.copy(partColor(i));
   mat.side = section.axis && bbox ? THREE.FrontSide : THREE.DoubleSide;
   mat.flatShading = !!m.userData.flat;
   mat.wireframe = ui.wire;
@@ -183,6 +191,11 @@ function listBodies() {
     row.append(cb, nm);
     panel.appendChild(row);
   }
+  paintRows();
+}
+/** The tick of each body row takes its colour when COLOR is on. */
+function paintRows() {
+  [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.style.accentColor = ui.color ? `#${partColor(i).getHexString()}` : ''; });
 }
 function setBodyVisible(m, on) {
   m.visible = on;
@@ -538,7 +551,9 @@ function toggle(name, btn) {
   edges.visible = ui.edges;
   if (grid) grid.visible = ui.grid;
   for (const m of model.children) styleMesh(m);
+  paintRows();
 }
+$('#colorBtn').addEventListener('click', () => toggle('color', '#colorBtn'));
 $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
 $('#gridBtn').addEventListener('click', () => toggle('grid', '#gridBtn'));
@@ -621,7 +636,7 @@ function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   $('#themeToggle').textContent = t === 'dark' ? 'LIGHT' : 'DARK';
   scene.background = new THREE.Color(t === 'dark' ? 0x1a1a18 : 0xffffff);
-  for (const m of model.children) if (m.isLine) m.material.color.set(inkColor());
+  for (const m of model.children) if (m.isLine) styleMesh(m);
   try { localStorage.setItem(THEME_KEY, t); } catch {}
 }
 $('#themeToggle').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
@@ -717,16 +732,17 @@ const CMDS = [
   { key: 'e', label: 'Edges', run: () => toggle('edges', '#edgesBtn'), btn: '#edgesBtn', on: () => ui.edges },
   { key: 'w', label: 'Wireframe', run: () => toggle('wire', '#wireBtn'), btn: '#wireBtn', on: () => ui.wire },
   { key: 'g', label: 'Grid', run: () => toggle('grid', '#gridBtn'), btn: '#gridBtn', on: () => ui.grid },
+  { key: 'c', label: 'Color parts', run: () => toggle('color', '#colorBtn'), btn: '#colorBtn', on: () => ui.color },
   { key: 'o', label: 'Orthographic', run: () => setOrtho(!ui.ortho), btn: '#orthoBtn', on: () => ui.ortho },
   { key: 'l', label: 'Next look', btn: '#look', run: () => { const s = $('#look'); s.selectedIndex = (s.selectedIndex + 1) % s.options.length; s.dispatchEvent(new Event('change', { bubbles: true })); } },
   { key: 'm', label: 'Measure', run: () => setMeasure(!measure.on), btn: '#measureBtn', on: () => measure.on },
   { sep: true },
-  { key: 'b', label: 'Other side', btn: '#sideBtn', run: () => { orbit.pitch = -orbit.pitch; } },
+  { key: 'b', label: 'Flip drawing over', btn: '#sideBtn', run: () => { orbit.pitch = -orbit.pitch; } },
   { key: '[', label: 'Turn left 90°', run: () => { orbit.yaw -= Math.PI / 2; } },
   { key: ']', label: 'Turn right 90°', run: () => { orbit.yaw += Math.PI / 2; } },
   { sep: true },
   ...['x', 'y', 'z'].map((a) => ({ key: a, label: `Section ${a.toUpperCase()}`, btn: `[data-sect="${a}"]`, run: () => setSectionAxis(section.axis === a ? '' : a), on: () => section.axis === a })),
-  { key: 'i', label: 'Flip section', btn: '#sectFlip', run: () => { if (section.axis) { section.flip *= -1; updateSection(); } } },
+  { key: 'i', label: 'Invert section', btn: '#sectFlip', run: () => { if (section.axis) { section.flip *= -1; updateSection(); } } },
   { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { setSectionAxis(''); setMeasure(false); } },
   { sep: true },
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
@@ -753,7 +769,7 @@ window.addEventListener('keydown', (e) => {
 // ponytail: whole-state JSON snapshots, not deltas — the state is a few hundred bytes.
 const history = { list: [], i: -1 };
 function snap() {
-  return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ortho: ui.ortho,
+  return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value,
     bodies: model.children.map((m) => m.visible), markup: markup.items });
 }
@@ -761,7 +777,7 @@ function commit() {
   const s = snap();
   if (s === history.list[history.i]) return;
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ortho: ui.ortho })); } catch {}
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho })); } catch {}
 }
 // View preferences outlive the page, like the theme. Section, explode and body
 // visibility belong to a file and start fresh with it.
@@ -769,13 +785,13 @@ const PREFS_KEY = 'cadgang-view';
 try {
   const p = JSON.parse(localStorage.getItem(PREFS_KEY));
   if (p?.look in PRESETS) ui.look = $('#look').value = p.look;
-  for (const k of ['edges', 'wire', 'grid']) if (typeof p?.[k] === 'boolean' && ui[k] !== p[k]) toggle(k, `#${k}Btn`);
+  for (const k of ['edges', 'wire', 'grid', 'color']) if (typeof p?.[k] === 'boolean' && ui[k] !== p[k]) toggle(k, `#${k}Btn`);
   if (p?.ortho) setOrtho(true);
 } catch {}
 function apply(s) {
   const st = JSON.parse(s);
   if (st.look !== ui.look) { ui.look = $('#look').value = st.look; for (const m of model.children) styleMesh(m); }
-  for (const k of ['edges', 'wire', 'grid']) if (ui[k] !== st[k]) toggle(k, `#${k}Btn`);
+  for (const k of ['edges', 'wire', 'grid', 'color']) if (ui[k] !== st[k]) toggle(k, `#${k}Btn`);
   if (ui.ortho !== st.ortho) setOrtho(st.ortho);
   $('#sectPos').value = st.section.pos; section.flip = st.section.flip; setSectionAxis(st.section.axis);
   $('#explode').value = st.explode; applyExplode();
