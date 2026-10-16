@@ -196,7 +196,7 @@ function finishLoad(name, ms) {
   document.title = `cadgang · ${name}`;
   $('#measures').textContent = `${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)}`;
   $('#stats').textContent = `${model.children.length} BOD${model.children.length === 1 ? 'Y' : 'IES'} · ${tris.toLocaleString()} TRIS · ${verts.toLocaleString()} VERTS · ${ms} MS`;
-  $('#drop').hidden = true;
+  $('#drop').hidden = true; $('#loadError').textContent = '';
   placeGrid();
   listBodies();
   setupSection();
@@ -415,6 +415,14 @@ async function fetchBuffer(url, init) {
   return res.arrayBuffer();
 }
 
+/** A load that failed shows its reason in the empty viewport, not only in the footer. */
+function loadFailed(name, e) {
+  say(`${name}: ${e.message}`, true);
+  const drop = $('#drop');
+  drop.hidden = false;
+  $('#loadError').textContent = `${name}: ${e.message}`;
+}
+
 /** Open from bytes (drop / file picker). Several files stack into one scene. */
 async function openBuffers(files) {
   const t0 = performance.now();
@@ -429,7 +437,7 @@ async function openBuffers(files) {
         : await parseMesh(ext, buffer, name);
       for (const p of parts) addMesh(p.geo, p.name ? p : { ...p, name });
       shown++; label = name;
-    } catch (e) { say(`${name}: ${e.message}`, true); return; }
+    } catch (e) { loadFailed(name, e); return; }
   }
   if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0));
 }
@@ -452,7 +460,7 @@ window.cadgangOpen = async function cadgangOpen(paths) {
         : await parseMesh(name.toLowerCase().split('.').pop(), await fetchBuffer(`/api/view/file?${q}`), name);
       for (const part of parts) addMesh(part.geo, part.name ? part : { ...part, name });
       shown++; label = name;
-    } catch (e) { say(`${name}: ${e.message}`, true); return; }
+    } catch (e) { loadFailed(name, e); return; }
   }
   if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0));
 };

@@ -19,7 +19,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import express from 'express';
-import { importCadFile } from '../core/step.js';
+import { importCadFileInWorker as importCadFile } from '../core/step.js';
 
 const DESKTOP = process.env.CADGANG_DESKTOP === '1';
 export const CAD_EXT = /\.(step|stp|iges|igs|brep)$/i;

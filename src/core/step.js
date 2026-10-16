@@ -7,7 +7,31 @@
  * blocks consume.
  */
 
+import { Worker } from 'node:worker_threads';
+import { fileURLToPath } from 'node:url';
 import { weldVertices, positionsBBox } from './mesh.js';
+
+/**
+ * importCadFile in its own worker thread: the server stays responsive, and
+ * every import gets a fresh WASM heap (the importer's heap never shrinks).
+ * The 32-bit heap caps at 2–4 GB, so a very large file fails here with a
+ * message that says so instead of "not a valid STEP".
+ */
+export function importCadFileInWorker(buffer, opts = {}, { timeoutMs = 600_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    const copy = new Uint8Array(bytes.byteLength); copy.set(bytes); // transfer our own copy, not the caller's
+    const w = new Worker(fileURLToPath(new URL('./stepworker.js', import.meta.url)), { workerData: { buffer: copy, opts }, transferList: [copy.buffer] });
+    const mb = (bytes.byteLength / 1048576).toFixed(0);
+    const timer = setTimeout(() => { w.terminate(); reject(new Error(`Gave up reading '${opts.name || 'file'}' (${mb} MB) after ${timeoutMs / 1000} s`)); }, timeoutMs);
+    const done = (fn) => (v) => { clearTimeout(timer); fn(v); };
+    w.once('message', done((msg) => msg.ok ? resolve(msg.m) : reject(new Error(outOfMemory(msg.error) ? tooBig(opts.name, mb) : msg.error))));
+    w.once('error', done((e) => reject(new Error(outOfMemory(e?.message) ? tooBig(opts.name, mb) : String(e?.message || e)))));
+    w.once('exit', (code) => { if (code !== 0) done(reject)(new Error(tooBig(opts.name, mb))); });
+  });
+}
+const outOfMemory = (msg) => /malloc failed|out of memory|Cannot enlarge memory|Aborted/i.test(String(msg || ''));
+const tooBig = (name, mb) => `'${name || 'file'}' (${mb} MB) is too big for the built-in importer, which ran out of memory — export it lighter (fewer parts, no PCB copper detail) and it will open`;
 
 let occtPromise = null;
 
@@ -41,6 +65,10 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
     angularDeflection,
   });
   if (!result?.success || !result.meshes?.length) {
+    // The importer swallows its own out-of-memory (a 465 MB PCB export: 10 M
+    // entities, 14k solids) and reports plain failure; size tells the two apart.
+    const mb = buffer.byteLength / 1048576;
+    if (mb > 150) throw new Error(tooBig(name, mb.toFixed(0)));
     throw new Error(`Could not read '${name}' — not a valid STEP/IGES/BREP file?`);
   }
 

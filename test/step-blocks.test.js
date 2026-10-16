@@ -132,6 +132,13 @@ test('export_stl block is a pass-through sink', () => {
   assert.deepEqual(sink.bbox, sphere.bbox);
 });
 
+test('importCadFileInWorker runs the import off-thread and reports garbage the same way', async () => {
+  const { importCadFileInWorker } = await import('../src/core/step.js');
+  const m = await importCadFileInWorker(fixture('cube.stp'), { name: 'cube.stp' });
+  assert.equal(m.triangleCount, 12);
+  await assert.rejects(importCadFileInWorker(Buffer.from('nope'), { name: 'x.step' }), /not a valid STEP/);
+});
+
 test('importCadFile rejects garbage input', async () => {
   await assert.rejects(() => importCadFile(Buffer.from('not a step file'), { name: 'junk.step' }));
 });

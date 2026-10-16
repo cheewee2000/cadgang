@@ -8,7 +8,7 @@ import { compileNode, meshingBounds, nodeTypeCatalog, NODE_TYPES, GraphError, ne
 import { meshSDF, meshSDFAsync, meshStats } from '../core/mesher.js';
 import { toBinarySTL } from '../core/stl.js';
 import { renderPreview } from '../core/render.js';
-import { importCadFile } from '../core/step.js';
+import { importCadFileInWorker as importCadFile } from '../core/step.js';
 import {
   initBrep, brepReady, beginBrepScope, tessellate, tessellateEdges,
   sketchOutline, exportStep, isSketch, brepStats,
