@@ -19,6 +19,8 @@ import { ThreeMFLoader } from 'three/addons/loaders/3MFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { attachOrbitInput } from './orbitinput.js';
 import { createMarkup } from './markup.js';
+import { parseDxf } from './dxf.js';
+import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
 
 const $ = (s) => document.querySelector(s);
 const ui = { edges: true, wire: false, grid: true, look: 'shaded', ortho: false };
@@ -62,6 +64,7 @@ const PRESETS = {
   normals: () => new THREE.MeshNormalMaterial(),
 };
 function styleMesh(m) {
+  if (m.isLine) { m.material.clippingPlanes = section.axis && bbox ? [section.plane] : []; return; } // a drawing keeps its ink
   const mat = PRESETS[ui.look]();
   mat.side = section.axis && bbox ? THREE.FrontSide : THREE.DoubleSide;
   mat.flatShading = !!m.userData.flat;
@@ -141,6 +144,17 @@ function addMesh(geo, { edgeLines, flat = false, name = '' } = {}) {
   }
 }
 
+/** A DXF layer: line segments in the page's ink. Measure, markup and section see it like a body. */
+function addLines(positions, name) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const l = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: inkColor() }));
+  l.userData.name = name;
+  model.add(l);
+}
+const inkColor = () => (document.documentElement.dataset.theme === 'dark' ? 0xffffff : 0x000000);
+const addPart = (p, name) => (p.lines ? addLines(p.lines, p.name || name) : addMesh(p.geo, p.name ? p : { ...p, name }));
+
 // ------------------------------------------------------------------- bodies
 //
 // One mesh per body (a STEP assembly, a multi-body compound). The panel lists
@@ -189,18 +203,21 @@ function finishLoad(name, ms) {
   bbox = box;
   history.list = []; history.i = -1; queueMicrotask(commit);
   const size = box.getSize(new THREE.Vector3());
-  let tris = 0, verts = 0;
+  let tris = 0, verts = 0, segs = 0;
   for (const m of model.children) {
-    const g = m.geometry; verts += g.getAttribute('position').count; tris += (g.index ? g.index.count : g.getAttribute('position').count) / 3;
+    const g = m.geometry, n = g.index ? g.index.count : g.getAttribute('position').count;
+    verts += g.getAttribute('position').count;
+    if (m.isLine) segs += n / 2; else tris += n / 3;
   }
   $('#fileName').textContent = name;
   document.title = `cadgang · ${name}`;
   $('#measures').textContent = `${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)}`;
-  $('#stats').textContent = `${model.children.length} BOD${model.children.length === 1 ? 'Y' : 'IES'} · ${tris.toLocaleString()} TRIS · ${verts.toLocaleString()} VERTS · ${ms} MS`;
+  $('#stats').textContent = `${model.children.length} BOD${model.children.length === 1 ? 'Y' : 'IES'} · ${segs ? `${segs.toLocaleString()} SEGS · ` : ''}${tris ? `${tris.toLocaleString()} TRIS · ` : ''}${verts.toLocaleString()} VERTS · ${ms} MS`;
   $('#drop').hidden = true; $('#loadError').textContent = '';
   placeGrid();
   listBodies();
   setupSection();
+  if (size.z < 1e-9) setView('3');   // a flat drawing is read from above
   fit();
   edges.visible = ui.edges;
   say(`${name} in ${ms} ms`);
@@ -216,7 +233,7 @@ function placeGrid() {
   const divs = Math.max(2, Math.round(span / step));
   grid = new THREE.GridHelper(divs * step, divs, 0xbdbdbd, 0xe3e3e3);
   grid.rotation.x = Math.PI / 2;            // the part's Z is up
-  grid.position.set((bbox.min.x + bbox.max.x) / 2, (bbox.min.y + bbox.max.y) / 2, bbox.min.z);
+  grid.position.set((bbox.min.x + bbox.max.x) / 2, (bbox.min.y + bbox.max.y) / 2, bbox.min.z - step * 0.01); // a hair under a flat drawing
   grid.visible = ui.grid;
   scene.add(grid);
 }
@@ -231,7 +248,7 @@ function applyCamera() {
     orbit.target.y - orbit.dist * cp * Math.cos(orbit.yaw),
     orbit.target.z + orbit.dist * sp
   );
-  camera.up.set(0, 0, 1);
+  camera.up.set(-sp * Math.sin(orbit.yaw), sp * Math.cos(orbit.yaw), cp);   // follows the orbit: no pole, no limit
   camera.lookAt(orbit.target);
   if (camera === persp) {
     camera.near = Math.max(orbit.dist / 1000, 0.01);
@@ -282,7 +299,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     orbit.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
   } else {
     orbit.yaw += dx * 0.006;
-    orbit.pitch = THREE.MathUtils.clamp(orbit.pitch + dy * 0.006, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+    orbit.pitch += dy * 0.006;
   }
 });
 renderer.domElement.addEventListener('pointerup', (e) => {
@@ -335,6 +352,7 @@ const capMaterial = new THREE.MeshBasicMaterial({ color: 0x8e8c86, side: THREE.B
 function buildCaps() {
   for (const m of model.children) {
     if (m.userData.cap) { m.remove(m.userData.cap); m.userData.cap = null; }
+    if (m.isLine) continue;
     const on = !!section.axis && !!bbox;
     m.material.side = on ? THREE.FrontSide : THREE.DoubleSide;
     if (!on) continue;
@@ -390,6 +408,13 @@ function collectGeometries(obj, out = []) {
 }
 
 async function parseMesh(ext, buffer, name) {
+  if (ext === 'dxf') {
+    const { parts, skipped } = parseDxf(new TextDecoder().decode(buffer), { THREE, NURBSCurve });
+    const n = Object.values(skipped).reduce((a, b) => a + b, 0);
+    if (n) say(`${name}: ${n} ${Object.keys(skipped).join('/')} entit${n === 1 ? 'y' : 'ies'} not drawn`);
+    if (!parts.length) throw new Error('no drawable entities');
+    return parts;
+  }
   const loader = loaders[ext]();
   if (ext === 'stl') return [{ geo: loader.parse(buffer), flat: true }];
   if (ext === 'ply') return [{ geo: loader.parse(buffer) }];
@@ -454,7 +479,7 @@ async function openBuffers(files) {
       const parts = CAD_EXT.test(name)
         ? parseCad(await fetchBuffer(`/api/view/tessellate?name=${encodeURIComponent(name)}`, { method: 'POST', body: buffer }))
         : await parseMesh(ext, buffer, name);
-      for (const p of parts) addMesh(p.geo, p.name ? p : { ...p, name });
+      for (const p of parts) addPart(p, name);
       shown++; label = name;
     } catch (e) { loadFailed(name, e); return; }
   }
@@ -478,7 +503,7 @@ window.cadgangOpen = async function cadgangOpen(paths) {
       const parts = CAD_EXT.test(name)
         ? parseCad(await fetchBuffer(`/api/view/tessellate?${q}`, { method: 'POST' }))
         : await parseMesh(name.toLowerCase().split('.').pop(), await fetchBuffer(`/api/view/file?${q}`), name);
-      for (const part of parts) addMesh(part.geo, part.name ? part : { ...part, name });
+      for (const part of parts) addPart(part, name);
       shown++; label = name;
     } catch (e) { loadFailed(name, e); return; }
   }
@@ -593,6 +618,7 @@ function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   $('#themeToggle').textContent = t === 'dark' ? 'LIGHT' : 'DARK';
   scene.background = new THREE.Color(t === 'dark' ? 0x1a1a18 : 0xffffff);
+  for (const m of model.children) if (m.isLine) m.material.color.set(inkColor());
   try { localStorage.setItem(THEME_KEY, t); } catch {}
 }
 $('#themeToggle').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));

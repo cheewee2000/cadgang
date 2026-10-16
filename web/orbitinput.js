@@ -20,7 +20,7 @@ export function attachOrbitInput(el, { orbit, camera, getCamera = () => camera, 
       return;
     }
     orbit.yaw += yawSign * e.deltaX * 0.005;
-    orbit.pitch = Math.max(-1.45, Math.min(1.45, orbit.pitch - e.deltaY * 0.005));
+    orbit.pitch -= e.deltaY * 0.005;
   }, { passive: false });
 
   // WebKit (Safari, the Mac app's WKWebView) pinch: scale is cumulative since gesturestart.

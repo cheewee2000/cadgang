@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 
 let PORT = 4477
 let BASE = URL(string: "http://127.0.0.1:\(PORT)")!
-let EXTS = ["step", "stp", "iges", "igs", "brep", "stl", "obj", "ply", "3mf", "gltf", "glb", "fbx"]
+let EXTS = ["step", "stp", "iges", "igs", "brep", "stl", "obj", "ply", "3mf", "gltf", "glb", "fbx", "dxf"]
 
 /// Files dropped ANYWHERE in the window (toolbar, cells page, canvas) open like a Finder
 /// double-click. Left to WebKit, a file drop outside the page's own drop zone did nothing.

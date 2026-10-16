@@ -25,13 +25,13 @@
         <string>public.step</string><string>com.cwandt.cadgang.iges</string><string>com.cwandt.cadgang.brep</string>
         <string>public.standard-tesselated-geometry-format</string><string>public.geometry-definition-format</string>
         <string>public.polygon-file-format</string><string>com.cwandt.cadgang.3mf</string>
-        <string>org.khronos.gltf</string><string>org.khronos.glb</string><string>com.autodesk.mac.fbx</string>
+        <string>org.khronos.gltf</string><string>org.khronos.glb</string><string>com.autodesk.mac.fbx</string><string>com.cwandt.cadgang.dxf</string>
       </array>
       <key>CFBundleTypeExtensions</key>
       <array>
         <string>step</string><string>stp</string><string>iges</string><string>igs</string><string>brep</string>
         <string>stl</string><string>obj</string><string>ply</string><string>3mf</string>
-        <string>gltf</string><string>glb</string><string>fbx</string>
+        <string>gltf</string><string>glb</string><string>fbx</string><string>dxf</string>
       </array>
     </dict>
   </array>
@@ -56,6 +56,12 @@
       <key>UTTypeDescription</key><string>3D Manufacturing Format</string>
       <key>UTTypeConformsTo</key><array><string>public.data</string><string>public.3d-content</string></array>
       <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>3mf</string></array></dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key><string>com.cwandt.cadgang.dxf</string>
+      <key>UTTypeDescription</key><string>DXF drawing</string>
+      <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>dxf</string></array></dict>
     </dict>
   </array>
 </dict>
