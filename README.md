@@ -8,7 +8,7 @@ Earlier versions were a CAD authoring tool (a node graph of B-rep and distance-f
 
 ## Mac app
 
-Download the latest `cadgang-<version>.zip` from the [releases](https://github.com/cheewee2000/cadgang/releases), unzip, drag to Applications. The app checks for updates on its own (Sparkle; **CADgang → Check for Updates…** does it now). Press **Default** in the toolbar once and Finder opens every supported file type in CADgang. Files open by double-click, by drop anywhere on the window, or with ⌘O. If a dev server is already on port 4477, the app adopts it. From a shell, `/Applications/cadgang.app/Contents/MacOS/cadgang-open a.step b.dxf` opens files in the running app without a second Dock icon.
+Download the latest `cadgang-<version>.zip` from the [releases](https://github.com/cheewee2000/cadgang/releases), unzip, drag to Applications. The app checks for updates on its own (Sparkle; **CADgang → Check for Updates…** does it now). Press **Default** in the toolbar once and Finder opens every supported file type in CADgang. Files open by double-click, by drop anywhere on the window, or with ⌘O; a file opened while another is on screen gets its own window (⌘N for an empty one). If a dev server is already on port 4477, the app adopts it. From a shell, `/Applications/cadgang.app/Contents/MacOS/cadgang-open a.step b.dxf` opens files in the running app without a second Dock icon.
 
 To build it yourself: `npm install && npm run build` → `dist/cadgang.app` (Swift WKWebView shell, bundled node, Sparkle). `npm run release` builds, signs the zip for Sparkle, publishes the zip and appcast to the VPS, and creates the GitHub release.
 
@@ -30,6 +30,7 @@ No build step; the page is plain ES modules. `CADGANG_PORT` picks the port, `CAD
 - **Section**: Off/X/Y/Z, drag the cut face or the slider, **Invert** the kept side. Cuts are capped, so hollow walls read as rings.
 - **Measure** snaps to endpoints, midpoints, centres and quadrants, defaults to axis-aligned distances (shift: free), reads a circle's ⌀ or an edge's length in one click, reads a cylinder's ⌀, a fillet's R or a sphere's SR from one click on the face, and measures face to face (parallel planes give the gap, anything else the closest approach). Dimensions stay on the page until clicked away or undone.
 - **Markup**: pen, arrow, note, erase. Anchored on the model, saved per file, and what `cadgang_screen` shows Claude.
+- **Several files**: each browser tab or Mac window is one file with its own markups. **New** opens another; Claude's `cadgang_open` and `cadgang_screen` go to the tab or window you last touched.
 - Looks (shaded, metal, plastic, glass, x-ray, normals), ortho, edges, wire, grid, dark theme. These persist across sessions.
 - **Undo/redo** (⌘Z / ⇧⌘Z) covers every view change, dimension and stroke. **Right-click** opens the command menu; every button shows its hotkey on hover.
 - Rotation has no limits. Scroll rotates, shift-scroll pans, pinch zooms, double-click re-centres.

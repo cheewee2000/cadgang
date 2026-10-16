@@ -34,8 +34,10 @@ final class DropWebView: WKWebView {
 }
 
 final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
-    var window: NSWindow!
-    var web: DropWebView!
+    var web: DropWebView!            // the first window's page; files that arrive before it is ready wait for it
+    var windows: [NSWindow] = []     // one per open file; each page has its own markups, the server tells them apart
+    var titleWatch: [NSKeyValueObservation] = []
+    var keyWeb: DropWebView { (NSApp.keyWindow?.contentView as? DropWebView) ?? web }
     var node: Process?
     // Sparkle: checks the appcast in Info.plist (SUFeedURL), verifies with SUPublicEDKey, swaps the app in place.
     let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
@@ -49,21 +51,44 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         // The page learns it is inside the app, and can ask the shell for things only a shell can do.
         cfg.userContentController.addUserScript(WKUserScript(source: "window.cadgangDesktop = true", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         cfg.userContentController.add(self, name: "cadgang")
-        web = DropWebView(frame: .zero, configuration: cfg)
-        web.onFiles = { [weak self] urls in self?.application(NSApp, open: urls) }
-        web.navigationDelegate = self
-        web.uiDelegate = self
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1400, height: 900),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                          backing: .buffered, defer: false)
-        window.title = "CADgang"
-        window.contentView = web
-        window.setFrameAutosaveName("cadgang.main")
-        window.center()
-        window.makeKeyAndOrderFront(nil)
+        cfg.preferences.javaScriptCanOpenWindowsAutomatically = true   // the page opens a second file with window.open
+        web = makeWindow(cfg)
         NSApp.activate(ignoringOtherApps: true)
         startServer()
     }
+
+    /// A window around a page. The page sets its own title; files dropped on it open in it.
+    func makeWindow(_ cfg: WKWebViewConfiguration) -> DropWebView {
+        let w = DropWebView(frame: .zero, configuration: cfg)
+        w.navigationDelegate = self
+        w.uiDelegate = self
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1400, height: 900),
+                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                           backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
+        win.title = "CADgang"
+        win.contentView = w
+        w.onFiles = { [weak self, weak w] urls in if let w = w { self?.open(urls.map { $0.path }, in: w) } }
+        titleWatch.append(w.observe(\.title, options: [.new]) { [weak win] w, _ in win?.title = (w.title?.isEmpty == false) ? w.title! : "CADgang" })
+        if let key = NSApp.keyWindow {
+            win.cascadeTopLeft(from: NSPoint(x: key.frame.minX + 24, y: key.frame.maxY - 24))
+        } else {
+            win.setFrameAutosaveName("cadgang.main"); win.center()
+        }
+        windows.append(win)
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: win, queue: .main) { [weak self] n in
+            self?.windows.removeAll { $0 === (n.object as? NSWindow) }
+        }
+        win.makeKeyAndOrderFront(nil)
+        return w
+    }
+
+    /// The page asked for a window (window.open): give it one. WebKit loads the request into the view we return.
+    func webView(_ w: WKWebView, createWebViewWith cfg: WKWebViewConfiguration, for nav: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        makeWindow(cfg)
+    }
+
+    @objc func newWindow(_ s: Any?) { makeWindow(web.configuration).load(URLRequest(url: BASE.appendingPathComponent("view"))) }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ n: Notification) { node?.terminate() }
@@ -121,18 +146,21 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
 
     // MARK: files
 
+    // Finder, ⌘O and the Dock hand files to the key window's page; it opens them there if it is
+    // empty, otherwise in a new window. Before the first page is up they wait.
     func application(_ app: NSApplication, open urls: [URL]) {
-        pending += urls.map { $0.path }
-        flush()
+        if ready { open(urls.map { $0.path }, in: keyWeb) } else { pending += urls.map { $0.path } }
     }
 
-    func webView(_ w: WKWebView, didFinish nav: WKNavigation!) { ready = true; flush() }
+    func webView(_ w: WKWebView, didFinish nav: WKNavigation!) {
+        guard w === web, !ready else { return }
+        ready = true
+        if !pending.isEmpty { let p = pending; pending = []; open(p, in: web) }
+    }
 
-    func flush() {
-        guard ready, !pending.isEmpty else { return }
-        let paths = pending; pending = []
+    func open(_ paths: [String], in w: WKWebView) {
         let json = String(data: try! JSONSerialization.data(withJSONObject: paths), encoding: .utf8)!
-        web.evaluateJavaScript("window.cadgangOpen ? cadgangOpen(\(json)) : (location.href = '/view?open=' + encodeURIComponent(\(json).join('|')))")
+        w.evaluateJavaScript("window.cadgangOpen ? cadgangOpen(\(json)) : (location.href = '/view?open=' + encodeURIComponent(\(json).join('|')))")
     }
 
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
@@ -159,7 +187,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
             let msg = failed.isEmpty ? "CADgang is now the default app for \(EXTS.count) CAD file types"
                                      : "Could not take over: \(failed.joined(separator: ", "))"
             let json = String(data: try! JSONSerialization.data(withJSONObject: [msg, !failed.isEmpty]), encoding: .utf8)!
-            self.web.evaluateJavaScript("window.cadgangNotify && cadgangNotify(...\(json))")
+            self.keyWeb.evaluateJavaScript("window.cadgangNotify && cadgangNotify(...\(json))")
         }
     }
 
@@ -210,6 +238,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
 
         let file = NSMenuItem(); main.addItem(file)
         let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(withTitle: "New Window", action: #selector(newWindow(_:)), keyEquivalent: "n")
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
         fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         file.submenu = fileMenu

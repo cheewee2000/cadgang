@@ -27,10 +27,13 @@ app.use(express.json({ limit: '10mb' }));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
-/** JSON-stringify an object and send it to every open WebSocket client. */
+/** JSON-stringify an object and send it to every open WebSocket client — except an `open` or a
+ *  screen request, which go to the page the user last touched: tabs and windows share this server. */
+let active = null;
 function broadcast(obj) {
   const msg = JSON.stringify(obj);
-  for (const client of wss.clients) if (client.readyState === 1) client.send(msg);
+  const to = (obj.type === 'open' || obj.type === 'snapshot_request') && active?.readyState === 1 ? [active] : wss.clients;
+  for (const client of to) if (client.readyState === 1) client.send(msg);
 }
 
 // The API is live state — never let it be cached. Behind a reverse proxy that stamps a
@@ -66,6 +69,10 @@ app.get(['/', '/view'], (req, res) => res.sendFile(path.join(ROOT, 'web', 'view.
 app.use(express.static(path.join(ROOT, 'web'), { setHeaders: (res) => res.set('Cache-Control', 'no-cache') }));
 
 // Pages compare this with what they loaded and reload themselves when the server came back newer.
-wss.on('connection', (ws) => ws.send(JSON.stringify({ type: 'hello', version: VERSION })));
+wss.on('connection', (ws) => {
+  ws.send(JSON.stringify({ type: 'hello', version: VERSION }));
+  active ??= ws;
+  ws.on('message', (m) => { try { if (JSON.parse(m).type === 'focus') active = ws; } catch {} });
+});
 
 server.listen(PORT, () => console.log(`CADgang ${VERSION} at http://localhost:${PORT} (data: ${DATA})`));

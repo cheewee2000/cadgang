@@ -510,11 +510,16 @@ async function openBuffers(files) {
 
 /** Open from absolute paths — the macOS shell calls this with what Finder handed it. */
 window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
+  paths = [].concat(paths);
+  // Another file is on screen: this one gets its own tab, or its own window in the Mac app (the shell
+  // turns window.open into a window). A blocked popup falls back to opening in place.
+  if (!keep && model.children.length && paths.join('|') !== subject
+      && window.open(`${location.pathname}?open=${encodeURIComponent(paths.join('|'))}`)) return;
   const t0 = performance.now();
   clearModel();
-  subject = [].concat(paths).join('|');   // markups attach to the file by path
+  subject = paths.join('|');   // markups attach to the file by path
   let shown = 0, label = '';
-  for (const p of [].concat(paths)) {
+  for (const p of paths) {
     const name = p.split('/').pop();
     say(`loading ${name}…`);
     try {
@@ -540,6 +545,7 @@ document.addEventListener('drop', async (e) => {
   if (e.dataTransfer.files.length) openBuffers(await filesToBuffers(e.dataTransfer.files));
 });
 $('#openBtn').addEventListener('click', () => $('#fileInput').click());
+$('#newBtn').addEventListener('click', () => window.open(location.pathname));
 // Only the Mac shell can register file associations; the button exists only inside it.
 $('#defaultBtn').hidden = !window.cadgangDesktop;
 $('#defaultBtn').addEventListener('click', () => window.webkit?.messageHandlers?.cadgang?.postMessage({ cmd: 'defaultApp' }));
@@ -635,8 +641,15 @@ function postSnapshot() {
 // The server restarts under the app (a deploy); reconnect, and when
 // it comes back as a NEWER version reload so the page is never older than its server.
 let pageVersion = null;
+let ws = null;
+// Several tabs or windows share one server; the one the user last touched is the one Claude opens into and screens.
+const focus = () => { if (ws?.readyState === 1 && document.hasFocus()) ws.send(JSON.stringify({ type: 'focus' })); };
+window.addEventListener('focus', focus);
+document.addEventListener('pointerdown', focus);
+document.addEventListener('visibilitychange', focus);
 (function connect() {
-  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  ws.onopen = focus;
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'hello' && msg.version) { if (pageVersion && pageVersion !== msg.version) location.reload(); pageVersion = msg.version; }
