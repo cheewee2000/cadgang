@@ -13,9 +13,26 @@ import WebKit
 let PORT = 4477
 let BASE = URL(string: "http://127.0.0.1:\(PORT)")!
 
+/// Files dropped ANYWHERE in the window (toolbar, cells page, canvas) open like a Finder
+/// double-click. Left to WebKit, a file drop outside the page's own drop zone did nothing.
+final class DropWebView: WKWebView {
+    var onFiles: (([URL]) -> Void)?
+    private func files(_ s: NSDraggingInfo) -> [URL] {
+        (s.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+    }
+    override func draggingEntered(_ s: NSDraggingInfo) -> NSDragOperation { files(s).isEmpty ? super.draggingEntered(s) : .copy }
+    override func draggingUpdated(_ s: NSDraggingInfo) -> NSDragOperation { files(s).isEmpty ? super.draggingUpdated(s) : .copy }
+    override func prepareForDragOperation(_ s: NSDraggingInfo) -> Bool { files(s).isEmpty ? super.prepareForDragOperation(s) : true }
+    override func performDragOperation(_ s: NSDraggingInfo) -> Bool {
+        let urls = files(s)
+        if urls.isEmpty { return super.performDragOperation(s) }
+        onFiles?(urls); return true
+    }
+}
+
 final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
     var window: NSWindow!
-    var web: WKWebView!
+    var web: DropWebView!
     var node: Process?
     var ready = false
     var pending: [String] = []
@@ -24,7 +41,8 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         buildMenu()
         let cfg = WKWebViewConfiguration()
         cfg.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        web = WKWebView(frame: .zero, configuration: cfg)
+        web = DropWebView(frame: .zero, configuration: cfg)
+        web.onFiles = { [weak self] urls in self?.application(NSApp, open: urls) }
         web.navigationDelegate = self
         web.uiDelegate = self
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1400, height: 900),
@@ -108,7 +126,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         guard ready, !pending.isEmpty else { return }
         let paths = pending; pending = []
         let json = String(data: try! JSONSerialization.data(withJSONObject: paths), encoding: .utf8)!
-        web.evaluateJavaScript("window.cadgangOpen ? cadgangOpen(\(json)) : (window.cadgangPending = \(json))")
+        web.evaluateJavaScript("window.cadgangOpen ? cadgangOpen(\(json)) : (location.href = '/view?open=' + encodeURIComponent(\(json).join('|')))")
     }
 
     @objc func openDocument(_ s: Any?) {

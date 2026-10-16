@@ -348,9 +348,10 @@ window.cadgangOpen = async function cadgangOpen(paths) {
 async function filesToBuffers(fileList) {
   return Promise.all([...fileList].map(async (f) => ({ name: f.name, buffer: await f.arrayBuffer() })));
 }
-viewport.addEventListener('dragover', (e) => { e.preventDefault(); viewport.classList.add('dragover'); });
-viewport.addEventListener('dragleave', () => viewport.classList.remove('dragover'));
-viewport.addEventListener('drop', async (e) => {
+// The whole page is the drop zone: a file let go over the toolbar should open too.
+document.addEventListener('dragover', (e) => { e.preventDefault(); viewport.classList.add('dragover'); });
+document.addEventListener('dragleave', () => viewport.classList.remove('dragover'));
+document.addEventListener('drop', async (e) => {
   e.preventDefault(); viewport.classList.remove('dragover');
   if (e.dataTransfer.files.length) openBuffers(await filesToBuffers(e.dataTransfer.files));
 });
