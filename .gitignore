@@ -6,3 +6,4 @@ saves/
 *.log
 .DS_Store
 *.mov
+dist/

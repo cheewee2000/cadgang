@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>cadgang · view</title>
+  <link rel="stylesheet" href="cwandt.css" />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="cells.css" />
+  <link rel="stylesheet" href="view.css" />
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/jsm/" } }
+  </script>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="logo">CW&amp;T&nbsp;·&nbsp;CADGANG</div>
+      <span class="proj-sep">/</span>
+      <span class="project-name" id="fileName" title="Open a file: drop it here, ⌘O, or double-click it in Finder">view</span>
+    </div>
+    <div class="toolbar">
+      <a href="/cells" class="ghost linkbtn" title="The cell transcript (prompt-native CAD)">Cells</a>
+      <span class="sep"></span>
+      <button id="openBtn" class="ghost" title="Open a file (⌘O)">Open</button>
+      <input id="fileInput" type="file" multiple hidden
+        accept=".step,.stp,.iges,.igs,.brep,.stl,.obj,.ply,.3mf,.gltf,.glb,.fbx" />
+      <button id="fitBtn" class="ghost" title="Fit the model (F)">Fit</button>
+      <span class="sep"></span>
+      <button id="edgesBtn" class="ghost on" title="Edges (E)">Edges</button>
+      <button id="wireBtn" class="ghost" title="Wireframe (W)">Wire</button>
+      <button id="gridBtn" class="ghost on" title="Grid (G)">Grid</button>
+      <span class="sep"></span>
+      <label class="sect">Section
+        <select id="sectAxis"><option value="">off</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
+        <input id="sectPos" type="range" min="0" max="1000" value="500" disabled />
+        <button id="sectFlip" class="ghost" title="Flip which side is kept" disabled>Flip</button>
+      </label>
+      <span class="sep"></span>
+      <button id="themeToggle" class="ghost" title="Toggle light / dark">DARK</button>
+      <span id="status" class="status"></span>
+      <span class="version"><span class="idcode">CWT_SW_CADGANG_VIEW</span> <span class="idver" id="version"></span></span>
+    </div>
+  </header>
+
+  <main>
+    <div id="viewport">
+      <div id="drop" class="drop">
+        <div>Drop a STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF or FBX file here.</div>
+        <div class="drop-hint">Orbit: drag · Pan: shift-drag or right-drag · Zoom: wheel · Views: 1 front 2 back 3 top 4 bottom 5 right 6 left 7 iso</div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div id="measures"></div>
+    <div id="stats"></div>
+  </footer>
+
+  <script type="module" src="view.js"></script>
+</body>
+</html>

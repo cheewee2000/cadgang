@@ -14,6 +14,7 @@ import { ModelDocument } from '../core/document.js';
 import { CellDocument } from '../core/cells.js';
 import { apiRouter } from './api.js';
 import { cellsRouter } from './cells.js';
+import { viewRouter } from './view.js';
 import { initBrep } from '../core/brep.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -49,6 +50,7 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use('/api/cells', cellsRouter(cells, ROOT));
+app.use('/api/view', viewRouter());
 // A body that is not JSON (a literal NaN, a stray comma) is a client error in
 // the API's own shape, not Express's HTML page with a stack trace on it.
 app.use('/api', (err, req, res, next) => {
@@ -78,6 +80,8 @@ app.use('/api', (err, req, res, next) => {
 // The v2 cell transcript is its own page rather than a mode inside the node
 // editor — the two documents share a server and nothing else.
 app.get('/cells', (req, res) => res.sendFile(path.join(ROOT, 'web', 'cells.html')));
+// The viewer: the desktop app's home page. Opens any mesh or CAD file, no document behind it.
+app.get('/view', (req, res) => res.sendFile(path.join(ROOT, 'web', 'view.html')));
 
 // Static assets revalidate rather than sit in the cache for days, so a deploy takes effect
 // on the next load instead of whenever the proxy's default lifetime happens to expire.

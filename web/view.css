@@ -1,0 +1,13 @@
+/* viewer-only additions; everything else comes from the shared sheets */
+.drop {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: var(--sp-3); text-align: center; padding: var(--sp-8);
+  color: var(--ink-faint); font-size: var(--fs-14); pointer-events: none;
+}
+.drop-hint { font-size: var(--fs-12); }
+#viewport.dragover { outline: var(--bw-bold) solid var(--ink); outline-offset: -2px; }
+button.ghost.on { border-color: var(--ink); }
+.sect { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); }
+.sect input[type=range] { width: 120px; accent-color: var(--ink); }
+.sect select { font: inherit; border: var(--bw-hair) solid var(--rule); background: var(--paper); color: var(--ink); border-radius: 0; }
+.drop[hidden] { display: none; }
