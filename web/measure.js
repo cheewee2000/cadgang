@@ -5,9 +5,11 @@
  *           that, the nearest edge or the face under the pointer is highlighted
  *   click   on a snap: a point; the second point makes a distance, snapped
  *           axis-aligned when it nearly is (shift: never)
- *           on a face: selects the face; a second face gives the distance
- *           between them (parallel planes: the gap; otherwise the closest
- *           approach), a point gives point-to-face. ⌥-click: a free point.
+ *           on a face: selects the face. A cylinder or fillet reads its ⌀ or R
+ *           at once, a sphere its SR, a plane its area. A second face then
+ *           gives the distance between them (parallel planes: the gap;
+ *           otherwise the closest approach), a point gives point-to-face.
+ *           ⌥-click: a free point.
  *           on a circle or arc: its diameter / radius, in one click
  *           on a straight edge: its length, in one click
  *   dims    stay on the page until clicked away or undone; they are plain data
@@ -238,9 +240,67 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     }
     centroid.divideScalar(area || 1); nAvg.normalize();
     const planar = tris.every((t) => t.getNormal(tmp).dot(nAvg) > 0.9998);
-    const data = { tris, n: planar ? nAvg : null, p0: tris[0]?.a ?? centroid, centroid };
+    const data = { tris, n: planar ? nAvg : null, p0: tris[0]?.a ?? centroid, centroid, area };
     faceCache.set(k, data);
     return data;
+  }
+  /** What kind of surface a curved face is: a cylinder (axis, radius, span) or a sphere. */
+  function surfaceOf(F) {
+    if (F.n || F.tris.length < 2) return null;
+    // cylinder axis: the direction every normal is perpendicular to — the largest cross product, refined by averaging
+    const normals = F.tris.map((t) => t.getNormal(new THREE.Vector3()));
+    let axis = new THREE.Vector3(), best = 0;
+    for (let i = 0; i < normals.length; i += Math.max(1, Math.floor(normals.length / 40))) for (let j = i + 1; j < normals.length; j += Math.max(1, Math.floor(normals.length / 40))) {
+      const c = normals[i].clone().cross(normals[j]); if (c.lengthSq() > best) { best = c.lengthSq(); axis = c; }
+    }
+    if (best < 1e-6) return null;
+    axis.normalize();
+    const acc = new THREE.Vector3();
+    for (let i = 1; i < normals.length; i++) { const c = normals[0].clone().cross(normals[i]); if (c.dot(axis) < 0) c.negate(); acc.add(c); }
+    if (acc.lengthSq() > 0) axis = acc.normalize();
+    const verts = []; for (const t of F.tris) verts.push(t.a, t.b, t.c);
+    const u = Math.abs(axis.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    u.addScaledVector(axis, -u.dot(axis)).normalize(); const v = axis.clone().cross(u);
+    const cyl = fitCircle2D(verts.map((p) => [p.dot(u), p.dot(v)]));
+    if (cyl && cyl.rms < cyl.r * 0.01 + scaleHint * 1e-4) {
+      const mid = F.centroid.dot(axis);
+      const c = u.clone().multiplyScalar(cyl.cx).addScaledVector(v, cyl.cy).addScaledVector(axis, mid);
+      // angular span of the face around the axis: a full cylinder reads ⌀, a fillet R
+      let span = 0; const angs = verts.map((p) => Math.atan2(p.dot(v) - cyl.cy, p.dot(u) - cyl.cx)).sort((a, b) => a - b);
+      let gap = angs[0] + Math.PI * 2 - angs[angs.length - 1]; for (let i = 1; i < angs.length; i++) gap = Math.max(gap, angs[i] - angs[i - 1]); span = Math.PI * 2 - gap;
+      const toSurf = F.centroid.clone().sub(c); toSurf.addScaledVector(axis, -toSurf.dot(axis)).normalize();
+      return { kind: 'cyl', c, r: cyl.r, u, v, closed: span > THREE.MathUtils.degToRad(300), p: c.clone().addScaledVector(toSurf, cyl.r) };
+    }
+    const sph = fitSphere(verts);
+    if (sph && sph.rms < sph.r * 0.01 + scaleHint * 1e-4) return { kind: 'sphere', c: sph.c, r: sph.r, p: sph.c.clone().add(F.centroid.clone().sub(sph.c).normalize().multiplyScalar(sph.r)) };
+    return null;
+  }
+  /** Algebraic (Kåsa) circle fit: x²+y²+Dx+Ey+F=0. */
+  function fitCircle2D(P) {
+    const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b = [0, 0, 0];
+    for (const [x, y] of P) { const row = [x, y, 1], rhs = -(x * x + y * y); for (let i = 0; i < 3; i++) { b[i] += row[i] * rhs; for (let j = 0; j < 3; j++) A[i][j] += row[i] * row[j]; } }
+    const s = solve(A, b); if (!s) return null;
+    const cx = -s[0] / 2, cy = -s[1] / 2, r2 = cx * cx + cy * cy - s[2]; if (r2 <= 0) return null;
+    const r = Math.sqrt(r2); let e = 0; for (const [x, y] of P) e += (Math.hypot(x - cx, y - cy) - r) ** 2;
+    return { cx, cy, r, rms: Math.sqrt(e / P.length) };
+  }
+  function fitSphere(P) {
+    const A = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], b = [0, 0, 0, 0];
+    for (const p of P) { const row = [p.x, p.y, p.z, 1], rhs = -(p.lengthSq()); for (let i = 0; i < 4; i++) { b[i] += row[i] * rhs; for (let j = 0; j < 4; j++) A[i][j] += row[i] * row[j]; } }
+    const s = solve(A, b); if (!s) return null;
+    const c = new THREE.Vector3(-s[0] / 2, -s[1] / 2, -s[2] / 2), r2 = c.lengthSq() - s[3]; if (r2 <= 0) return null;
+    const r = Math.sqrt(r2); let e = 0; for (const p of P) e += (p.distanceTo(c) - r) ** 2;
+    return { c, r, rms: Math.sqrt(e / P.length) };
+  }
+  function solve(A, b) {   // Gaussian elimination with partial pivoting, n ≤ 4
+    const n = b.length, M = A.map((row, i) => [...row, b[i]]);
+    for (let c = 0; c < n; c++) {
+      let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+      if (Math.abs(M[p][c]) < 1e-12) return null;
+      [M[c], M[p]] = [M[p], M[c]];
+      for (let r = 0; r < n; r++) if (r !== c) { const f = M[r][c] / M[c][c]; for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k]; }
+    }
+    return M.map((row, i) => row[n] / row[i]);
   }
   /** The two ends of the dimension between A and B (points or faces); quick: skip the slow search. */
   function between(A, B, bIsSnap, free, quick = false) {
@@ -300,7 +360,12 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     if (!pending) {
       pending = ent; clearHl();
       if (ent.face) faceMesh(ent.raw, sel); else marker(ent.p, sel);
-      say(ent.face ? (ent.face.n ? 'face selected (planar) — pick a second face or a point' : 'face selected — pick a second face or a point') : 'point set — pick a second point or a face');
+      if (ent.face) {
+        const surf = surfaceOf(ent.face);                     // a curved face reads itself at once
+        if (surf?.kind === 'cyl') { add(surf.closed ? { kind: 'dia', c: surf.c.toArray(), r: surf.r, u: surf.u.toArray(), v: surf.v.toArray() } : { kind: 'rad', c: surf.c.toArray(), r: surf.r, p: surf.p.toArray() }); say(`${text(dims[dims.length - 1])} — pick a second face or a point for a distance`); }
+        else if (surf?.kind === 'sphere') { add({ kind: 'rad', sph: true, c: surf.c.toArray(), r: surf.r, p: surf.p.toArray() }); say(`${text(dims[dims.length - 1])} — pick a second face or a point for a distance`); }
+        else say(`${ent.face.n ? `planar face, area ${fmt(ent.face.area)}` : 'curved face'} — pick a second face or a point`);
+      } else say('point set — pick a second point or a face');
       return;
     }
     const r = between(pending, ent, !!h.snap, e.shiftKey);
@@ -316,7 +381,7 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
   function text(d) {
     const V = (arr) => new THREE.Vector3(...arr);
     if (d.kind === 'dia') return `⌀${fmt(d.r * 2)}`;
-    if (d.kind === 'rad') return `R${fmt(d.r)}`;
+    if (d.kind === 'rad') return `${d.sph ? 'SR' : 'R'}${fmt(d.r)}`;
     return fmt(V(d.a).distanceTo(V(d.b)));
   }
   function label(t, pos, d) {
@@ -367,8 +432,10 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     setOn(v) { on = v; pending = null; clearHl(); clearSel(); canvas.style.cursor = v ? 'crosshair' : ''; if (v) dirty = true; },
     invalidate() { dirty = true; faceCache.clear(); },
     hover: onHover, click: onClick, projectLabels,
+    cancel() { const had = !!pending; pending = null; clearSel(); return had; },
     get dims() { return dims; },
     get features() { if (dirty) build(); return features; },   // for headless drives
+    get pendingKind() { return pending ? (pending.face ? 'face' : 'point') : null; },
     debugPick(clientX, clientY) { const h = pick({ clientX, clientY }); if (!h) return null; const fd = h.face && faceData(h.face); return { snap: h.snap?.kind, f: h.f?.kind, p: h.p.toArray(), face: h.face && { mesh: h.face.mesh.userData.name, first: h.face.first, count: h.face.count, planar: !!fd.n, n: fd.n?.toArray(), p0: fd.p0.toArray(), centroid: fd.centroid.toArray() } }; },
     load(list) { dims = Array.isArray(list) ? list : []; render(); },
     clear() { dims = []; pending = null; clearHl(); clearSel(); faceCache.clear(); render(); },
