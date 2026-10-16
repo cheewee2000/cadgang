@@ -1,20 +1,18 @@
 # cadgang
 
-Block-based CAD that runs in your browser — with a REST API, live WebSocket updates, and a built-in **MCP server** so Claude Code can drive it end-to-end: build models, inspect geometry, render previews, and export STL **and STEP**.
+Prompt-first CAD. A model is an ordered stack of **cells**: each holds a natural-language prompt, the geometry program it compiled to, and the parameters that program exposes. Claude Code writes the cells over MCP against an exact B-rep kernel (OpenCascade); you read the prompts, turn the knobs, pick edges, draw sketches, and watch the assertions. The result exports as real **STEP**.
 
-cadgang carries **two geometry representations in one node graph**: exact **B-rep** solids (OpenCascade — real fillets, real STEP out) and implicit **distance fields** (lattices, TPMS infill, smooth blends, drape). They meet at a deliberately [one-way bridge](#the-two-lineages).
+The same server also ships a **viewer** for any CAD file and a **Mac app** around it, with sectioning, snapping measurement, markup Claude can see, and DXF drawings treated as paper.
 
 ![cadgang UI](docs/screenshot-ui.png)
 
-A modeling session — building a gyroid-latticed spikeball from scratch in the node editor ([mp4 in the repo](docs/demo.mp4)):
+Three pages, one server, one document:
 
-https://github.com/user-attachments/assets/6960d62b-7610-4623-9ec3-8bda3a237a73
-
-cadgang sits in the lineage of functional-representation CAD: [kokopelli](https://github.com/mkeeter/kokopelli), Matt Keeter's Python-scripted f-rep CAD/CAM tool (and its successors [Antimony](https://github.com/mkeeter/antimony) and [libfive](https://libfive.com)), and the implicit-modeling approach [nTopology](https://www.ntop.com/) built a company on. Where kokopelli describes models as code and nTop as a graph of implicit operations, cadgang does both: models are **graphs of blocks** evaluated as signed distance fields (SDFs), and every graph compiles down to a one-line functional formula (shown live in the footer). Because geometry is a function, not a boundary mesh, booleans never fail, shells and offsets are exact, and TPMS lattices are a single block.
-
-| Raymarched preview | Gyroid lattice infill |
+| Page | What it is |
 |---|---|
-| ![part](docs/preview-part.png) | ![gyroid](docs/preview-gyroid.png) |
+| `/cells` | The cell transcript. Prompts, params, assertions, picks, sketches, versions. Authored by Claude Code over MCP. |
+| `/view` | The viewer and the Mac app's window. Opens STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, GLB, FBX and DXF. |
+| `/` | The original block editor (v1): a node graph of B-rep and signed-distance-field blocks. Still works, still has STL and gyroids. |
 
 ## Install
 
@@ -25,179 +23,137 @@ git clone https://github.com/cheewee2000/cadgang.git
 cd cadgang
 npm install
 npm start          # → http://localhost:4477
+npm test           # 273 kernel / API / viewer tests
 ```
 
-Then:
+`npm start` runs a supervisor that restarts the server if the OpenCascade heap grows past `CADGANG_HEAP_LIMIT` (1.5 GB). `CADGANG_PORT`, `CADGANG_DOC` and `CADGANG_CELLS` select an alternate port and documents. The document autosaves, and every page live-updates over WebSocket whenever anything changes it, whether the UI, the REST API, or Claude.
 
-```bash
-npm run demo       # builds a gyroid-filled demo part via the REST API
-npm test           # 80 kernel/API unit tests
+## Cells
+
+A cell is a prompt and the program it compiled to. The prompt is the source; the program is a lockfile. Geometry never regenerates from the prompt on its own, only when the prompt is edited or a recompile is requested, so a prompt-authored model cannot quietly become a different part between two openings of the same file.
+
+```js
+export const params = { w: 60, d: 40, h: 24, r: 3, wall: 2 };
+
+export default ({ p, brep, q, input }) => {
+  let s = brep.box(p.w, p.d, p.h);
+  s = brep.fillet(s, q.edges(s).linear().along('z').expect(4), p.r);
+  return brep.shell(s, q.faces(s).planar().facing('+z').expect(1), p.wall);
+};
 ```
 
-Open http://localhost:4477 — the viewport live-updates (WebSocket) whenever the model changes, whether from the UI, the REST API, or Claude via MCP. The model autosaves to `data/document.json`, so state survives restarts and the UI and MCP always share one model. `CADGANG_PORT` and `CADGANG_DOC` select an alternate port/document for scratch instances.
+- **Params** are hoisted so a human can turn the numbers forever. Changing `w` re-runs the program; it never re-prompts.
+- **Cells are ordered.** Each cell's default `input` is the previous result, the running "that" in "subtract that from the body". Explicit `refs` branch the flow.
+- **Queries, not indices.** `q.edges(s).linear().along('z').expect(4)` names geometry by what it is, and `.expect(n)` fails loudly when the model stops matching the sentence.
+- **Picks.** A cell can declare `selections: {"lip": "edge"}` and park until someone clicks in the viewport; `sel.lip` then arrives as a ready-made query.
+- **Sketch cells** draw a constrained 2D profile on a canvas in the transcript and extrude, revolve or sweep it.
+- **Assertion cells** measure (volume, wall thickness, clearance, bounds) and throw when a later parameter change breaks what the prompt promised.
+- **Versions.** Every change is a version with a rendered look; revert is itself a version, so nothing is lost.
+- **Propose.** Claude can show 2–8 alternatives of one cell side by side, rendered and measured, and wait for you to choose.
 
-## Viewer & Mac app
-
-`/view` opens any STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, GLB, FBX or **DXF** file: drop it on the page, press ⌘O, or on a Mac double-click it in Finder. `mac/build.sh` builds `dist/cadgang.app`, a WKWebView shell around the same server (it adopts a dev server already on :4477); its **Default** button makes cadgang the Finder's app for every type above.
-
-- **Bodies** panel: one row per STEP body (or DXF layer); tick to hide, click a name to solo, shift-click for all. **Explode** slides bodies apart.
-- **Section**: Off/X/Y/Z, drag the cut face or the slider, **Invert** the kept side. Cuts are capped, so hollow walls read as rings.
-- **Measure** snaps to endpoints, midpoints, centres and quadrants, defaults to axis-aligned distances, reads a circle's ⌀ or an edge's length in one click, reads a cylinder's ⌀, a fillet's R or a sphere's SR from one click on the face, and measures face to face (parallel planes give the gap, anything else the closest approach). Dimensions stay on the page until clicked away or undone. **Markup** (pen, arrow, note, erase; anchored on the model and visible to Claude through `cadgang_screen`), looks (shaded, metal, plastic, glass, x-ray, normals), ortho, edges, wire, grid, **Color** (a hue per body or layer), dark theme.
-- **Undo/redo** (⌘Z / ⇧⌘Z) covers every view change and every stroke. **Right-click** opens the command menu; every button shows its hotkey on hover.
-- Rotation has no limits. Scroll rotates, shift-scroll pans, pinch zooms, double-click re-centres.
-- **DXF** drawings are paper: drag and scroll pan, two-finger spin turns in 90° steps (`[` `]` on a keyboard), **Flip** (B) turns the sheet over. Lines, polylines with bulges, circles, arcs, ellipses, splines and block inserts are drawn; text, dimensions and hatches are skipped and counted.
-- Look, edges, wire, grid, color and ortho persist across sessions.
-
-| Key | Action | Key | Action |
-|---|---|---|---|
-| F | Fit | X Y Z | Section axis (again: off) |
-| E W G O C | Edges, Wire, Grid, Ortho, Color | I / Esc | Invert section / section off |
-| L | Next look | 1–7 | Front, back, top, bottom, right, left, iso |
-| M | Measure | P A N R ⌫ | Pen, Arrow, Note, Erase, Clear markup |
-| B | Flip drawing over | [ ] | Turn 90° |
-| D | Dark / light | ⌘O ⌘Z ⇧⌘Z | Open, Undo, Redo |
-
-## The editor
-
-- **Double-click** the graph to add a block, **drag** between ports to wire, **drag** blocks to move, right-drag to pan, scroll to zoom, marquee-drag to multi-select, **⌘C/⌘V** copy/paste, **⌘Z** undo, **Arrange** for a tidy dependency layout
-- **VARS bar** — define named variables (`w = 60`); any numeric param accepts an expression (`w/2 + 3`) that re-evaluates when the variable changes
-- **STACK / SIDE** toggles the graph/viewport split between stacked and side-by-side; **DARK** toggles the theme; **COLOR** switches per-part color vs. stainless render
-- **Save / Open** stores named models server-side (`saves/`)
-- Click the footer formula to see the whole model as a nested functional expression
+The `brep` vocabulary is the Fusion Solid tab as pure functions: box cylinder sphere torus cone coil · union subtract intersect interference · extrude (twist, end scale) revolve loft sweep pipe emboss rib · polyline spline helix · hole (counterbore, countersink) thread · fillet chamfer shell offset pushPull draft split simplify · linear, circular and path patterns, mirror · planes and axes · volume area bbox centroid mass distance. Programs run in a sandboxed `vm` realm with a wall-clock budget. The full API text Claude reads is `CELL_API` in `src/mcp/cells.js`; the design is `docs/DESIGN-v2.md`.
 
 ## Claude Code integration (MCP)
 
-The repo ships a `.mcp.json`, so opening it in Claude Code auto-registers the `cadgang` MCP server. To register manually:
+The repo ships `.mcp.json` (and `.codex/config.toml`), so opening it in Claude Code registers the `cadgang` MCP server. Manually:
 
 ```bash
 claude mcp add cadgang -- node /path/to/cadgang/src/mcp/index.js
 ```
 
-The cadgang web server must be running (`npm start`). Set `CADGANG_URL` if it's not on `http://localhost:4477`.
+The server must be running (`npm start`); set `CADGANG_URL` if it is not on `http://localhost:4477`. Claude cannot see the model, so introspection replaces looking:
 
-### MCP tools
+1. `cadgang_cells_add` — the prompt and a first draft of the code
+2. `cadgang_cells_topology` — read the real faces and edges of what was built
+3. `cadgang_cells_query` — confirm a query catches what was meant before applying it
+4. `cadgang_cells_compile` / `_update` — the operation that uses it
+5. `cadgang_cells_render` — look at it
+6. `cadgang_cells_evaluate` — every cell `ok`, every assertion passing
+7. an assertion cell for what the prompt promised
 
 | Tool | What it does |
 |---|---|
-| `cadgang_list_node_types` | Discover every block type, its params and input slots |
-| `cadgang_get_document` | Read the full model graph |
-| `cadgang_create_node` / `cadgang_update_node` / `cadgang_delete_node` | Edit the graph |
-| `cadgang_set_output` | Choose which block is meshed/exported |
-| `cadgang_clear_document` | Wipe the model (destructive) |
-| `cadgang_undo` | Undo (or redo) the last model edit |
-| `cadgang_import_step` | Import a STEP/IGES/BREP file from disk as an `imported_mesh` block |
-| `cadgang_export_step` | Write an exact STEP B-rep file (refuses field geometry) |
-| `cadgang_eval_sdf` | Sample signed distances at points (thickness/clearance checks) |
-| `cadgang_mesh_stats` | Triangle count, volume, surface area, bounds, and whether the result is exact |
-| `cadgang_export_stl` | Write a binary STL to `exports/` |
-| `cadgang_render_preview` | Server-side raymarched PNG — Claude can *see* the model |
+| `cadgang_cells_add` · `_update` · `_compile` · `_delete` | Author the stack: prompt, code, params, refs |
+| `cadgang_cells_get` · `_evaluate` · `_topology` · `_query` · `_render` | Read it back: document, status and measures, faces and edges, query dry-runs, a shaded PNG |
+| `cadgang_cells_pick` · `_await_pick` | Resolve a declared selection by name, or wait for the human to click |
+| `cadgang_cells_propose` · `_await_choice` | Offer alternatives side by side and wait for the choice |
+| `cadgang_cells_history` · `_save_version` · `_revert` | Versions with notes and rendered looks |
+| `cadgang_cells_export` | Write the stack's solid to STEP (or STL) in the project folder |
+| `cadgang_screen` · `cadgang_markup_clear` | The live viewport as the user sees it with their pen, arrow and note markups drawn on, and the markups as data; clear them once acted on |
+| `cadgang_*` (v1) | `list_node_types`, `get_document`, `create/update/delete_node`, `set_output`, `undo`, `import_step`, `export_step`, `export_stl`, `eval_sdf`, `mesh_stats`, `render_preview` drive the block editor |
 
-Ask Claude Code things like: *"Build a 60×40×24 mm rounded enclosure with a 2 mm wall, fill it with a 9 mm gyroid lattice, show me a preview, and export it for printing."*
+Ask Claude Code things like: *"A 60×40×24 enclosure with a 2 mm wall and a lip for a snap lid, M3 bosses in the corners, 1.5 mm fillets everywhere a hand touches. Assert the wall never drops under 1.8 mm. Export STEP."*
 
-## The two lineages
+## Viewer & Mac app
 
-A block belongs to one of two representations, and the block's colour tells you which — blueprint blue for exact, machined metal for fields.
+`/view` opens any STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, GLB, FBX or **DXF** file: drop it on the page, press ⌘O, or on a Mac double-click it in Finder. `mac/build.sh` builds `dist/cadgang.app`, a WKWebView shell around the same server (it adopts a dev server already on :4477); its **Default** button makes cadgang the Finder's app for every type above. STEP import runs in a worker thread; a file too big for the importer says so instead of hanging.
 
-| | **B-rep (exact)** | **Fields (implicit)** |
-|---|---|---|
-| Geometry is | trimmed analytic surfaces + topology | a function `d(x,y,z)` |
-| Meshed by | OpenCascade tessellation | surface nets over a grid |
-| Exports to | **STEP** (and STL) | STL |
-| Good at | precise dimensions, real fillets, machining handoff | lattices, TPMS infill, smooth blends, drape |
-| Can't do | lattices, field blends | exact fillets, exact circles, STEP |
+- **Bodies** panel: one row per STEP body (or DXF layer); tick to hide, click a name to solo, shift-click for all. **Explode** slides bodies apart. **Color** gives each a hue.
+- **Section**: Off/X/Y/Z, drag the cut face or the slider, **Invert** the kept side. Cuts are capped, so hollow walls read as rings.
+- **Measure** snaps to endpoints, midpoints, centres and quadrants, defaults to axis-aligned distances, reads a circle's ⌀ or an edge's length in one click, reads a cylinder's ⌀, a fillet's R or a sphere's SR from one click on the face, and measures face to face (parallel planes give the gap, anything else the closest approach). Dimensions stay on the page until clicked away or undone.
+- **Markup**: pen, arrow, note, erase; anchored on the model, saved with the document, and visible to Claude through `cadgang_screen`.
+- Looks (shaded, metal, plastic, glass, x-ray, normals), ortho, edges, wire, grid, dark theme. Look, edges, wire, grid, color and ortho persist across sessions.
+- **Undo/redo** (⌘Z / ⇧⌘Z) covers every view change, dimension and stroke. **Right-click** opens the command menu; every button shows its hotkey on hover.
+- Rotation has no limits. Scroll rotates, shift-scroll pans, pinch zooms, double-click re-centres.
+- **DXF** drawings are paper: drag and scroll pan, two-finger spin turns in 90° steps (`[` `]` on a keyboard), **Flip** (B) turns the sheet over. Lines, polylines with bulges, circles, arcs, ellipses, splines and block inserts are drawn; text, dimensions and hatches are skipped and counted.
+- `?open=/abs/a.step|/abs/b.stl`, `?section=z:0.3`, `?explode=0.4` set the viewer from a URL (the shell and the tests use this).
 
-**A B-rep solid can feed any field block.** cadgang derives the distance field from the exact solid automatically, so you can fillet a part exactly and *then* fill it with a gyroid.
+| Key | Action | Key | Action |
+|---|---|---|---|
+| F | Fit | X Y Z | Section axis (again: off) |
+| E W G O C | Edges, Wire, Grid, Ortho, Color | I / Esc | Invert section / cancel pick, section off |
+| L | Next look | 1–7 | Front, back, top, bottom, right, left, iso |
+| M | Measure | P A N R ⌫ | Pen, Arrow, Note, Erase, Clear markup |
+| B | Flip drawing over | [ ] | Turn 90° |
+| D | Dark / light | ⌘O ⌘Z ⇧⌘Z | Open, Undo, Redo |
 
-**A field can never go back.** Recovering exact trimmed surfaces from a distance field is a fitting problem, not a conversion, and it fails outright on the blends and lattices fields are best at. So the moment a field block touches a shape, that branch loses its B-rep and becomes STL-only — and `export_step` refuses it with an explanation rather than writing a faceted mesh into a `.step` file that no CAD kernel will fillet.
+## The block editor (v1)
 
-Practically: **keep the whole chain in B-rep blocks for anything that has to ship as STEP**, and branch into fields at the end.
+The original cadgang: models are **graphs of blocks**, and a block belongs to one of two representations. Exact **B-rep** blocks (sketches, box, cylinder, extrude, revolve, boolean, fillet, chamfer, shell, transform) tessellate OpenCascade surfaces and export STEP. **Field** blocks (sphere, box, cylinder, torus, capsule, gyroid, schwarz_p, polyhedron, imported_mesh, smooth booleans, shell, offset, drape, arrays) evaluate signed distance fields and export STL. A B-rep solid can feed any field block; a field can never go back to B-rep, and `export_step` refuses rather than write a faceted mesh into a `.step` file. It sits in the lineage of [kokopelli](https://github.com/mkeeter/kokopelli), [Antimony](https://github.com/mkeeter/antimony), [libfive](https://libfive.com) and [nTopology](https://www.ntop.com/).
 
-## Block types
+| Raymarched preview | Gyroid lattice infill |
+|---|---|
+| ![part](docs/preview-part.png) | ![gyroid](docs/preview-gyroid.png) |
 
-### Exact (B-rep) blocks
-
-- **Sketches** — `sketch_rect` (with corner rounding), `sketch_circle`, `sketch_polygon`, `sketch_profile` (authored point list; a third number on a point rounds that corner). Each sits on a plane (`XY`/`XZ`/`YZ`/…) at an `offset`. A sketch is a 2D profile, not a solid — extrude or revolve it.
-- **Solids** — `brep_box`, `brep_cylinder`, `brep_sphere`, `brep_extrude` (with `symmetric` to centre on the sketch plane), `brep_revolve`
-- **Operations** — `brep_boolean` (union / subtract / intersect, computing the real intersection curves), `brep_fillet` (true rolling-ball fillet), `brep_chamfer`, `brep_shell`, `brep_transform`
-- **Output** — `export_step` (pass-through sink with a download button)
-
-Edge selection on `brep_fillet`/`brep_chamfer` is `all` or the edges running along `x`/`y`/`z`. Viewport edge picking is not wired up yet — see [Limitations](#limitations).
-
-### Field (implicit) blocks
-
-- **Primitives** — `sphere`, `box` (with rounding), `cylinder`, `torus`, `capsule`, `plane`, `gyroid`, `schwarz_p` (TPMS lattices), `polyhedron`, `spiky_sphere`, `imported_mesh` (STEP/IGES import), `extrude_face` (extrude a selected surface of an import)
-- **Booleans** — `union`, `intersect`, `subtract`, `smooth_union`, `smooth_intersect`, `smooth_subtract` (blended fillets)
-- **Modifiers** — `shell` (hollow to wall thickness), `offset`, `transform` (translate / rotate / scale), `drape` (vacuum-form a sheet over shapes, with smoothness control), `linear_array`, `polar_array`
-- **Output** — `export_stl` (pass-through sink with a download button; params: filename, resolution). Fed by an exact solid, it tessellates the real surfaces instead of remeshing the field — smaller and more faithful.
-
-Units are millimeters, world is Z-up. `plane`/`gyroid`/`schwarz_p` are unbounded fields — intersect them with a bounded body (that is how lattice infills are made).
-
-### Limitations
-
-Honest about what this is not, yet:
-
-- **No interactive sketcher.** Profiles are authored as numbers (`sketch_profile`'s point list), not drawn on a plane with dimensional constraints. A real sketcher needs a constraint solver — FreeCAD's `planegcs` compiled to WASM is the usual answer — and would write into this same `points` param.
-- **No viewport edge/face picking for fillets.** `brep_fillet` selects by direction, not by clicking an edge. The tessellation already ships per-face B-rep ids, so the data is there; the UI is not.
-- **`brep_revolve` is full-turn only.** Partial sweeps need a wedge cut that isn't built yet.
-- **STEP import is still tessellated** (see below), so an imported file enters the *field* lineage and cannot be filleted or re-exported as STEP. Exact B-rep import is the obvious next step — OpenCascade's `importSTEP` is already linked in.
-- **The OCCT heap creeps.** Compiling B-rep blocks grows OpenCascade's WASM heap by roughly 100 MB per 800 mesh requests and it never shrinks. cadgang forces a GC after each burst of B-rep work, which reclaims what replicad's JS wrappers hold (16 → 40 MB becomes 16 → 19 MB over 300 boolean compiles), but the remainder is inside OCCT's own allocator — collecting after *every* operation does not change it. `GET /api/health` reports `brep.heapBytes` so you can watch it; restarting the server clears it. Running the kernel in a recycled worker thread is the real fix.
-- **Fillets fail on tangent seams.** Filleting the vertical edges of an already-rounded profile asks OCCT to fillet a tangent seam and it refuses. The error says so in OCCT's own words.
-
-### STEP import
-
-Upload a `.step`/`.stp` (or IGES/BREP) file — **Import STEP** in the web UI, `POST /api/import/step`, or the `cadgang_import_step` MCP tool. The file is tessellated (WASM OpenCascade via `occt-import-js`), welded, stored as a document **asset**, and exposed as an `imported_mesh` block with an exact BVH signed-distance field. Each B-rep face of the import stays addressable as a triangle range, so surfaces are selectable in the viewport — click one to spawn an `extrude_face` block.
-
-### Drape
-
-`drape` drops a virtual sheet straight down (−Z) over its input shapes, like vacuum forming: it raycasts a top-surface heightfield at compile time, smooths it with a rolling-ball (parabolic) dilation of radius `blend`, and shells the result to `thickness`. `blend` controls how tightly the sheet wraps — 0 hugs every crease, larger values bridge gaps and round shoulders. `floor` sets where the skirt ends, `margin` how far the sheet overhangs.
+Double-click the graph to add a block, drag between ports to wire, **VARS** for named variables usable in any param expression, **Save / Open** for named models, and the footer shows the whole model as one functional formula. `npm run demo` builds a gyroid-filled part through the REST API.
 
 ## REST API
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/node-types` | Block type catalog |
-| `GET /api/document` | Model graph + revision |
-| `POST /api/nodes` · `PATCH /api/nodes/:id` · `DELETE /api/nodes/:id` | Graph editing |
-| `POST /api/document/output` | Set output block |
-| `POST /api/vars` · `DELETE /api/vars/:name` | User variables (usable in param expressions) |
-| `POST /api/eval` | Evaluate SDF at points |
-| `POST /api/undo` · `POST /api/redo` | Step the edit history (last 100 steps) |
-| `GET /api/files` · `POST /api/files/save` · `POST /api/files/load` · `DELETE /api/files/:name` | Named model save/open |
-| `POST /api/import/step?name=file.step` | Import STEP/IGES/BREP (raw body) → asset + `imported_mesh` node (`&node=id` attaches to an existing block instead) |
-| `GET /api/assets` · `GET /api/assets/:id` · `DELETE /api/assets/:id` | Imported mesh assets (`:id` returns full triangles + per-face ranges) |
-| `GET /api/mesh?resolution=90` | Surface-nets mesh (JSON) |
-| `GET /api/mesh/stats` | Stats only |
-| `GET /api/export/stl?resolution=128&file=name` | Binary STL (exact tessellation when the chain is B-rep) |
-| `GET /api/export/step?file=name` | STEP B-rep file; 400s with an explanation if the chain crossed into a field |
-| `GET /api/preview.png?yaw=-35&pitch=25&node=id` | Raymarched preview (any block, not just the output) |
+| `GET/POST/PATCH/DELETE /api/cells…` | The cell stack: add, update, compile, evaluate, render, export; `/api/cells/history` for versions, `/api/cells/options` for proposals |
+| `GET/POST /api/project` | The project folder exports land in (set when a file is opened, unless a cell document is already open) |
+| `POST /api/view/tessellate?path=…` · `GET /api/view/file?path=…` · `GET/PUT /api/view/markup` · `POST /api/view/snapshot` | Viewer: read local CAD files (desktop or loopback only), markups, the screen Claude sees |
+| `GET /api/node-types` · `GET /api/document` · `/api/nodes` · `/api/vars` · `/api/eval` · `/api/undo` · `/api/files` · `/api/import/step` · `/api/assets` · `/api/mesh` · `/api/export/stl` · `/api/export/step` · `/api/preview.png` | The v1 block editor |
+| `GET /api/health` | Version, revisions, OpenCascade heap |
 
-`ws://…/ws` broadcasts `{type: "document_changed", revision}` on every edit.
+`ws://…/ws` says hello with the server version and broadcasts `document_changed`, `cells_changed` and `markup_changed`; pages reload themselves when the server comes back newer.
 
 ## Architecture
 
 ```
 src/core/     geometry kernel — pure JS, no server dependency
-  sdf.js        merged block registry, graph compiler ({fn, bbox, brep}), bbox propagation
-  brep.js       exact B-rep kernel: OCCT/replicad lifecycle, ops, tessellation,
-                STEP I/O, shape-memory scopes, and the one-way bridge to SDF
-  brepnodes.js  exact block definitions (sketches, solids, booleans, fillets)
-  errors.js     GraphError, split out so brep.js and sdf.js can share it
-  expr.js       safe expression evaluator for variable-driven params
-  mesher.js     naive surface-nets mesher (watertight, SDF-gradient normals)
-  mesh.js       mesh utilities: welding, BVH signed distance, per-face ranges
-  step.js       STEP/IGES/BREP tessellation (WASM OpenCascade)
-  stl.js        binary STL writer
-  render.js     CPU sphere-tracer + dependency-free PNG encoder
-  document.js   persistent model document, undo history, autosave
-src/server/   Express REST API + WebSocket + static hosting
-src/mcp/      cadgang-mcp-server (stdio, @modelcontextprotocol/sdk)
-web/          Three.js viewport + node-graph editor (no build step, no framework)
+  brep.js       exact B-rep kernel: OCCT/replicad lifecycle, tessellation, STEP I/O, shape scopes
+  ops.js        the Fusion Solid tab as pure functions (shape in, new shape out)
+  cellapi.js    the vocabulary a cell program sees: brep, q, sk, assert, topology
+  cells.js      the cell document: stack, params, refs, status, evaluation
+  query.js      edge/face queries (.linear().along('z').expect(4)) and topology introspection
+  sketch.js     constrained 2D sketches; sketchdraw.js draws them
+  checks.js     assertions that measure and throw
+  sandbox.js    vm realm with a wall-clock budget
+  history.js    versions with notes and looks
+  stepworker.js STEP/IGES/BREP import in a worker thread
+  sdf.js brepnodes.js mesher.js mesh.js render.js document.js   the v1 block editor's kernel
+src/server/   Express REST API + WebSocket + static hosting; supervise.js restarts on heap growth
+src/mcp/      the MCP server (stdio); cells.js holds CELL_API, the only vocabulary Claude sees
+web/          cells.js (transcript), view.js (viewer: measure.js, dxf.js, markup.js, orbitinput.js), app.js (v1 editor)
+mac/          main.swift (WKWebView shell), Info.plist, build.sh, the Icon Composer icon
 ```
 
 ## Prior art & credits
 
-- [kokopelli](https://github.com/mkeeter/kokopelli) → [Antimony](https://github.com/mkeeter/antimony) → [libfive](https://libfive.com) — Matt Keeter's f-rep CAD tools, the reason this way of thinking about geometry exists in open source
-- [nTopology](https://www.ntop.com/) — implicit modeling at industrial scale; the gyroid-infill demo is their party trick
+- [kokopelli](https://github.com/mkeeter/kokopelli) → [Antimony](https://github.com/mkeeter/antimony) → [libfive](https://libfive.com) — Matt Keeter's f-rep CAD tools
+- [nTopology](https://www.ntop.com/) — implicit modeling at industrial scale
 - [three.js](https://threejs.org) (MIT, vendored in `web/vendor/`) · [occt-import-js](https://github.com/kovacsv/occt-import-js) (OpenCascade WASM) · [replicad](https://replicad.xyz) + [opencascade.js](https://github.com/donalffons/opencascade.js) (the B-rep kernel, MIT/LGPL) · [Space Mono](https://fonts.google.com/specimen/Space+Mono) (SIL OFL 1.1, license in `web/fonts/OFL.txt`)
 
 Built by [CW&T](https://cwandt.com) with Claude Code.
