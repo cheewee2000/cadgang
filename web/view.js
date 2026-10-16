@@ -1,5 +1,5 @@
 /**
- * cadgang · view — the fast file viewer.
+ * CADgang · view — the fast file viewer.
  *
  * No document, no cells, no kernel on this page: a file comes in (drop, ⌘O, or
  * the macOS shell handing over a Finder path), it becomes one BufferGeometry,
@@ -229,7 +229,7 @@ function finishLoad(name, ms) {
     if (m.isLine) segs += n / 2; else tris += n / 3;
   }
   $('#fileName').textContent = name;
-  document.title = `cadgang · ${name}`;
+  document.title = `CADgang · ${name}`;
   $('#measures').textContent = `${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)}`;
   $('#stats').textContent = `${model.children.length} BOD${model.children.length === 1 ? 'Y' : 'IES'} · ${segs ? `${segs.toLocaleString()} SEGS · ` : ''}${tris ? `${tris.toLocaleString()} TRIS · ` : ''}${verts.toLocaleString()} VERTS · ${ms} MS`;
   $('#drop').hidden = true; $('#loadError').textContent = '';

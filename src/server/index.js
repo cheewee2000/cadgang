@@ -1,5 +1,5 @@
 /**
- * cadgang server: the viewer page, its file routes, markups, and the screen
+ * CADgang server: the viewer page, its file routes, markups, and the screen
  * Claude sees — plus a WebSocket so open pages learn about restarts, new
  * markups and files pushed from MCP.
  *
@@ -68,4 +68,4 @@ app.use(express.static(path.join(ROOT, 'web'), { setHeaders: (res) => res.set('C
 // Pages compare this with what they loaded and reload themselves when the server came back newer.
 wss.on('connection', (ws) => ws.send(JSON.stringify({ type: 'hello', version: VERSION })));
 
-server.listen(PORT, () => console.log(`cadgang ${VERSION} at http://localhost:${PORT} (data: ${DATA})`));
+server.listen(PORT, () => console.log(`CADgang ${VERSION} at http://localhost:${PORT} (data: ${DATA})`));

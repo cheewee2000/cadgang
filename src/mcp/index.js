@@ -23,10 +23,10 @@ async function call(p, { method = 'GET', body } = {}) {
   try {
     res = await fetch(`${BASE}/api${p}`, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
   } catch (e) {
-    throw new Error(`Cannot reach cadgang at ${BASE} (${e.cause?.code || e.message}). Open the cadgang app, or run 'npm start' in the repo, or set CADGANG_URL.`);
+    throw new Error(`Cannot reach CADgang at ${BASE} (${e.cause?.code || e.message}). Open the CADgang app, or run 'npm start' in the repo, or set CADGANG_URL.`);
   }
   const data = (res.headers.get('content-type') || '').includes('json') ? await res.json() : { error: await res.text() };
-  if (!res.ok) throw new Error(data.error || `cadgang API error (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(data.error || `CADgang API error (HTTP ${res.status})`);
   return data;
 }
 const ok = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }], structuredContent: obj });
@@ -38,9 +38,9 @@ server.registerTool(
   'cadgang_screen',
   {
     title: 'See what the user sees',
-    description: `The live cadgang viewport as the user sees it, with their markups drawn on, plus the markups as data.
+    description: `The live CADgang viewport as the user sees it, with their markups drawn on, plus the markups as data.
 
-The user never has to take a screenshot: the open cadgang window renders itself and posts the PNG here. Call this whenever they point at something — "this", "here", "the edge I circled", "the hole I noted" — or to check what is on their screen.
+The user never has to take a screenshot: the open CADgang window renders itself and posts the PNG here. Call this whenever they point at something — "this", "here", "the edge I circled", "the hole I noted" — or to check what is on their screen.
 
 Markups are anchored on the model in 3D (points are world coordinates in mm), so a stroke or an arrow tells you WHERE on the part; notes carry text. Kinds: 'pen' (points: a polyline), 'arrow' (points: [tail, head]), 'note' (points: [anchor], text). The subject is the file path (or dropped file name) on screen; the camera is yaw/pitch/dist/target.
 
@@ -57,7 +57,7 @@ Args:
       const text = { fresh: got, at: screen?.at ?? null, subject: screen?.subject ?? null, camera: screen?.camera ?? null, markups };
       const content = [{ type: 'text', text: JSON.stringify(text, null, 2) }];
       if (screen?.png) content.push({ type: 'image', data: screen.png, mimeType: 'image/png' });
-      else content[0].text += '\n\nNo window has posted a frame yet — open the cadgang app (or /view in a browser) with a file.';
+      else content[0].text += '\n\nNo window has posted a frame yet — open the CADgang app (or /view in a browser) with a file.';
       return { content };
     } catch (e) { return fail(e); }
   }
@@ -78,7 +78,7 @@ server.registerTool(
   'cadgang_open',
   {
     title: 'Open files in the viewer',
-    description: `Open one or more CAD files in the cadgang window: STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, GLB, FBX or DXF. Several files stack into one scene. Paths must be absolute and on the machine running cadgang.`,
+    description: `Open one or more CAD files in the CADgang window: STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, GLB, FBX or DXF. Several files stack into one scene. Paths must be absolute and on the machine running CADgang.`,
     inputSchema: { paths: z.array(z.string()).min(1) },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },

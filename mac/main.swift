@@ -56,7 +56,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1400, height: 900),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
-        window.title = "cadgang"
+        window.title = "CADgang"
         window.contentView = web
         window.setFrameAutosaveName("cadgang.main")
         window.center()
@@ -115,7 +115,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     func load() { web.load(URLRequest(url: BASE.appendingPathComponent("view"))) }
 
     func fail(_ msg: String) {
-        let a = NSAlert(); a.messageText = "cadgang"; a.informativeText = msg; a.runModal()
+        let a = NSAlert(); a.messageText = "CADgang"; a.informativeText = msg; a.runModal()
         NSApp.terminate(nil)
     }
 
@@ -156,7 +156,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
             group.enter(); sub.notify(queue: .main) { if ok == 0 { failed.append(ext) }; group.leave() }
         }
         group.notify(queue: .main) {
-            let msg = failed.isEmpty ? "cadgang is now the default app for \(EXTS.count) CAD file types"
+            let msg = failed.isEmpty ? "CADgang is now the default app for \(EXTS.count) CAD file types"
                                      : "Could not take over: \(failed.joined(separator: ", "))"
             let json = String(data: try! JSONSerialization.data(withJSONObject: [msg, !failed.isEmpty]), encoding: .utf8)!
             self.web.evaluateJavaScript("window.cadgangNotify && cadgangNotify(...\(json))")
@@ -200,12 +200,12 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         let main = NSMenu()
         let app = NSMenuItem(); main.addItem(app)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About cadgang", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "About CADgang", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         let check = NSMenuItem(title: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         check.target = updater
         appMenu.addItem(check)
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Quit cadgang", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Quit CADgang", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         app.submenu = appMenu
 
         let file = NSMenuItem(); main.addItem(file)

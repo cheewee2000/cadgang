@@ -1,12 +1,12 @@
-# cadgang
+# CADgang
 
 A CAD viewer and markup tool. Open a STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, GLB, FBX or DXF file, cut it, measure it, draw on it. The markups are anchored on the model and Claude Code can see them over MCP, so "the edge I circled" means something. Runs as a web page or as a Mac app that updates itself.
 
-Earlier versions were a CAD authoring tool (a node graph of B-rep and distance-field blocks, then prompt-authored cells driving OpenCascade). That code is tagged `v0.8.0-alpha.28-full`; from 0.9 cadgang is the viewer.
+Earlier versions were a CAD authoring tool (a node graph of B-rep and distance-field blocks, then prompt-authored cells driving OpenCascade). That code is tagged `v0.8.0-alpha.28-full`; from 0.9 CADgang is the viewer.
 
 ## Mac app
 
-Download the latest `cadgang-<version>.zip` from the [releases](https://github.com/cheewee2000/cadgang/releases), unzip, drag to Applications. The app checks for updates on its own (Sparkle; **cadgang → Check for Updates…** does it now). Press **Default** in the toolbar once and Finder opens every supported file type in cadgang. Files open by double-click, by drop anywhere on the window, or with ⌘O. If a dev server is already on port 4477, the app adopts it.
+Download the latest `cadgang-<version>.zip` from the [releases](https://github.com/cheewee2000/cadgang/releases), unzip, drag to Applications. The app checks for updates on its own (Sparkle; **CADgang → Check for Updates…** does it now). Press **Default** in the toolbar once and Finder opens every supported file type in CADgang. Files open by double-click, by drop anywhere on the window, or with ⌘O. If a dev server is already on port 4477, the app adopts it.
 
 To build it yourself: `npm install && npm run build` → `dist/cadgang.app` (Swift WKWebView shell, bundled node, Sparkle). `npm run release` builds, signs the zip for Sparkle, publishes the zip and appcast to the VPS, and creates the GitHub release.
 

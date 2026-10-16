@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION=$(node -p "require('./package.json').version")
-NOTES="${1:-cadgang $VERSION}"
+NOTES="${1:-CADgang $VERSION}"
 ZIP="dist/cadgang-$VERSION.zip"
 VPS=cwandt@vps52023.dreamhostps.com
 URL="https://www.experiments.cwandt.com/releases"
@@ -21,9 +21,9 @@ cat > dist/cadgang.xml <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>cadgang</title>
+    <title>CADgang</title>
     <item>
-      <title>cadgang $VERSION</title>
+      <title>CADgang $VERSION</title>
       <pubDate>$(date -R)</pubDate>
       <sparkle:version>$VERSION</sparkle:version>
       <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
@@ -40,6 +40,6 @@ curl -sfI "$URL/cadgang.xml" >/dev/null && echo "appcast live: $URL/cadgang.xml"
 if gh release view "v$VERSION" >/dev/null 2>&1; then
   gh release upload "v$VERSION" "$ZIP" --clobber
 else
-  gh release create "v$VERSION" "$ZIP" --title "cadgang $VERSION" --notes "$NOTES" --latest
+  gh release create "v$VERSION" "$ZIP" --title "CADgang $VERSION" --notes "$NOTES" --latest
 fi
 echo "released $VERSION: $URL/cadgang-$VERSION.zip"
