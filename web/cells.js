@@ -717,6 +717,64 @@ function postSnapshot() {
 fetch('/api/view/markup').then((r) => r.json()).then((d) => markup.load(d.markups)).catch(() => {});
 (function labels() { markup.projectLabels(); requestAnimationFrame(labels); })();
 
+// ------------------------------------------------------------------ options
+
+/**
+ * Claude proposed several versions of a cell; here the user looks and picks.
+ * Each card is a rendered look; clicking it shows that option's geometry in
+ * the viewport (same mechanism as looking at an old version); CHOOSE applies.
+ */
+let viewingOption = null;
+
+async function renderOptions() {
+  const bar = $('#optionsBar');
+  let set = null;
+  try { set = (await api('/options')).set; } catch { set = null; }
+  if (!set || set.chosen !== null) {
+    if (!bar.hidden) { bar.hidden = true; if (viewingOption !== null) { viewingOption = null; if (lastMesh) setGeometry(lastMesh); } }
+    return;
+  }
+  bar.hidden = false;
+  bar.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'opt-head';
+  head.innerHTML = `<span>${set.options.length} OPTIONS${set.cell ? ` FOR '${set.cell}'` : ''} — CLICK TO LOOK, CHOOSE TO APPLY</span>`;
+  const dismiss = document.createElement('button'); dismiss.className = 'ghost'; dismiss.textContent = 'DISMISS';
+  dismiss.onclick = async () => { try { await api('/options', { method: 'DELETE' }); } catch (e) { say(e.message, true); } };
+  head.appendChild(dismiss);
+  bar.appendChild(head);
+  const row = document.createElement('div');
+  row.className = 'opt-row';
+  for (const o of set.options) {
+    const card = document.createElement('div');
+    card.className = 'opt' + (viewingOption === o.i ? ' viewing' : '');
+    const m = o.measures;
+    card.innerHTML = `
+      <img src="${API}/options/${o.i}.png?${set.id}" alt="" onerror="this.style.visibility='hidden'">
+      <div class="opt-label"></div>
+      ${o.error ? `<div class="opt-err"></div>` : `<div class="opt-meas">${m ? `vol ${fmt(m.volume)} · ${m.bbox.size.map(fmt).join(' × ')}` : ''}</div>`}
+      <button class="ghost" ${o.error ? 'disabled' : ''}>CHOOSE</button>`;
+    card.querySelector('.opt-label').textContent = o.label;
+    if (o.error) card.querySelector('.opt-err').textContent = o.error;
+    card.onclick = async (e) => {
+      if (e.target.tagName === 'BUTTON') return;
+      if (o.error) return;
+      try {
+        const mesh = await api(`/options/${o.i}/mesh`);
+        viewingOption = o.i;
+        setGeometry(mesh);
+        for (const c of row.children) c.classList.toggle('viewing', c === card);
+      } catch (err) { say(err.message, true); }
+    };
+    card.querySelector('button').onclick = async () => {
+      try { const r = await api('/options/choose', { method: 'POST', body: { i: o.i } }); say(`chose ${r.label}`); viewingOption = null; }
+      catch (err) { say(err.message, true); }
+    };
+    row.appendChild(card);
+  }
+  bar.appendChild(row);
+}
+
 // ------------------------------------------------------------------ history
 
 /**
@@ -874,6 +932,7 @@ async function refresh({ structural = true } = {}) {
 
   await renderGraph();
   renderHistory();
+  renderOptions();
 
   // A failed assertion is a property of the DOCUMENT, so it is said once at the
   // top of the stack rather than only inside the cell that noticed.
@@ -898,7 +957,7 @@ async function refresh({ structural = true } = {}) {
     const mesh = await api(pick ? `/mesh?cell=${encodeURIComponent(pick.source)}` : '/mesh');
     lastMesh = mesh;
     // Looking at an old version: keep showing it, but have the current mesh ready for BACK.
-    if (viewingVersion === null) setGeometry(mesh);
+    if (viewingVersion === null && viewingOption === null) setGeometry(mesh);
     frame(m?.bbox);
     // When the newest cell is broken the server falls back to the deepest one
     // that built. Say so — a viewport quietly showing an older state is worse
@@ -967,6 +1026,7 @@ function connect() {
     // remount every canvas on the page.
     if (msg.type === 'cells_changed' && msg.revision !== doc.revision) refresh({ structural: false });
     if (msg.type === 'history_changed') renderHistory();
+    if (msg.type === 'options_changed') renderOptions();
     if (msg.type === 'snapshot_request') postSnapshot();
     if (msg.type === 'markup_changed') fetch('/api/view/markup').then((r) => r.json()).then((d) => markup.load(d.markups)).catch(() => {});
   };

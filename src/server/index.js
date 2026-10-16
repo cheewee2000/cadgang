@@ -17,6 +17,7 @@ import { apiRouter } from './api.js';
 import { cellsRouter } from './cells.js';
 import { viewRouter } from './view.js';
 import { historyRouter } from './history.js';
+import { optionsRouter } from './options.js';
 import { initBrep } from '../core/brep.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -74,6 +75,7 @@ app.use('/api/cells/history', historyRouter(cells, {
   dirOf: () => path.join(path.dirname(cells.filePath || CELLS_PATH), 'history'),
   modelOf: cellsApi.modelOf, broadcast,
 }));
+app.use('/api/cells/options', optionsRouter(cells, { modelOf: cellsApi.modelOf, broadcast }));
 app.use('/api/cells', cellsApi);
 app.use('/api/view', viewRouter({ dirOf: () => path.dirname(cells.filePath || CELLS_PATH), broadcast }));
 // A body that is not JSON (a literal NaN, a stray comma) is a client error in

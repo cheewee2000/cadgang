@@ -613,6 +613,43 @@ Args:
   );
 
   server.registerTool(
+    'cadgang_cells_propose',
+    {
+      title: 'Propose options for the user to pick from',
+      description: `Show the user 2–8 alternative versions of one cell side by side — each rendered, measured, viewable in 3D — and let THEM choose. Nothing changes in the stack until they pick.
+
+Use it when a prompt has real design latitude ("a handle", "some way to mount this", "rounder"): write each option as a complete cell program (same shape as cadgang_cells_add: export default ({ brep, p, input, ... }) => ...), give each a short label that says what is different, and propose. Then call cadgang_cells_await_choice to learn which one they took. An option that fails to build comes back with its error so you can fix it and propose again; the user cannot pick a broken one.
+
+Args:
+  - cell: the cell to replace (its code/prompt/params become the chosen option). Omit to add a NEW cell with the chosen option (give it the id in 'cell' if you want one — if that id does not exist yet, it is created).
+  - options: [{label, prompt?, code, params?}]`,
+      inputSchema: {
+        cell: z.string().optional(),
+        options: z.array(z.object({
+          label: z.string().max(80), prompt: z.string().optional(), code: z.string(), params: z.record(z.any()).optional(),
+        })).min(2).max(8),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ cell, options }) => {
+      try { return ok(await call('/cells/options', { method: 'POST', body: { cell, options } })); } catch (e) { return fail(e); }
+    }
+  );
+
+  server.registerTool(
+    'cadgang_cells_await_choice',
+    {
+      title: 'Wait for the user to choose an option',
+      description: `Block up to waitSeconds (max 60) until the user chooses one of the proposed options or dismisses the set. Returns the set with 'chosen' (the index) once picked, set: null if dismissed, timedOut: true if neither happened — then tell the user what you are waiting for rather than looping.`,
+      inputSchema: { waitSeconds: z.number().min(0).max(60).default(30) },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ waitSeconds }) => {
+      try { return ok(await call(`/cells/options${waitSeconds ? `?wait=${waitSeconds}` : ''}`)); } catch (e) { return fail(e); }
+    }
+  );
+
+  server.registerTool(
     'cadgang_cells_export',
     {
       title: 'Export the cell stack',
