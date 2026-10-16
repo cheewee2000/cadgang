@@ -84,9 +84,9 @@ if (project.dir) setProject(project.dir);
 app.get('/api/project', (req, res) => res.json({ dir: project.dir, cells: cells.filePath }));
 app.post('/api/project', (req, res, next) => {
   try {
-    // ifUnset (the MCP server on connect): never swap a document someone is
-    // working in for the folder Claude Code happened to start in.
-    if (req.body?.ifUnset && project.dir && cells.cells.length) {
+    // ifUnset (the MCP server on connect, the viewer opening a file): never
+    // swap a document someone is working in for a folder that merely came up.
+    if (req.body?.ifUnset && cells.cells.length) {
       return res.json({ dir: project.dir, cells: cells.filePath, kept: true });
     }
     setProject(String(req.body?.dir || '')); res.json({ dir: project.dir, cells: cells.filePath });

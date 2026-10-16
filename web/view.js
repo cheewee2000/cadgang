@@ -446,9 +446,10 @@ async function openBuffers(files) {
 window.cadgangOpen = async function cadgangOpen(paths) {
   const t0 = performance.now();
   clearModel();
-  // The folder of the opened file becomes the project folder: exports land beside it.
+  // The folder of the opened file becomes the project folder (exports land beside it) —
+  // unless a cell document is already open; viewing a stray STEP must not swap that.
   const dir = String([].concat(paths)[0]).replace(/\/[^/]*$/, '') || '/';
-  fetch('/api/project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir }) }).catch(() => {});
+  fetch('/api/project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir, ifUnset: true }) }).catch(() => {});
   let shown = 0, label = '';
   for (const p of [].concat(paths)) {
     const name = p.split('/').pop();

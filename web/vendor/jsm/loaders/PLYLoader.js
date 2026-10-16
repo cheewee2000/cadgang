@@ -507,6 +507,16 @@ class PLYLoader extends Loader {
 					buffer.indices.push( vertex_indices[ 0 ], vertex_indices[ 1 ], vertex_indices[ 3 ] );
 					buffer.indices.push( vertex_indices[ 1 ], vertex_indices[ 2 ], vertex_indices[ 3 ] );
 
+				} else if ( vertex_indices.length > 4 ) {
+
+					// cadgang: fan-triangulate n-gons instead of dropping them (Blender writes a
+					// cylinder cap as one 48-gon; upstream three.js silently loses such faces).
+					for ( let k = 1; k < vertex_indices.length - 1; k ++ ) {
+
+						buffer.indices.push( vertex_indices[ 0 ], vertex_indices[ k ], vertex_indices[ k + 1 ] );
+
+					}
+
 				}
 
 				// face colors
