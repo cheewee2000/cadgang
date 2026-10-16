@@ -24,8 +24,6 @@
       <span class="project-name" id="fileName" title="Open a file: drop it here, ⌘O, or double-click it in Finder">view</span>
     </div>
     <div class="toolbar">
-      <a href="/cells" class="ghost linkbtn" title="The cell transcript (prompt-native CAD)">Cells</a>
-      <span class="sep"></span>
       <button id="openBtn" class="ghost" title="Open a file (⌘O)">Open</button>
       <input id="fileInput" type="file" multiple hidden
         accept=".step,.stp,.iges,.igs,.brep,.stl,.obj,.ply,.3mf,.gltf,.glb,.fbx" />
@@ -35,14 +33,14 @@
       <button id="wireBtn" class="ghost" title="Wireframe (W)">Wire</button>
       <button id="gridBtn" class="ghost on" title="Grid (G)">Grid</button>
       <button id="orthoBtn" class="ghost" title="Orthographic (O)">Ortho</button>
-      <select id="look" title="Render preset">
-        <option value="shaded">shaded</option><option value="metal">metal</option><option value="plastic">plastic</option>
-        <option value="glass">glass</option><option value="xray">x-ray</option><option value="normals">normals</option>
+      <select id="look" class="ghost" title="Render preset">
+        <option value="shaded">Shaded</option><option value="metal">Metal</option><option value="plastic">Plastic</option>
+        <option value="glass">Glass</option><option value="xray">X-ray</option><option value="normals">Normals</option>
       </select>
       <span class="sep"></span>
       <button id="measureBtn" class="ghost" title="Measure two points (M, Esc to stop)">Measure</button>
       <span class="sep"></span>
-      <span class="sect" id="sectAxis" data-axis="" title="Section plane: pick an axis, slide it, flip the kept side">Section
+      <span class="sect" id="sectAxis" data-axis="" title="Section plane: pick an axis, slide it or drag the cut face, flip the kept side">Section
         <button class="ghost on" data-sect="">Off</button><button class="ghost" data-sect="x">X</button><button class="ghost" data-sect="y">Y</button><button class="ghost" data-sect="z">Z</button>
         <input id="sectPos" type="range" min="0" max="1000" value="500" disabled />
         <button id="sectFlip" class="ghost" title="Flip which side is kept" disabled>Flip</button>

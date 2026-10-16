@@ -257,12 +257,23 @@ function setView(n) { const v = VIEWS[n]; if (v) { orbit.yaw = v[0]; orbit.pitch
 let drag = null;
 renderer.domElement.addEventListener('pointerdown', (e) => {
   drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey, downX: e.clientX, downY: e.clientY, click: e.button === 0 };
+  if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
   renderer.domElement.setPointerCapture(e.pointerId);
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
-  if (!drag) return;
+  if (!drag) { renderer.domElement.classList.toggle('oncap', onCap(e)); return; }
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.x = e.clientX; drag.y = e.clientY;
+  if (drag.sect) {
+    // slide the plane along its axis by the pointer's travel projected onto that axis on screen
+    const { sx, sy } = drag.sect;
+    const i = 'xyz'.indexOf(section.axis);
+    const lo = bbox.min.getComponent(i), hi = bbox.max.getComponent(i);
+    const at = lo + (hi - lo) * ($('#sectPos').value / 1000) + dx * sx + dy * sy;
+    $('#sectPos').value = Math.round(THREE.MathUtils.clamp((at - lo) / (hi - lo), 0, 1) * 1000);
+    updateSection();
+    return;
+  }
   if (drag.pan) {
     const k = orbit.dist * 0.0015;
     const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
@@ -285,6 +296,29 @@ function hitAt(e) {
   return raycaster.intersectObjects(model.children, false)[0]?.point ?? null;
 }
 attachOrbitInput(renderer.domElement, { orbit, getCamera: () => camera, THREE, hitAt });
+
+// Is the pointer over a cut face? The first hit on the kept side of the plane
+// being a back face means the ray entered the solid through the cut.
+function onCap(e) {
+  if (!section.axis || !bbox) return false;
+  const r = renderer.domElement.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const hit = raycaster.intersectObjects(model.children, true).find((h) => h.object.visible && h.object.parent.visible && section.plane.distanceToPoint(h.point) > -1e-6);
+  return !!hit && hit.object.material === capMaterial;
+}
+// World units the plane moves per pixel of pointer travel in x and y: one unit
+// along the axis, projected to screen at the grabbed cap point, then inverted.
+// ponytail: onCap raycasts every hover; a BVH is the upgrade if huge models drag.
+function sectionScreenAxis(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  const i = 'xyz'.indexOf(section.axis);
+  const p0 = raycaster.ray.intersectPlane(section.plane, new THREE.Vector3()) ?? orbit.target.clone(); // raycaster set by onCap
+  const p1 = p0.clone(); p1.setComponent(i, p1.getComponent(i) + 1);
+  const a = p0.project(camera), b = p1.project(camera);
+  const sx = (b.x - a.x) * r.width / 2, sy = -(b.y - a.y) * r.height / 2;
+  const len2 = sx * sx + sy * sy || 1;
+  return { sx: sx / len2, sy: sy / len2 };
+}
 
 // ------------------------------------------------------------------ section
 
