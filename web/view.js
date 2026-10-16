@@ -187,6 +187,7 @@ function finishLoad(name, ms) {
   const box = new THREE.Box3().setFromObject(model);
   if (box.isEmpty()) { say(`${name}: nothing to show`, true); return; }
   bbox = box;
+  history.list = []; history.i = -1; queueMicrotask(commit);
   const size = box.getSize(new THREE.Vector3());
   let tris = 0, verts = 0;
   for (const m of model.children) {
@@ -285,7 +286,10 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   }
 });
 renderer.domElement.addEventListener('pointerup', (e) => {
-  if (drag?.click && measure.on && Math.hypot(e.clientX - drag.downX, e.clientY - drag.downY) < 4) measureClick(e);
+  const still = drag && Math.hypot(e.clientX - drag.downX, e.clientY - drag.downY) < 4;
+  if (drag?.click && measure.on && still) measureClick(e);
+  if (e.button === 2 && still) showMenu(e.clientX, e.clientY);
+  if (drag?.sect) commit();
   drag = null;
 });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -577,19 +581,6 @@ function projectLabels() {
     l.hidden = v.z > 1;
   }
 }
-window.addEventListener('keydown', (e) => {
-  if (e.target.matches('input,select,textarea')) return;
-  if (e.metaKey && e.key === 'o') { e.preventDefault(); $('#fileInput').click(); return; }
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key === 'f') fit();
-  else if (e.key === 'e') toggle('edges', '#edgesBtn');
-  else if (e.key === 'w') toggle('wire', '#wireBtn');
-  else if (e.key === 'g') toggle('grid', '#gridBtn');
-  else if (e.key === 'o') setOrtho(!ui.ortho);
-  else if (e.key === 'm') setMeasure(!measure.on);
-  else if (e.key === 'Escape') setMeasure(false);
-  else if (VIEWS[e.key]) setView(e.key);
-});
 
 // ------------------------------------------------------------------- theme
 
@@ -611,15 +602,16 @@ applyTheme(theme);
 const markup = createMarkup({
   THREE, renderer, scene, orbit, layer: $('#markupLayer'), tools: $('#markupTools'),
   getCamera: () => camera, getTargets: () => model.children,
-  onChange: (items) => {
-    clearTimeout(markupTimer);
-    markupTimer = setTimeout(() => {
-      api('/markup', { method: 'PUT', body: { markups: items } }).catch((e) => say(e.message, true));
-      postSnapshot();
-    }, 400);
-  },
+  onChange: (items) => { markupChanged(items); commit(); },
 });
 let markupTimer = null;
+function markupChanged(items) {
+  clearTimeout(markupTimer);
+  markupTimer = setTimeout(() => {
+    api('/markup', { method: 'PUT', body: { markups: items } }).catch((e) => say(e.message, true));
+    postSnapshot();
+  }, 400);
+}
 let snapshotTimer = null;
 /** Post what is on screen; coalesced, since a stroke is many change events. */
 function postSnapshot() {
@@ -632,7 +624,7 @@ function postSnapshot() {
     } catch {}
   }, 150);
 }
-fetch('/api/view/markup').then((r) => r.json()).then((d) => markup.load(d.markups)).catch(() => {});
+fetch('/api/view/markup').then((r) => r.json()).then((d) => { markup.load(d.markups); commit(); }).catch(() => {});
 
 // The server restarts under the app (a deploy, the heap watchdog); reconnect, and when
 // it comes back as a NEWER version reload so the page is never older than its server.
@@ -643,7 +635,7 @@ let pageVersion = null;
     const msg = JSON.parse(ev.data);
     if (msg.type === 'hello' && msg.version) { if (pageVersion && pageVersion !== msg.version) location.reload(); pageVersion = msg.version; }
     if (msg.type === 'snapshot_request') postSnapshot();
-    if (msg.type === 'markup_changed') fetch('/api/view/markup').then((r) => r.json()).then((d) => markup.load(d.markups)).catch(() => {});
+    if (msg.type === 'markup_changed') fetch('/api/view/markup').then((r) => r.json()).then((d) => { markup.load(d.markups); commit(); }).catch(() => {});
   };
   ws.onclose = () => setTimeout(connect, 1500);
 })();
@@ -683,3 +675,103 @@ if (openArg) window.cadgangOpen(openArg.split('|')).then(() => {
   const ex = parseFloat(params.get('explode'));
   if (ex > 0) { $('#explode').value = Math.round(ex * 100); applyExplode(); }
 });
+
+// ------------------------------------------------------------- commands
+// One table drives the hotkeys, the right-click menu and the hover tips.
+
+const CMDS = [
+  { key: 'f', label: 'Fit', run: fit, btn: '#fitBtn' },
+  { key: 'e', label: 'Edges', run: () => toggle('edges', '#edgesBtn'), btn: '#edgesBtn', on: () => ui.edges },
+  { key: 'w', label: 'Wireframe', run: () => toggle('wire', '#wireBtn'), btn: '#wireBtn', on: () => ui.wire },
+  { key: 'g', label: 'Grid', run: () => toggle('grid', '#gridBtn'), btn: '#gridBtn', on: () => ui.grid },
+  { key: 'o', label: 'Orthographic', run: () => setOrtho(!ui.ortho), btn: '#orthoBtn', on: () => ui.ortho },
+  { key: 'l', label: 'Next look', btn: '#look', run: () => { const s = $('#look'); s.selectedIndex = (s.selectedIndex + 1) % s.options.length; s.dispatchEvent(new Event('change', { bubbles: true })); } },
+  { key: 'm', label: 'Measure', run: () => setMeasure(!measure.on), btn: '#measureBtn', on: () => measure.on },
+  { sep: true },
+  ...['x', 'y', 'z'].map((a) => ({ key: a, label: `Section ${a.toUpperCase()}`, btn: `[data-sect="${a}"]`, run: () => setSectionAxis(section.axis === a ? '' : a), on: () => section.axis === a })),
+  { key: 'i', label: 'Flip section', btn: '#sectFlip', run: () => { if (section.axis) { section.flip *= -1; updateSection(); } } },
+  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { setSectionAxis(''); setMeasure(false); } },
+  { sep: true },
+  ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
+  { sep: true },
+  { key: 'd', label: 'Dark / light', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.theme === 'dark' },
+  { key: 'o', meta: true, label: 'Open…', btn: '#openBtn', run: () => $('#fileInput').click() },
+  { key: 'z', meta: true, label: 'Undo', run: undo },
+  { key: 'z', meta: true, shift: true, label: 'Redo', run: redo },
+];
+const keyLabel = (c) => (c.shift ? '⇧' : '') + (c.meta ? '⌘' : '') + (c.key === 'Escape' ? 'Esc' : c.key.toUpperCase());
+
+window.addEventListener('keydown', (e) => {
+  if (e.target.matches('input,select,textarea') || e.altKey) return;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const c = CMDS.find((c) => c.key === key && !!c.meta === (e.metaKey || e.ctrlKey) && !!c.shift === e.shiftKey);
+  if (!c) return;
+  e.preventDefault(); hideMenu(); c.run(); commit();
+});
+
+// --- undo: a snapshot of the view state after every action; ⌘Z walks back.
+// ponytail: whole-state JSON snapshots, not deltas — the state is a few hundred bytes.
+const history = { list: [], i: -1 };
+function snap() {
+  return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ortho: ui.ortho,
+    section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value,
+    bodies: model.children.map((m) => m.visible), markup: markup.items });
+}
+function commit() {
+  const s = snap();
+  if (s === history.list[history.i]) return;
+  history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
+}
+function apply(s) {
+  const st = JSON.parse(s);
+  if (st.look !== ui.look) { ui.look = $('#look').value = st.look; for (const m of model.children) styleMesh(m); }
+  for (const k of ['edges', 'wire', 'grid']) if (ui[k] !== st[k]) toggle(k, `#${k}Btn`);
+  if (ui.ortho !== st.ortho) setOrtho(st.ortho);
+  $('#sectPos').value = st.section.pos; section.flip = st.section.flip; setSectionAxis(st.section.axis);
+  $('#explode').value = st.explode; applyExplode();
+  model.children.forEach((m, i) => setBodyVisible(m, st.bodies[i] ?? true));
+  [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.checked = model.children[i]?.visible ?? true; });
+  if (JSON.stringify(markup.items) !== JSON.stringify(st.markup)) { markup.load(st.markup); markupChanged(st.markup); }
+}
+function undo() { if (history.i > 0) apply(history.list[--history.i]); }
+function redo() { if (history.i < history.list.length - 1) apply(history.list[++history.i]); }
+document.addEventListener('click', commit);   // after every button handler has run
+document.addEventListener('change', commit);  // sliders on release, selects, body ticks
+
+// --- right-click menu
+const menu = Object.assign(document.createElement('div'), { id: 'ctx', hidden: true });
+document.body.appendChild(menu);
+function showMenu(x, y) {
+  menu.replaceChildren(...CMDS.map((c) => {
+    if (c.sep) return document.createElement('hr');
+    const b = document.createElement('button');
+    b.className = 'ghost' + (c.on?.() ? ' on' : '');
+    b.append(Object.assign(document.createElement('span'), { textContent: c.label }), Object.assign(document.createElement('kbd'), { textContent: keyLabel(c) }));
+    b.addEventListener('click', () => { hideMenu(); c.run(); });
+    return b;
+  }));
+  menu.hidden = false;
+  menu.style.left = `${Math.min(x, innerWidth - menu.offsetWidth - 8)}px`;
+  menu.style.top = `${Math.min(y, innerHeight - menu.offsetHeight - 8)}px`;
+}
+function hideMenu() { menu.hidden = true; }
+document.addEventListener('pointerdown', (e) => { if (!menu.contains(e.target)) hideMenu(); });
+
+// --- hover tips: the element's title, shown at once and with its hotkey
+const tip = Object.assign(document.createElement('div'), { id: 'tip', hidden: true });
+document.body.appendChild(tip);
+for (const c of CMDS) {
+  const el = c.btn && $(c.btn);
+  if (el) { el.dataset.tip = `${(el.title || c.label).replace(/\s*\([^)]*\)\s*$/, '')} · ${keyLabel(c)}`; el.removeAttribute('title'); }
+}
+document.addEventListener('pointerover', (e) => {
+  const el = e.target.closest?.('[data-tip],[title]');
+  if (!el) { tip.hidden = true; return; }
+  if (el.title) { el.dataset.tip = el.title; el.removeAttribute('title'); }
+  tip.textContent = el.dataset.tip; tip.hidden = false;
+  const r = el.getBoundingClientRect();
+  tip.style.left = `${Math.max(8, Math.min(r.left, innerWidth - tip.offsetWidth - 8))}px`;
+  tip.style.top = `${r.bottom + 6}px`;
+});
+document.addEventListener('pointerout', (e) => { if (!e.relatedTarget?.closest?.('[data-tip],[title]')) tip.hidden = true; });
+document.addEventListener('pointerdown', () => { tip.hidden = true; });
