@@ -39,5 +39,5 @@ test('favicons and the iconset are real PNGs at the sizes the pages link', () =>
     assert.ok(head.equals(PNG), `${p} is a PNG`);
   }
   assert.ok(fs.readFileSync(at('web/favicon.ico')).length > 1000);
-  for (const page of ['web/view.html', 'web/cells.html']) assert.match(fs.readFileSync(at(page), 'utf8'), /apple-touch-icon\.png/);
+  for (const page of ['web/view.html']) assert.match(fs.readFileSync(at(page), 'utf8'), /apple-touch-icon\.png/);
 });

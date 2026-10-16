@@ -10,12 +10,13 @@
 import Cocoa
 import WebKit
 import UniformTypeIdentifiers
+import Sparkle
 
 let PORT = 4477
 let BASE = URL(string: "http://127.0.0.1:\(PORT)")!
 let EXTS = ["step", "stp", "iges", "igs", "brep", "stl", "obj", "ply", "3mf", "gltf", "glb", "fbx", "dxf"]
 
-/// Files dropped ANYWHERE in the window (toolbar, cells page, canvas) open like a Finder
+/// Files dropped ANYWHERE in the window (toolbar, canvas) open like a Finder
 /// double-click. Left to WebKit, a file drop outside the page's own drop zone did nothing.
 final class DropWebView: WKWebView {
     var onFiles: (([URL]) -> Void)?
@@ -36,6 +37,8 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     var window: NSWindow!
     var web: DropWebView!
     var node: Process?
+    // Sparkle: checks the appcast in Info.plist (SUFeedURL), verifies with SUPublicEDKey, swaps the app in place.
+    let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     var ready = false
     var pending: [String] = []
 
@@ -76,13 +79,11 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
             p.arguments = [res.appendingPathComponent("app/src/server/supervise.js").path]
             let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("cadgang")
-            try? FileManager.default.createDirectory(at: support.appendingPathComponent("exports"), withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
             var env = ProcessInfo.processInfo.environment
             env["CADGANG_DESKTOP"] = "1"
             env["CADGANG_PORT"] = String(PORT)
-            env["CADGANG_DOC"] = support.appendingPathComponent("document.json").path
-            env["CADGANG_CELLS"] = support.appendingPathComponent("cells.json").path
-            env["CADGANG_EXPORTS"] = support.appendingPathComponent("exports").path
+            env["CADGANG_DATA"] = support.path   // markups and the last screen
             p.environment = env
             p.currentDirectoryURL = support
             p.standardOutput = FileHandle.standardOutput
@@ -169,8 +170,6 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         if p.runModal() == .OK { application(NSApp, open: p.urls) }
     }
 
-    @objc func showCells(_ s: Any?) { web.load(URLRequest(url: BASE.appendingPathComponent("cells"))) }
-    @objc func showViewer(_ s: Any?) { load() }
 
     // The v1 page still asks with confirm(); without these a WKWebView answers silently.
     func webView(_ w: WKWebView, runJavaScriptAlertPanelWithMessage m: String, initiatedByFrame f: WKFrameInfo, completionHandler: @escaping () -> Void) {
@@ -202,6 +201,9 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         let app = NSMenuItem(); main.addItem(app)
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About cadgang", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let check = NSMenuItem(title: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+        check.target = updater
+        appMenu.addItem(check)
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit cadgang", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         app.submenu = appMenu
@@ -225,8 +227,6 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
 
         let view = NSMenuItem(); main.addItem(view)
         let viewMenu = NSMenu(title: "View")
-        viewMenu.addItem(withTitle: "Viewer", action: #selector(showViewer(_:)), keyEquivalent: "1").keyEquivalentModifierMask = [.command, .shift]
-        viewMenu.addItem(withTitle: "Cells", action: #selector(showCells(_:)), keyEquivalent: "2").keyEquivalentModifierMask = [.command, .shift]
         viewMenu.addItem(withTitle: "Reload", action: #selector(WKWebView.reload(_:)), keyEquivalent: "r")
         view.submenu = viewMenu
 

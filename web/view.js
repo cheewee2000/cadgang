@@ -242,6 +242,7 @@ function finishLoad(name, ms) {
   fit();
   edges.visible = ui.edges;
   say(`${name} in ${ms} ms`);
+  loadMarkup();
   postSnapshot();
 }
 
@@ -491,6 +492,8 @@ function loadFailed(name, e) {
 async function openBuffers(files) {
   const t0 = performance.now();
   clearModel();
+  subject = files.map((f) => f.name).join('|');   // bytes have no path: markups attach by name
+
   let shown = 0, label = '';
   for (const { name, buffer } of files) {
     const ext = name.toLowerCase().split('.').pop();
@@ -510,10 +513,7 @@ async function openBuffers(files) {
 window.cadgangOpen = async function cadgangOpen(paths) {
   const t0 = performance.now();
   clearModel();
-  // The folder of the opened file becomes the project folder (exports land beside it) —
-  // unless a cell document is already open; viewing a stray STEP must not swap that.
-  const dir = String([].concat(paths)[0]).replace(/\/[^/]*$/, '') || '/';
-  fetch('/api/project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir, ifUnset: true }) }).catch(() => {});
+  subject = [].concat(paths).join('|');   // markups attach to the file by path
   let shown = 0, label = '';
   for (const p of [].concat(paths)) {
     const name = p.split('/').pop();
@@ -608,12 +608,17 @@ const markup = createMarkup({
   onChange: (items) => { markupChanged(items); commit(); },
 });
 let markupTimer = null;
+let subject = '';   // what is open: the file path(s) from the shell, or the dropped file name(s)
 function markupChanged(items) {
   clearTimeout(markupTimer);
   markupTimer = setTimeout(() => {
-    api('/markup', { method: 'PUT', body: { markups: items } }).catch((e) => say(e.message, true));
+    if (subject) api('/markup', { method: 'PUT', body: { subject, markups: items } }).catch((e) => say(e.message, true));
     postSnapshot();
   }, 400);
+}
+function loadMarkup() {
+  if (!subject) return;
+  api(`/markup?subject=${encodeURIComponent(subject)}`).then((d) => { markup.load(d.markups); commit(); }).catch(() => {});
 }
 let snapshotTimer = null;
 /** Post what is on screen; coalesced, since a stroke is many change events. */
@@ -623,13 +628,12 @@ function postSnapshot() {
     try {
       const png = markup.snapshot();
       fetch('/api/view/snapshot', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ png, page: 'view', subject: $('#fileName').textContent, camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() } }) }).catch(() => {});
+        body: JSON.stringify({ png, subject, camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() } }) }).catch(() => {});
     } catch {}
   }, 150);
 }
-fetch('/api/view/markup').then((r) => r.json()).then((d) => { markup.load(d.markups); commit(); }).catch(() => {});
 
-// The server restarts under the app (a deploy, the heap watchdog); reconnect, and when
+// The server restarts under the app (a deploy); reconnect, and when
 // it comes back as a NEWER version reload so the page is never older than its server.
 let pageVersion = null;
 (function connect() {
@@ -638,7 +642,8 @@ let pageVersion = null;
     const msg = JSON.parse(ev.data);
     if (msg.type === 'hello' && msg.version) { if (pageVersion && pageVersion !== msg.version) location.reload(); pageVersion = msg.version; }
     if (msg.type === 'snapshot_request') postSnapshot();
-    if (msg.type === 'markup_changed') fetch('/api/view/markup').then((r) => r.json()).then((d) => { markup.load(d.markups); commit(); }).catch(() => {});
+    if (msg.type === 'markup_changed' && msg.subject === subject) loadMarkup();
+    if (msg.type === 'open' && msg.paths?.length) window.cadgangOpen(msg.paths);   // pushed from MCP
   };
   ws.onclose = () => setTimeout(connect, 1500);
 })();

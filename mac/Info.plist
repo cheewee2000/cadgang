@@ -13,6 +13,9 @@
   <key>CFBundleIconName</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>SUFeedURL</key><string>https://www.experiments.cwandt.com/releases/cadgang.xml</string>
+  <key>SUPublicEDKey</key><string>IsZ2LtddRqNHFHsp6U40Gw/A6sWIJO4m5xJYr1r4qic=</string>
+  <key>SUEnableAutomaticChecks</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>CFBundleDocumentTypes</key>
   <array>

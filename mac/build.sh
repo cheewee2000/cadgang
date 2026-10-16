@@ -7,7 +7,15 @@ APP=dist/cadgang.app
 RES=$APP/Contents/Resources
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$RES/app"
-swiftc -O -o "$APP/Contents/MacOS/cadgang" mac/main.swift -framework Cocoa -framework WebKit
+# Sparkle (auto-update): the framework ships inside the app; mac/release.sh signs each zip for it.
+SPARKLE=mac/Sparkle
+if [ ! -d "$SPARKLE/Sparkle.framework" ]; then
+  mkdir -p "$SPARKLE"; curl -sL -o "$SPARKLE/sparkle.tar.xz" https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz
+  tar -xf "$SPARKLE/sparkle.tar.xz" -C "$SPARKLE"; rm "$SPARKLE/sparkle.tar.xz"
+fi
+mkdir -p "$APP/Contents/Frameworks"; cp -R "$SPARKLE/Sparkle.framework" "$APP/Contents/Frameworks/"
+swiftc -O -o "$APP/Contents/MacOS/cadgang" mac/main.swift -framework Cocoa -framework WebKit \
+  -F "$SPARKLE" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 sed "s/__VERSION__/$VERSION/g" mac/Info.plist > "$APP/Contents/Info.plist"
 cp "$(command -v node)" "$RES/node"
 # Icons: the Icon Composer bundle fills the macOS 26 squircle natively (Assets.car + its icns);

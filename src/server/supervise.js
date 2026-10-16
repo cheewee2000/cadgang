@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Keep the server up. The OCCT kernel is a WASM heap and a cell program can
- * ask for more memory than exists; V8 then aborts the process, and there is
+ * Keep the server up. A STEP import is a WASM heap in a worker and a huge file
+ * can ask for more memory than exists; V8 then aborts the process, and there is
  * no catching that from inside. So the server runs as a child and comes back
- * on its own, with the autosaved documents intact. A clean exit stays down.
+ * on its own. A clean exit stays down.
  */
 import { fork } from 'node:child_process';
 import path from 'node:path';

@@ -1,7 +1,7 @@
 {
   "name": "cadgang",
-  "version": "0.8.0-alpha.28",
-  "description": "cadgang — a web-based CAD tool with two lineages in one node graph: exact B-rep (STEP) and implicit fields (STL), driven by an MCP server",
+  "version": "0.9.0",
+  "description": "cadgang — a CAD viewer and markup tool. Opens STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, FBX and DXF; sections, measures with snaps, markups Claude Code can see over MCP. Web page or Mac app.",
   "type": "module",
   "private": true,
   "main": "src/server/index.js",
@@ -12,7 +12,8 @@
     "start": "node src/server/supervise.js",
     "serve": "node src/server/index.js",
     "mcp": "node src/mcp/index.js",
-    "demo": "node examples/demo.js",
+    "build": "bash mac/build.sh",
+    "release": "bash mac/release.sh",
     "test": "node --test test/*.test.js"
   },
   "engines": {
@@ -22,8 +23,6 @@
     "@modelcontextprotocol/sdk": "^1.12.0",
     "express": "^4.21.0",
     "occt-import-js": "^0.0.23",
-    "replicad": "^0.23.1",
-    "replicad-opencascadejs": "^0.23.0",
     "ws": "^8.18.0",
     "zod": "^3.23.8"
   },

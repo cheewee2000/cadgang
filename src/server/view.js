@@ -11,11 +11,12 @@
  *   GET  /api/view/file?path=/abs/part.stl         desktop only: raw bytes
  *
  * Reading arbitrary local paths is what a desktop app does (Finder hands it a
- * path) and what a web server must never do, so both are gated on
- * CADGANG_DESKTOP, which only the .app shell sets.
+ * path) and what a web server must never do, so both are gated: the .app shell
+ * sets CADGANG_DESKTOP, and a loopback request without a proxy header counts too.
  */
 
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -63,30 +64,33 @@ export function pack(m) {
 }
 
 /**
- * Markups and the screen.
- *   GET/PUT /api/view/markup            the project's markups (<project>/cadgang/markup.json)
- *   POST    /api/view/snapshot          the page posts {png, camera, page, subject} — the live view
- *   GET     /api/view/screen?fresh=1    latest snapshot (+markups); fresh=1 asks open pages to post
+ * Markups, the screen, and files pushed from MCP.
+ *   GET/PUT /api/view/markup?subject=…  the markups of one opened file (default: the file on screen)
+ *   POST    /api/view/snapshot          the page posts {png, camera, subject} — the live view
+ *   GET     /api/view/screen?fresh=1    latest snapshot (+its markups); fresh=1 asks open pages to post
  *                                       a new one first and waits up to ?wait= seconds (default 3)
  *   GET     /api/view/screen.png        the image alone
+ *   POST    /api/view/open {paths}      tell every open page to open these files (the MCP tool)
  */
-export function viewRouter({ dirOf = () => null, broadcast = () => {} } = {}) {
+export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   const r = express.Router();
-  const markupPath = () => dirOf() && path.join(dirOf(), 'markup.json');
-  const readMarkup = () => { try { return JSON.parse(fsSync.readFileSync(markupPath(), 'utf8')); } catch { return []; } };
-  let latest = null;      // { png: Buffer, camera, page, subject, at }
+  const slug = (subject) => crypto.createHash('sha1').update(String(subject)).digest('hex').slice(0, 16);
+  const markupPath = (subject) => path.join(dataDir, 'markups', `${slug(subject)}.json`);
+  const readMarkup = (subject) => { if (!subject) return []; try { return JSON.parse(fsSync.readFileSync(markupPath(subject), 'utf8')); } catch { return []; } };
+  let latest = null;      // { png: Buffer, camera, subject, at }
   let waiters = [];
+  const subjectOf = (req) => String(req.query.subject || req.body?.subject || latest?.subject || '');
 
-  r.get('/markup', (req, res) => res.json({ markups: readMarkup() }));
+  r.get('/markup', (req, res) => { const subject = subjectOf(req); res.json({ subject, markups: readMarkup(subject) }); });
   r.put('/markup', (req, res, next) => {
     try {
+      const subject = subjectOf(req);
+      if (!subject) throw Object.assign(new Error('No file is open to attach markups to'), { status: 400 });
       const markups = Array.isArray(req.body?.markups) ? req.body.markups : [];
-      const p = markupPath();
-      if (!p) throw Object.assign(new Error('No project folder yet'), { status: 400 });
-      fsSync.mkdirSync(path.dirname(p), { recursive: true });
-      fsSync.writeFileSync(p, JSON.stringify(markups));
-      broadcast({ type: 'markup_changed', count: markups.length });
-      res.json({ markups });
+      fsSync.mkdirSync(path.dirname(markupPath(subject)), { recursive: true });
+      fsSync.writeFileSync(markupPath(subject), JSON.stringify(markups));
+      broadcast({ type: 'markup_changed', subject, count: markups.length });
+      res.json({ subject, markups });
     } catch (e) { next(e); }
   });
 
@@ -94,18 +98,17 @@ export function viewRouter({ dirOf = () => null, broadcast = () => {} } = {}) {
     try {
       const m = /^data:image\/png;base64,(.+)$/.exec(String(req.body?.png || ''));
       if (!m) throw Object.assign(new Error('png must be a data:image/png;base64 URL'), { status: 400 });
-      latest = { png: Buffer.from(m[1], 'base64'), camera: req.body.camera ?? null, page: req.body.page ?? null, subject: req.body.subject ?? null, at: new Date().toISOString() };
-      if (dirOf()) { try { fsSync.mkdirSync(dirOf(), { recursive: true }); fsSync.writeFileSync(path.join(dirOf(), 'screen.png'), latest.png); } catch {} }
+      latest = { png: Buffer.from(m[1], 'base64'), camera: req.body.camera ?? null, subject: req.body.subject ?? null, at: new Date().toISOString() };
+      try { fsSync.mkdirSync(dataDir, { recursive: true }); fsSync.writeFileSync(path.join(dataDir, 'screen.png'), latest.png); } catch {}
       const w = waiters; waiters = [];
       for (const fn of w) fn();
       res.json({ ok: true, at: latest.at, bytes: latest.png.length });
     } catch (e) { next(e); }
   });
 
-  const screenJson = () => latest && { at: latest.at, page: latest.page, subject: latest.subject, camera: latest.camera, png: latest.png.toString('base64') };
+  const screenJson = () => latest && { at: latest.at, subject: latest.subject, camera: latest.camera, png: latest.png.toString('base64') };
   r.get('/screen', async (req, res) => {
-    const fresh = req.query.fresh === '1';
-    if (fresh) {
+    if (req.query.fresh === '1') {
       const wait = Math.min(10, Math.max(0.2, parseFloat(req.query.wait || '3')));
       const before = latest?.at;
       await new Promise((done) => {
@@ -113,12 +116,20 @@ export function viewRouter({ dirOf = () => null, broadcast = () => {} } = {}) {
         waiters.push(() => { clearTimeout(t); done(); });
         broadcast({ type: 'snapshot_request' });
       });
-      res.json({ screen: screenJson(), fresh: !!latest && latest.at !== before, markups: readMarkup() });
-      return;
+      return res.json({ screen: screenJson(), fresh: !!latest && latest.at !== before, markups: readMarkup(latest?.subject) });
     }
-    res.json({ screen: screenJson(), fresh: false, markups: readMarkup() });
+    res.json({ screen: screenJson(), fresh: false, markups: readMarkup(latest?.subject) });
   });
   r.get('/screen.png', (req, res) => latest ? res.type('png').send(latest.png) : res.status(404).json({ error: 'No snapshot yet — open the app' }));
+
+  r.post('/open', (req, res, next) => {
+    try {
+      const paths = [].concat(req.body?.paths || []).map(String).filter(Boolean);
+      if (!paths.length) throw Object.assign(new Error('paths: one or more absolute file paths'), { status: 400 });
+      broadcast({ type: 'open', paths });
+      res.json({ ok: true, paths });
+    } catch (e) { next(e); }
+  });
 
   r.get('/file', async (req, res, next) => {
     try {

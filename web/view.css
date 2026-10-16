@@ -1,4 +1,12 @@
-/* viewer-only additions; everything else comes from the shared sheets */
+/* viewer layout; controls and type come from cwandt.css + style.css */
+main { display: flex; flex: 1 1 auto; min-height: 0; }
+#viewport { flex: 1 1 auto; position: relative; min-width: 0; }
+#viewport canvas { display: block; }
+footer {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: 6px var(--sp-4); border-top: var(--bw-hair) solid var(--rule);
+  font-size: var(--fs-12); color: var(--ink-faint); flex: 0 0 auto; font-variant-numeric: tabular-nums;
+}
 .drop {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: var(--sp-3); text-align: center; padding: var(--sp-8);
