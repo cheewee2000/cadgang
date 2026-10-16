@@ -1,0 +1,4 @@
+#!/bin/bash
+# Open files in cadgang from a shell without a second Dock icon: hands them to
+# the app bundle this script lives in (launching it if needed).
+exec open -a "$(cd "$(dirname "$0")/../.." && pwd)" "$@"

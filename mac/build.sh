@@ -10,9 +10,22 @@ mkdir -p "$APP/Contents/MacOS" "$RES/app"
 swiftc -O -o "$APP/Contents/MacOS/cadgang" mac/main.swift -framework Cocoa -framework WebKit
 sed "s/__VERSION__/$VERSION/g" mac/Info.plist > "$APP/Contents/Info.plist"
 cp "$(command -v node)" "$RES/node"
-[ -f mac/AppIcon.icns ] && cp mac/AppIcon.icns "$RES/AppIcon.icns"
+# Icons: the Icon Composer bundle fills the macOS 26 squircle natively (Assets.car + its icns);
+# the iconset-built icns is the fallback for older macOS. Both come from mac/icon/make.mjs.
+if [ -d mac/AppIcon.icon ]; then
+  ICONS=$(mktemp -d)
+  xcrun actool mac/AppIcon.icon --compile "$ICONS" --platform macosx --minimum-deployment-target 13.0 \
+    --app-icon AppIcon --output-partial-info-plist "$ICONS/p.plist" >/dev/null
+  cp "$ICONS/Assets.car" "$RES/Assets.car"; cp "$ICONS/AppIcon.icns" "$RES/AppIcon.icns"; rm -rf "$ICONS"
+elif [ -d mac/AppIcon.iconset ]; then
+  iconutil -c icns mac/AppIcon.iconset -o "$RES/AppIcon.icns"
+fi
 rsync -a package.json src web "$RES/app/"
 # three.js is a devDependency only because web/vendor carries its own copy.
 rsync -a --exclude three node_modules "$RES/app/"
+# A Dock-less way in from a shell: `dist/cadgang.app/Contents/MacOS/cadgang-open file.step`.
+cp mac/cadgang-open "$APP/Contents/MacOS/cadgang-open"
 codesign --force --deep --sign - "$APP"
-echo "built $APP ($VERSION)"
+# Zip for sharing (ditto keeps the bundle's resource forks and signature).
+rm -f "dist/cadgang-$VERSION.zip"; ditto -c -k --keepParent "$APP" "dist/cadgang-$VERSION.zip"
+echo "built $APP ($VERSION) and dist/cadgang-$VERSION.zip"
