@@ -16,6 +16,7 @@
 import * as THREE from 'three';
 import { sketchCanvas } from './sketchcanvas.js';
 import { renderDepGraph } from './depgraph.js';
+import { attachOrbitInput } from './orbitinput.js';
 
 const $ = (sel) => document.querySelector(sel);
 const API = '/api/cells';
@@ -224,10 +225,14 @@ window.addEventListener('pointermove', (e) => {
     orbit.pitch = Math.max(-1.45, Math.min(1.45, orbit.pitch + dy * 0.006));
   }
 });
-viewport.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  orbit.dist = Math.max(2, Math.min(3000, orbit.dist * (1 + Math.sign(e.deltaY) * 0.1)));
-}, { passive: false });
+attachOrbitInput(viewport, {
+  orbit, camera, THREE, yawSign: -1,
+  hitAt: (e) => {
+    if (!meshObj) return null;
+    raycaster.setFromCamera(pointerNDC(e), camera);
+    return raycaster.intersectObject(meshObj, false)[0]?.point ?? null;
+  },
+});
 
 function resize() {
   for (const canvas of sketches.values()) canvas.redraw();

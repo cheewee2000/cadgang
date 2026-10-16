@@ -117,12 +117,22 @@ function deriveStatus(cell, base = CELL_STATUS.ok) {
 
 export class CellDocument {
   constructor(filePath = null) {
+    this._listeners = new Set();
+    this._load(filePath);
+  }
+
+  /** (Re)open the document at filePath — the project folder changed. */
+  openAt(filePath) {
+    this._load(filePath);
+    for (const fn of this._listeners) fn(this);
+  }
+
+  _load(filePath) {
     this.filePath = filePath;
     this.revision = 0;
     this.cells = [];
     this.output = null;
     this._counter = 0;
-    this._listeners = new Set();
     this._undo = [];
     this._redo = [];
     this._lastSig = null;

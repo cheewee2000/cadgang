@@ -17,6 +17,7 @@ import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ThreeMFLoader } from 'three/addons/loaders/3MFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { attachOrbitInput } from './orbitinput.js';
 
 const $ = (s) => document.querySelector(s);
 const CAD_EXT = /\.(step|stp|iges|igs|brep)$/i;
@@ -186,10 +187,13 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 });
 renderer.domElement.addEventListener('pointerup', () => { drag = null; });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
-renderer.domElement.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  orbit.dist *= Math.exp(e.deltaY * 0.0015);
-}, { passive: false });
+const raycaster = new THREE.Raycaster();
+function hitAt(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  return raycaster.intersectObjects(model.children, false)[0]?.point ?? null;
+}
+attachOrbitInput(renderer.domElement, { orbit, camera, THREE, hitAt });
 
 // ------------------------------------------------------------------ section
 
@@ -283,6 +287,9 @@ async function openBuffers(files) {
 window.cadgangOpen = async function cadgangOpen(paths) {
   const t0 = performance.now();
   clearModel();
+  // The folder of the opened file becomes the project folder: exports land beside it.
+  const dir = String([].concat(paths)[0]).replace(/\/[^/]*$/, '') || '/';
+  fetch('/api/project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir }) }).catch(() => {});
   let shown = 0, label = '';
   for (const p of [].concat(paths)) {
     const name = p.split('/').pop();

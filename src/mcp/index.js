@@ -395,4 +395,9 @@ registerCellTools(server, { call, ok, fail, base: BASE });
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+// Claude Code starts this server in the project folder: make it cadgang's project
+// folder too, so exports and the cell document live next to the user's work.
+fetch(`${BASE}/api/project`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: process.cwd() }) })
+  .then((r) => r.ok && console.error(`cadgang project folder: ${process.cwd()}`))
+  .catch(() => {});
 console.error(`cadgang-mcp-server connected (target: ${BASE})`);

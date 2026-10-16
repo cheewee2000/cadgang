@@ -35,7 +35,7 @@ import {
 /** A sketch with nothing in it yet — where drawing on an empty cell starts. */
 const emptySketch = () => ({ plane: 'XY', points: [], entities: [], constraints: [] });
 
-export function cellsRouter(doc, rootDir) {
+export function cellsRouter(doc, rootDir, { project = {} } = {}) {
   const r = express.Router();
 
   const fail = (res, err, code = 400) =>
@@ -508,7 +508,9 @@ export function cellsRouter(doc, rootDir) {
   function saveExport(fileParam, ext, data) {
     if (!fileParam) return null;
     const safe = String(fileParam).replace(/[^\w.-]/g, '_').replace(new RegExp(`\\.${ext}$`, 'i'), '');
-    const dir = process.env.CADGANG_EXPORTS || path.join(rootDir, 'exports');
+    // The project folder when one is set (Claude Code's cwd, or the folder of the file
+    // the app opened); otherwise the configured/default exports directory.
+    const dir = project.dir || process.env.CADGANG_EXPORTS || path.join(rootDir, 'exports');
     fs.mkdirSync(dir, { recursive: true });
     const target = path.join(dir, `${safe}.${ext}`);
     fs.writeFileSync(target, data);

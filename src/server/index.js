@@ -6,6 +6,7 @@
  */
 
 import http from 'node:http';
+import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
 import express from 'express';
@@ -49,7 +50,24 @@ app.use('/api', (req, res, next) => {
   res.set('Expires', '0');
   next();
 });
-app.use('/api/cells', cellsRouter(cells, ROOT));
+// The project folder: where exports land and where the cell document lives
+// (<project>/cadgang/cells.json). The MCP server sets it to Claude Code's cwd
+// when it starts; opening a file in the desktop app sets it to that file's
+// folder. Until one is set, the env/default paths above apply.
+const project = { dir: process.env.CADGANG_PROJECT || null };
+function setProject(dir) {
+  dir = path.resolve(dir);
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw Object.assign(new Error(`Not a folder: ${dir}`), { status: 400 });
+  if (project.dir === dir) return;
+  project.dir = dir;
+  cells.openAt(path.join(dir, 'cadgang', 'cells.json'));
+}
+if (project.dir) setProject(project.dir);
+app.get('/api/project', (req, res) => res.json({ dir: project.dir, cells: cells.filePath }));
+app.post('/api/project', (req, res, next) => {
+  try { setProject(String(req.body?.dir || '')); res.json({ dir: project.dir, cells: cells.filePath }); } catch (e) { next(e); }
+});
+app.use('/api/cells', cellsRouter(cells, ROOT, { project }));
 app.use('/api/view', viewRouter());
 // A body that is not JSON (a literal NaN, a stray comma) is a client error in
 // the API's own shape, not Express's HTML page with a stack trace on it.

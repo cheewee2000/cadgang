@@ -506,7 +506,7 @@ Args:
     'cadgang_cells_export',
     {
       title: 'Export the cell stack',
-      description: `Write the cell stack's solid to exports/<filename>.step in the cadgang repo (server-side) and return the path.
+      description: `Write the cell stack's solid to <filename>.step in the project folder (the folder this MCP server was started in, i.e. Claude Code's cwd) and return the path.
 
 STEP is the only export. Cells are exact B-rep the whole way through, so the file reopens in Fusion, SolidWorks or OnShape as editable geometry rather than a faceted import.
 
