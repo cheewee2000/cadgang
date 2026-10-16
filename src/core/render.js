@@ -113,7 +113,10 @@ export function renderMesh(mesh, edges, bounds, opts = {}) {
   const cam = camera(bounds, opts, width, height);
   const px = Buffer.alloc(width * height * 3);
   const depth = new Float32Array(width * height).fill(Infinity);
-  const bgTop = [24, 26, 33], bgBot = [10, 11, 15];
+  // 'paper' is the app's own look (white, stainless, blueprint edges) for the
+  // thumbnails the UI shows; the default dark render is the v1 preview.
+  const paper = opts.theme === 'paper';
+  const bgTop = paper ? [255, 255, 255] : [24, 26, 33], bgBot = paper ? [255, 255, 255] : [10, 11, 15];
   for (let j = 0; j < height; j++) {
     const g = j / height;
     for (let i = 0; i < width; i++) {
@@ -133,7 +136,8 @@ export function renderMesh(mesh, edges, bounds, opts = {}) {
   }
   const l1 = norm3([0.5, -0.6, 0.65]);
   const l2 = norm3([-0.6, 0.3, -0.2]);
-  const base = [96, 158, 255];
+  const base = paper ? [185, 184, 179] : [96, 158, 255];
+  const glow = paper ? 0.45 : 1;   // specular/rim read as blown-out on white
   for (let t = 0; t < I.length; t += 3) {
     const a = I[t], b = I[t + 1], c = I[t + 2];
     if (sz[a] <= 0 || sz[b] <= 0 || sz[c] <= 0) continue;
@@ -147,18 +151,18 @@ export function renderMesh(mesh, edges, bounds, opts = {}) {
     const d2 = Math.max(dot3(n, l2), 0) * 0.35;
     const rim = Math.pow(1 - Math.max(-dot3(n, cam.fwd), 0), 3) * 0.35;
     const spec = Math.pow(Math.max(dot3(reflect(cam.fwd, n), l1), 0), 24) * 0.5;
-    const L = 0.16 + d1 * 0.85 + d2;
+    const L = (paper ? 0.42 : 0.16) + d1 * (paper ? 0.6 : 0.85) + d2;
     const col = [
-      clamp8(base[0] * L + 255 * (spec + rim * 0.6)),
-      clamp8(base[1] * L + 255 * (spec + rim * 0.6)),
-      clamp8(base[2] * L + 255 * (spec + rim)),
+      clamp8(base[0] * L + 255 * (spec + rim * 0.6) * glow),
+      clamp8(base[1] * L + 255 * (spec + rim * 0.6) * glow),
+      clamp8(base[2] * L + 255 * (spec + rim) * glow),
     ];
     rasterTriangle(px, depth, width, height, [sx[a], sy[a], sz[a]], [sx[b], sy[b], sz[b]], [sx[c], sy[c], sz[c]], col);
   }
 
   // Edges: the B-rep's own curves, drawn where they are not behind a surface.
   const lines = edges?.lines || [];
-  const dark = [10, 12, 18];
+  const dark = paper ? [47, 93, 138] : [10, 12, 18];
   for (let k = 0; k + 5 < lines.length; k += 6) {
     const p = cam.project([lines[k], lines[k + 1], lines[k + 2]]);
     const q = cam.project([lines[k + 3], lines[k + 4], lines[k + 5]]);

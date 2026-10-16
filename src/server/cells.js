@@ -567,7 +567,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
       if (png || mesh) {
         const t = tessellate(shape, { tolerance: tol });
         const edges = tessellateEdges(shape, { tolerance: tol });
-        if (png) out.png = renderMesh(t, edges, brepBBox(shape), { width, height, yaw: -35, pitch: 25 });
+        if (png) out.png = renderMesh(t, edges, brepBBox(shape), { width, height, yaw: -35, pitch: 25, theme: 'paper' });
         if (mesh) out.mesh = { positions: Array.from(t.positions), normals: Array.from(t.normals), indices: Array.from(t.indices), faces: t.faces, edges };
       }
       return out;
