@@ -9,9 +9,11 @@
 
 import Cocoa
 import WebKit
+import UniformTypeIdentifiers
 
 let PORT = 4477
 let BASE = URL(string: "http://127.0.0.1:\(PORT)")!
+let EXTS = ["step", "stp", "iges", "igs", "brep", "stl", "obj", "ply", "3mf", "gltf", "glb", "fbx"]
 
 /// Files dropped ANYWHERE in the window (toolbar, cells page, canvas) open like a Finder
 /// double-click. Left to WebKit, a file drop outside the page's own drop zone did nothing.
@@ -30,7 +32,7 @@ final class DropWebView: WKWebView {
     }
 }
 
-final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
+final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     var window: NSWindow!
     var web: DropWebView!
     var node: Process?
@@ -41,6 +43,9 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         buildMenu()
         let cfg = WKWebViewConfiguration()
         cfg.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        // The page learns it is inside the app, and can ask the shell for things only a shell can do.
+        cfg.userContentController.addUserScript(WKUserScript(source: "window.cadgangDesktop = true", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        cfg.userContentController.add(self, name: "cadgang")
         web = DropWebView(frame: .zero, configuration: cfg)
         web.onFiles = { [weak self] urls in self?.application(NSApp, open: urls) }
         web.navigationDelegate = self
@@ -129,10 +134,38 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         web.evaluateJavaScript("window.cadgangOpen ? cadgangOpen(\(json)) : (location.href = '/view?open=' + encodeURIComponent(\(json).join('|')))")
     }
 
+    func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
+        guard let body = m.body as? [String: Any], let cmd = body["cmd"] as? String else { return }
+        if cmd == "defaultApp" { makeDefaultViewer() }
+    }
+
+    /// Become the Finder's app for every extension the viewer reads. One LaunchServices
+    /// call per type; the page gets a one-line verdict.
+    func makeDefaultViewer() {
+        let group = DispatchGroup(); var failed: [String] = []
+        for ext in EXTS {
+            // Every type claiming the extension: another app's own 3MF type, the public one, a dynamic one.
+            let types = UTType.types(tag: ext, tagClass: .filenameExtension, conformingTo: nil)
+            if types.isEmpty { failed.append(ext); continue }
+            var ok = 0; let sub = DispatchGroup()
+            for t in types {
+                sub.enter()
+                NSWorkspace.shared.setDefaultApplication(at: Bundle.main.bundleURL, toOpen: t) { err in if err == nil { ok += 1 }; sub.leave() }
+            }
+            group.enter(); sub.notify(queue: .main) { if ok == 0 { failed.append(ext) }; group.leave() }
+        }
+        group.notify(queue: .main) {
+            let msg = failed.isEmpty ? "cadgang is now the default app for \(EXTS.count) CAD file types"
+                                     : "Could not take over: \(failed.joined(separator: ", "))"
+            let json = String(data: try! JSONSerialization.data(withJSONObject: [msg, !failed.isEmpty]), encoding: .utf8)!
+            self.web.evaluateJavaScript("window.cadgangNotify && cadgangNotify(...\(json))")
+        }
+    }
+
     @objc func openDocument(_ s: Any?) {
         let p = NSOpenPanel()
         p.allowsMultipleSelection = true
-        p.allowedFileTypes = ["step", "stp", "iges", "igs", "brep", "stl", "obj", "ply", "3mf", "gltf", "glb", "fbx"]
+        p.allowedFileTypes = EXTS
         if p.runModal() == .OK { application(NSApp, open: p.urls) }
     }
 

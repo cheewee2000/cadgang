@@ -20,12 +20,42 @@
       <key>CFBundleTypeName</key><string>3D CAD model</string>
       <key>CFBundleTypeRole</key><string>Viewer</string>
       <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.step</string><string>com.cwandt.cadgang.iges</string><string>com.cwandt.cadgang.brep</string>
+        <string>public.standard-tesselated-geometry-format</string><string>public.geometry-definition-format</string>
+        <string>public.polygon-file-format</string><string>com.cwandt.cadgang.3mf</string>
+        <string>org.khronos.gltf</string><string>org.khronos.glb</string><string>com.autodesk.mac.fbx</string>
+      </array>
       <key>CFBundleTypeExtensions</key>
       <array>
         <string>step</string><string>stp</string><string>iges</string><string>igs</string><string>brep</string>
         <string>stl</string><string>obj</string><string>ply</string><string>3mf</string>
         <string>gltf</string><string>glb</string><string>fbx</string>
       </array>
+    </dict>
+  </array>
+  <!-- Types nobody declares on a stock Mac. Without a declared type, LaunchServices
+       only has a dynamic one, and setDefaultApplication refuses those. -->
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>com.cwandt.cadgang.iges</string>
+      <key>UTTypeDescription</key><string>IGES model</string>
+      <key>UTTypeConformsTo</key><array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>iges</string><string>igs</string></array></dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key><string>com.cwandt.cadgang.brep</string>
+      <key>UTTypeDescription</key><string>OpenCascade B-rep</string>
+      <key>UTTypeConformsTo</key><array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>brep</string></array></dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key><string>com.cwandt.cadgang.3mf</string>
+      <key>UTTypeDescription</key><string>3D Manufacturing Format</string>
+      <key>UTTypeConformsTo</key><array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>3mf</string></array></dict>
     </dict>
   </array>
 </dict>

@@ -496,6 +496,10 @@ document.addEventListener('drop', async (e) => {
   if (e.dataTransfer.files.length) openBuffers(await filesToBuffers(e.dataTransfer.files));
 });
 $('#openBtn').addEventListener('click', () => $('#fileInput').click());
+// Only the Mac shell can register file associations; the button exists only inside it.
+$('#defaultBtn').hidden = !window.cadgangDesktop;
+$('#defaultBtn').addEventListener('click', () => window.webkit?.messageHandlers?.cadgang?.postMessage({ cmd: 'defaultApp' }));
+window.cadgangNotify = (text, bad) => say(text, bad);
 $('#fileInput').addEventListener('change', async (e) => { if (e.target.files.length) openBuffers(await filesToBuffers(e.target.files)); e.target.value = ''; });
 
 // ----------------------------------------------------------------- toggles
