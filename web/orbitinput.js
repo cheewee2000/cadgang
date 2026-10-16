@@ -2,7 +2,8 @@
  * Trackpad-first camera input, shared by every viewport.
  *   scroll          rotate (two fingers = turn the part)
  *   shift + scroll  pan
- *   pinch / ⌥scroll zoom (a pinch arrives as a wheel event with ctrlKey)
+ *   pinch / ⌥scroll zoom (Chrome sends a pinch as a wheel event with ctrlKey;
+ *                         WebKit sends gesturestart/gesturechange with a scale)
  *   double-click    centre the orbit on the point under the pointer
  * Dragging keeps whatever the page already does (orbit / right-drag pan).
  */
@@ -21,6 +22,12 @@ export function attachOrbitInput(el, { orbit, camera, getCamera = () => camera, 
     orbit.yaw += yawSign * e.deltaX * 0.005;
     orbit.pitch = Math.max(-1.45, Math.min(1.45, orbit.pitch - e.deltaY * 0.005));
   }, { passive: false });
+
+  // WebKit (Safari, the Mac app's WKWebView) pinch: scale is cumulative since gesturestart.
+  let gestureDist = 0;
+  el.addEventListener('gesturestart', (e) => { e.preventDefault(); gestureDist = orbit.dist; });
+  el.addEventListener('gesturechange', (e) => { e.preventDefault(); if (gestureDist) orbit.dist = gestureDist / e.scale; });
+  el.addEventListener('gestureend', (e) => { e.preventDefault(); gestureDist = 0; });
 
   el.addEventListener('dblclick', (e) => {
     const p = hitAt(e);
