@@ -724,7 +724,17 @@ function commit() {
   const s = snap();
   if (s === history.list[history.i]) return;
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ortho: ui.ortho })); } catch {}
 }
+// View preferences outlive the page, like the theme. Section, explode and body
+// visibility belong to a file and start fresh with it.
+const PREFS_KEY = 'cadgang-view';
+try {
+  const p = JSON.parse(localStorage.getItem(PREFS_KEY));
+  if (p?.look in PRESETS) ui.look = $('#look').value = p.look;
+  for (const k of ['edges', 'wire', 'grid']) if (typeof p?.[k] === 'boolean' && ui[k] !== p[k]) toggle(k, `#${k}Btn`);
+  if (p?.ortho) setOrtho(true);
+} catch {}
 function apply(s) {
   const st = JSON.parse(s);
   if (st.look !== ui.look) { ui.look = $('#look').value = st.look; for (const m of model.children) styleMesh(m); }
