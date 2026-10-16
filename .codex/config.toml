@@ -1,0 +1,6 @@
+[mcp_servers.cadgang]
+command = "node"
+args = ["src/mcp/index.js"]
+
+[mcp_servers.cadgang.env]
+CADGANG_URL = "http://localhost:4477"

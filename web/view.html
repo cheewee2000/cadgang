@@ -29,6 +29,7 @@
       <input id="fileInput" type="file" multiple hidden
         accept=".step,.stp,.iges,.igs,.brep,.stl,.obj,.ply,.3mf,.gltf,.glb,.fbx,.dxf" />
       <button id="fitBtn" class="ghost" title="Fit the model (F)">Fit</button>
+      <button id="sideBtn" class="ghost" hidden title="See the drawing from the other side">Other side</button>
       <span class="sep"></span>
       <button id="edgesBtn" class="ghost on" title="Edges (E)">Edges</button>
       <button id="wireBtn" class="ghost" title="Wireframe (W)">Wire</button>
@@ -71,7 +72,7 @@
       <div id="drop" class="drop">
         <div id="loadError" class="load-error"></div>
         <div>Drop a STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, FBX or DXF file here.</div>
-        <div class="drop-hint">Scroll: rotate · Shift-scroll: pan · Pinch: zoom · Double-click: centre · Right-click: menu and hotkeys · ⌘Z undo</div>
+        <div class="drop-hint">Scroll: rotate · Shift-scroll: pan · Pinch: zoom · Double-click: centre · Right-click: menu and hotkeys · ⌘Z undo · DXF: pan, spin to turn, B for the other side</div>
       </div>
     </div>
   </main>

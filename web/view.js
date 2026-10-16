@@ -23,7 +23,7 @@ import { parseDxf } from './dxf.js';
 import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
 
 const $ = (s) => document.querySelector(s);
-const ui = { edges: true, wire: false, grid: true, look: 'shaded', ortho: false };
+const ui = { edges: true, wire: false, grid: true, look: 'shaded', ortho: false, flat: false }; // flat: a 2D drawing is open
 const section = { plane: new THREE.Plane(new THREE.Vector3(0, 0, -1), 0), axis: '', flip: 1 };
 const CAD_EXT = /\.(step|stp|iges|igs|brep)$/i;
 
@@ -86,6 +86,7 @@ function clearModel() {
     g.clear();
   }
   bbox = null;
+  ui.flat = false; $('#sideBtn').hidden = true;
   $('#bodies').replaceChildren(); $('#bodies').hidden = true;
   $('#explode').value = 0;
 }
@@ -217,7 +218,9 @@ function finishLoad(name, ms) {
   placeGrid();
   listBodies();
   setupSection();
-  if (size.z < 1e-9) setView('3');   // a flat drawing is read from above
+  // A flat drawing is read from above and handled like paper: pan, turn in quarters, flip over.
+  ui.flat = size.z < 1e-9; $('#sideBtn').hidden = !ui.flat;
+  if (ui.flat) setView('3');
   fit();
   edges.visible = ui.edges;
   say(`${name} in ${ms} ms`);
@@ -292,7 +295,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     updateSection();
     return;
   }
-  if (drag.pan) {
+  if (drag.pan || ui.flat) {
     const k = orbit.dist * 0.0015;
     const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
     const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
@@ -316,7 +319,7 @@ function hitAt(e) {
   raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   return raycaster.intersectObjects(model.children, false)[0]?.point ?? null;
 }
-attachOrbitInput(renderer.domElement, { orbit, getCamera: () => camera, THREE, hitAt });
+attachOrbitInput(renderer.domElement, { orbit, getCamera: () => camera, THREE, hitAt, isFlat: () => ui.flat });
 
 // Is the pointer over a cut face? The first hit on the kept side of the plane
 // being a back face means the ray entered the solid through the cut.
@@ -692,7 +695,7 @@ new ResizeObserver(resize).observe(viewport);
 
 fetch('/api/health').then((r) => r.json()).then((h) => { $('#version').textContent = 'v' + h.version; }).catch(() => {});
 // For headless drives: the scene objects behind the page.
-window.__view = { model, section };
+window.__view = { model, section, orbit, ui };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
 // ?open=/abs/a.step|/abs/b.stl — the same local-path door, for the shell and for headless tests.
@@ -717,6 +720,10 @@ const CMDS = [
   { key: 'o', label: 'Orthographic', run: () => setOrtho(!ui.ortho), btn: '#orthoBtn', on: () => ui.ortho },
   { key: 'l', label: 'Next look', btn: '#look', run: () => { const s = $('#look'); s.selectedIndex = (s.selectedIndex + 1) % s.options.length; s.dispatchEvent(new Event('change', { bubbles: true })); } },
   { key: 'm', label: 'Measure', run: () => setMeasure(!measure.on), btn: '#measureBtn', on: () => measure.on },
+  { sep: true },
+  { key: 'b', label: 'Other side', btn: '#sideBtn', run: () => { orbit.pitch = -orbit.pitch; } },
+  { key: '[', label: 'Turn left 90°', run: () => { orbit.yaw -= Math.PI / 2; } },
+  { key: ']', label: 'Turn right 90°', run: () => { orbit.yaw += Math.PI / 2; } },
   { sep: true },
   ...['x', 'y', 'z'].map((a) => ({ key: a, label: `Section ${a.toUpperCase()}`, btn: `[data-sect="${a}"]`, run: () => setSectionAxis(section.axis === a ? '' : a), on: () => section.axis === a })),
   { key: 'i', label: 'Flip section', btn: '#sectFlip', run: () => { if (section.axis) { section.flip *= -1; updateSection(); } } },
