@@ -20,6 +20,7 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { attachOrbitInput } from './orbitinput.js';
 import { createMarkup } from './markup.js';
 import { parseDxf } from './dxf.js';
+import { createMeasure } from './measure.js';
 import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
 
 const $ = (s) => document.querySelector(s);
@@ -131,11 +132,12 @@ function faceBorderEdges(pos, idx, faces) {
   return new Float32Array(out);
 }
 
-function addMesh(geo, { edgeLines, flat = false, name = '' } = {}) {
+function addMesh(geo, { edgeLines, faces, flat = false, name = '' } = {}) {
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
   const m = new THREE.Mesh(geo);
   m.userData.flat = flat;
   m.userData.name = name || `body ${model.children.length + 1}`;
+  m.userData.faces = faces;   // B-rep face ranges, when the importer knew them: picked by measure
   styleMesh(m);
   model.add(m);
   // Crease edges on an arbitrary mesh are a guess; over a million triangles the
@@ -200,6 +202,7 @@ function paintRows() {
 function setBodyVisible(m, on) {
   m.visible = on;
   if (m.userData.edges) m.userData.edges.visible = on;
+  measure.invalidate();
 }
 function applyExplode() {
   const k = parseFloat($('#explode').value) / 100;
@@ -208,6 +211,7 @@ function applyExplode() {
     m.position.copy(off).multiplyScalar(k * 2);
     if (m.userData.edges) m.userData.edges.position.copy(m.position);
   }
+  measure.invalidate();
 }
 $('#explode').addEventListener('input', applyExplode);
 
@@ -215,6 +219,7 @@ function finishLoad(name, ms) {
   const box = new THREE.Box3().setFromObject(model);
   if (box.isEmpty()) { say(`${name}: nothing to show`, true); return; }
   bbox = box;
+  measure.clear();
   history.list = []; history.i = -1; queueMicrotask(commit);
   const size = box.getSize(new THREE.Vector3());
   let tris = 0, verts = 0, segs = 0;
@@ -295,7 +300,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   renderer.domElement.setPointerCapture(e.pointerId);
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
-  if (!drag) { renderer.domElement.classList.toggle('oncap', onCap(e)); return; }
+  if (!drag) { if (measure.on) measure.hover(e); else renderer.domElement.classList.toggle('oncap', onCap(e)); return; }
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.x = e.clientX; drag.y = e.clientY;
   if (drag.sect) {
@@ -320,7 +325,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 });
 renderer.domElement.addEventListener('pointerup', (e) => {
   const still = drag && Math.hypot(e.clientX - drag.downX, e.clientY - drag.downY) < 4;
-  if (drag?.click && measure.on && still) measureClick(e);
+  if (drag?.click && measure.on && still) measure.click(e);
   if (e.button === 2 && still) showMenu(e.clientX, e.clientY);
   if (drag?.sect) commit();
   drag = null;
@@ -394,7 +399,6 @@ function setupSection() {
   edgeMaterial.clippingPlanes = planes; // edges follow the cut, or they float over the cap
   updateSection();
   buildCaps();
-  clearMeasure();
 }
 function updateSection() {
   if (!section.axis || !bbox) return;
@@ -457,7 +461,7 @@ function parseCad(buffer) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(sub.pos, 3));
     geo.setIndex(new THREE.BufferAttribute(sub.idx, 1));
-    parts.push({ geo, edgeLines: faceBorderEdges(sub.pos, sub.idx, own), name: names[b] });
+    parts.push({ geo, edgeLines: faceBorderEdges(sub.pos, sub.idx, own), faces: own, name: names[b] });
   }
   return parts;
 }
@@ -567,67 +571,18 @@ function setOrtho(on) {
 $('#orthoBtn').addEventListener('click', () => setOrtho(!ui.ortho));
 
 // ------------------------------------------------------------------ measure
-//
-// Two clicks on the model, one distance. Points are kept in world space and
-// their labels are DOM nodes projected every frame, so they stay crisp at any
-// zoom. ponytail: point-to-point only — edge/face/radius picking needs the
-// B-rep topology, which the viewer gets once the cell document is wired in.
+// Snapping dimensions that stay on the page; see measure.js. They live in the
+// undo history as data, so ⌘Z removes the last one.
 
-const measure = { on: false, pts: [], objs: [], labels: [] };
-const measureLayer = $('#measureLayer');
-function clearMeasure() {
-  for (const o of measure.objs) { scene.remove(o); o.geometry?.dispose(); }
-  for (const l of measure.labels) l.remove();
-  measure.pts = []; measure.objs = []; measure.labels = [];
-}
+const measure = createMeasure({
+  THREE, scene, renderer, model, layer: $('#measureLayer'),
+  getCamera: () => camera, getOrbit: () => orbit, say, onChange: () => commit(),
+});
 function setMeasure(on) {
-  measure.on = on;
+  measure.setOn(on);
   $('#measureBtn').classList.toggle('on', on);
-  renderer.domElement.style.cursor = on ? 'crosshair' : '';
-  if (!on) clearMeasure();
 }
 $('#measureBtn').addEventListener('click', () => setMeasure(!measure.on));
-function addLabel(text, pos) {
-  const el = document.createElement('div');
-  el.className = 'mlabel';
-  el.textContent = text;
-  el.userData = { pos };
-  measureLayer.appendChild(el);
-  measure.labels.push(el);
-}
-function markerAt(p) {
-  const r = orbit.dist * 0.004;
-  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), new THREE.MeshBasicMaterial({ color: 0xd11d1d, depthTest: false }));
-  m.position.copy(p); m.renderOrder = 3;
-  scene.add(m); measure.objs.push(m);
-}
-function measureClick(e) {
-  const p = hitAt(e);
-  if (!p) return;
-  if (measure.pts.length === 2) clearMeasure();
-  measure.pts.push(p.clone());
-  markerAt(p);
-  if (measure.pts.length === 2) {
-    const [a, b] = measure.pts;
-    const g = new THREE.BufferGeometry().setFromPoints([a, b]);
-    const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xd11d1d, depthTest: false }));
-    line.renderOrder = 3;
-    scene.add(line); measure.objs.push(line);
-    const d = a.distanceTo(b), dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y), dz = Math.abs(a.z - b.z);
-    addLabel(`${d.toFixed(3)}`, a.clone().lerp(b, 0.5));
-    say(`${d.toFixed(3)}  (Δx ${dx.toFixed(3)}  Δy ${dy.toFixed(3)}  Δz ${dz.toFixed(3)})`);
-    $('#measures').textContent = `${d.toFixed(3)} · Δx ${dx.toFixed(3)} · Δy ${dy.toFixed(3)} · Δz ${dz.toFixed(3)}`;
-  }
-}
-function projectLabels() {
-  const r = renderer.domElement.getBoundingClientRect();
-  for (const l of measure.labels) {
-    const v = l.userData.pos.clone().project(camera);
-    l.style.left = `${(v.x + 1) / 2 * r.width}px`;
-    l.style.top = `${(1 - v.y) / 2 * r.height}px`;
-    l.hidden = v.z > 1;
-  }
-}
 
 // ------------------------------------------------------------------- theme
 
@@ -703,14 +658,15 @@ new ResizeObserver(resize).observe(viewport);
   resize();
   applyCamera();
   renderer.render(scene, camera);
-  projectLabels();
+  measure.projectLabels();
   markup.projectLabels();
   requestAnimationFrame(loop);
 })();
 
 fetch('/api/health').then((r) => r.json()).then((h) => { $('#version').textContent = 'v' + h.version; }).catch(() => {});
 // For headless drives: the scene objects behind the page.
-window.__view = { model, section, orbit, ui };
+window.__view = { model, section, orbit, ui, measure,
+  project: (x, y, z) => { const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3(x, y, z).project(camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; } };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
 // ?open=/abs/a.step|/abs/b.stl — the same local-path door, for the shell and for headless tests.
@@ -771,7 +727,7 @@ const history = { list: [], i: -1 };
 function snap() {
   return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value,
-    bodies: model.children.map((m) => m.visible), markup: markup.items });
+    bodies: model.children.map((m) => m.visible), markup: markup.items, dims: measure.dims });
 }
 function commit() {
   const s = snap();
@@ -798,6 +754,7 @@ function apply(s) {
   model.children.forEach((m, i) => setBodyVisible(m, st.bodies[i] ?? true));
   [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.checked = model.children[i]?.visible ?? true; });
   if (JSON.stringify(markup.items) !== JSON.stringify(st.markup)) { markup.load(st.markup); markupChanged(st.markup); }
+  if (JSON.stringify(measure.dims) !== JSON.stringify(st.dims ?? [])) measure.load(st.dims ?? []);
 }
 function undo() { if (history.i > 0) apply(history.list[--history.i]); }
 function redo() { if (history.i < history.list.length - 1) apply(history.list[++history.i]); }

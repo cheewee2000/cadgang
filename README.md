@@ -42,7 +42,7 @@ Open http://localhost:4477 — the viewport live-updates (WebSocket) whenever th
 
 - **Bodies** panel: one row per STEP body (or DXF layer); tick to hide, click a name to solo, shift-click for all. **Explode** slides bodies apart.
 - **Section**: Off/X/Y/Z, drag the cut face or the slider, **Invert** the kept side. Cuts are capped, so hollow walls read as rings.
-- **Measure** (two clicks), **markup** (pen, arrow, note, erase; anchored on the model and visible to Claude through `cadgang_screen`), looks (shaded, metal, plastic, glass, x-ray, normals), ortho, edges, wire, grid, **Color** (a hue per body or layer), dark theme.
+- **Measure** snaps to endpoints, midpoints, centres and quadrants, defaults to axis-aligned distances, reads a circle's ⌀ or an edge's length in one click, and measures face to face (parallel planes give the gap, anything else the closest approach). Dimensions stay on the page until clicked away or undone. **Markup** (pen, arrow, note, erase; anchored on the model and visible to Claude through `cadgang_screen`), looks (shaded, metal, plastic, glass, x-ray, normals), ortho, edges, wire, grid, **Color** (a hue per body or layer), dark theme.
 - **Undo/redo** (⌘Z / ⇧⌘Z) covers every view change and every stroke. **Right-click** opens the command menu; every button shows its hotkey on hover.
 - Rotation has no limits. Scroll rotates, shift-scroll pans, pinch zooms, double-click re-centres.
 - **DXF** drawings are paper: drag and scroll pan, two-finger spin turns in 90° steps (`[` `]` on a keyboard), **Flip** (B) turns the sheet over. Lines, polylines with bulges, circles, arcs, ellipses, splines and block inserts are drawn; text, dimensions and hatches are skipped and counted.

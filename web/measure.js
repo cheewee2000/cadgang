@@ -1,0 +1,376 @@
+/**
+ * Measure like a drawing dimension, not like a ruler.
+ *
+ *   hover   the nearest snap (endpoint, midpoint, centre, quadrant) or, failing
+ *           that, the nearest edge or the face under the pointer is highlighted
+ *   click   on a snap: a point; the second point makes a distance, snapped
+ *           axis-aligned when it nearly is (shift: never)
+ *           on a face: selects the face; a second face gives the distance
+ *           between them (parallel planes: the gap; otherwise the closest
+ *           approach), a point gives point-to-face. ⌥-click: a free point.
+ *           on a circle or arc: its diameter / radius, in one click
+ *           on a straight edge: its length, in one click
+ *   dims    stay on the page until clicked away or undone; they are plain data
+ *           so the page's undo history can rebuild them
+ *
+ * Edges come from what the viewer already draws: B-rep face borders for STEP,
+ * crease edges for meshes, the segments of a DXF. Chains of collinear segments
+ * become straight edges; chains that turn evenly and fit a circle become arcs.
+ * ponytail: every hover scans all snaps and segments in screen space — fine to
+ * ~50k; a grid or BVH is the upgrade for huge assemblies.
+ */
+export function createMeasure({ THREE, scene, renderer, getCamera, model, layer, getOrbit, say, onChange }) {
+  const RED = 0xd11d1d;
+  const SNAP_PX = 12, CURVE_PX = 8;
+  const lineMat = new THREE.LineBasicMaterial({ color: RED, depthTest: false });
+  const faceMat = new THREE.MeshBasicMaterial({ color: RED, transparent: true, opacity: 0.3, depthTest: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, side: THREE.DoubleSide });
+  const dimGroup = new THREE.Group(); dimGroup.renderOrder = 4; scene.add(dimGroup);
+  const hl = new THREE.Group(); hl.renderOrder = 4; scene.add(hl);     // what the pointer is over
+  const sel = new THREE.Group(); sel.renderOrder = 4; scene.add(sel);   // the first pick, while waiting for the second
+  const raycaster = new THREE.Raycaster();
+  let on = false, dirty = true, features = [], snaps = [], pending = null, hover = null, dims = [], labels = [];
+  const canvas = renderer.domElement;
+
+  // ----------------------------------------------------------------- index
+  function sources() {
+    const out = [];
+    for (const m of model.children) {
+      if (!m.visible) continue;
+      m.updateMatrixWorld(true);
+      if (m.isLine) out.push({ pos: m.geometry.getAttribute('position').array, matrix: m.matrixWorld });
+      else if (m.userData.edges) { m.userData.edges.updateMatrixWorld(true); out.push({ pos: m.userData.edges.geometry.getAttribute('position').array, matrix: m.userData.edges.matrixWorld }); }
+    }
+    return out;
+  }
+  function build() {
+    features = []; snaps = []; dirty = false;
+    const box = new THREE.Box3().setFromObject(model);
+    const scale = box.isEmpty() ? 1 : box.getSize(new THREE.Vector3()).length();
+    scaleHint = scale;
+    const q = scale * 1e-6, key = (p) => `${Math.round(p.x / q)},${Math.round(p.y / q)},${Math.round(p.z / q)}`;
+    // nodes and segments, welded by position
+    const nodes = new Map(); const segs = [];
+    const node = (p) => { const k = key(p); let n = nodes.get(k); if (!n) { n = { p, segs: [] }; nodes.set(k, n); } return n; };
+    for (const { pos, matrix } of sources()) {
+      for (let i = 0; i + 5 < pos.length; i += 6) {
+        const a = new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]).applyMatrix4(matrix);
+        const b = new THREE.Vector3(pos[i + 3], pos[i + 4], pos[i + 5]).applyMatrix4(matrix);
+        if (a.distanceTo(b) < q) continue;
+        const s = { a: node(a), b: node(b), used: false }; s.a.segs.push(s); s.b.segs.push(s); segs.push(s);
+      }
+    }
+    // chains: walk from every open end first, then whatever loops remain
+    const chains = [];
+    const walk = (start, seg) => {
+      const pts = [start.p]; let n = start, s = seg;
+      while (s && !s.used) { s.used = true; n = s.a === n ? s.b : s.a; pts.push(n.p); s = n.segs.length === 2 ? n.segs.find((x) => x !== s) : null; }
+      return pts;
+    };
+    for (const n of nodes.values()) if (n.segs.length !== 2) for (const s of n.segs) if (!s.used) chains.push(walk(n, s));
+    for (const s of segs) if (!s.used) chains.push(walk(s.a, s));
+    for (const pts of chains) classify(pts, scale);
+    for (const f of features) {
+      if (f.kind === 'line') { addSnap('end', f.a, f); addSnap('end', f.b, f); addSnap('mid', f.a.clone().lerp(f.b, 0.5), f); }
+      else {
+        addSnap('centre', f.c, f);
+        if (f.closed) for (const d of [f.u, f.v]) { addSnap('quad', f.c.clone().addScaledVector(d, f.r), f); addSnap('quad', f.c.clone().addScaledVector(d, -f.r), f); }
+        else { addSnap('end', f.pts[0], f); addSnap('end', f.pts[f.pts.length - 1], f); addSnap('mid', f.pts[Math.floor(f.pts.length / 2)], f); }
+      }
+    }
+  }
+  function addSnap(kind, p, f) { snaps.push({ kind, p, f }); }
+  /** Split a polyline into straight runs and arcs; emit features. Greedy: a run of
+   *  collinear segments is one edge; otherwise a circle is grown over as many
+   *  points as still fit it; what is left is single segments. */
+  function classify(pts, scale) {
+    const STRAIGHT = THREE.MathUtils.degToRad(1);
+    let P = pts;
+    const closed = P.length > 3 && P[0].distanceTo(P[P.length - 1]) < scale * 1e-6;
+    if (closed) {
+      P = P.slice(0, -1);
+      const whole = fitArc(P, scale, true);
+      if (whole) { features.push(whole); return; }
+      // open the loop at its sharpest corner so no run straddles the seam
+      const n = P.length, turnC = (i) => P[(i + 1) % n].clone().sub(P[i]).angleTo(P[i].clone().sub(P[(i - 1 + n) % n]));
+      let k = 0; for (let i = 1; i < n; i++) if (turnC(i) > turnC(k)) k = i;
+      P = [...P.slice(k), ...P.slice(0, k), P[k]];
+    }
+    const turn = (j) => P[j + 1].clone().sub(P[j]).angleTo(P[j].clone().sub(P[j - 1]));
+    for (let i = 0; i + 1 < P.length;) {
+      let j = i + 1;
+      while (j + 1 < P.length && turn(j) < STRAIGHT) j++;
+      if (j === i + 1) {
+        const arc = growArc(P, i, scale);
+        if (arc) { features.push(arc); i = arc.end; continue; }
+      }
+      features.push({ kind: 'line', a: P[i], b: P[j], pts: P.slice(i, j + 1) });
+      i = j;
+    }
+  }
+  function growArc(P, i, scale) {
+    let j = i + 3;
+    if (j >= P.length) return null;
+    let fit = fitArc(P.slice(i, j + 1), scale, false);
+    if (!fit) return null;
+    while (j + 1 < P.length) { const f2 = fitArc(P.slice(i, j + 2), scale, false); if (!f2) break; fit = f2; j++; }
+    fit.end = j;
+    return fit;
+  }
+  function fitArc(P, scale, closed) {
+    const a = P[0], b = P[Math.floor(P.length / 2)], c = P[P.length - 1];
+    const ab = b.clone().sub(a), ac = c.clone().sub(a), nrm = ab.clone().cross(ac);
+    if (nrm.lengthSq() < 1e-12 * scale ** 4) return null;
+    // circumcentre of a, b, c
+    const d = 2 * nrm.lengthSq();
+    const centre = ac.clone().multiplyScalar(ab.lengthSq()).sub(ab.clone().multiplyScalar(ac.lengthSq())).cross(nrm).divideScalar(d).add(a);
+    const r = centre.distanceTo(a);
+    for (const p of P) if (Math.abs(centre.distanceTo(p) - r) > r * 0.005 + scale * 1e-4) return null;
+    // a polygonised arc steps evenly; a long chord beside tiny ones is a straight edge that happens to fit a huge circle
+    let lo = Infinity, hi = 0;
+    for (let k = 0; k + 1 < P.length; k++) { const ang = 2 * Math.asin(Math.min(1, P[k].distanceTo(P[k + 1]) / (2 * r))); lo = Math.min(lo, ang); hi = Math.max(hi, ang); }
+    if (hi > lo * 3 || lo < THREE.MathUtils.degToRad(0.2)) return null;
+    nrm.normalize();
+    // in-plane axes along the world axes least aligned with the normal, for quadrants
+    const axes = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)].sort((x, y) => Math.abs(x.dot(nrm)) - Math.abs(y.dot(nrm)));
+    const u = axes[0].clone().addScaledVector(nrm, -axes[0].dot(nrm)).normalize(), v = nrm.clone().cross(u);
+    return { kind: 'arc', c: centre, r, n: nrm, u, v, pts: P, closed };
+  }
+
+  // ----------------------------------------------------------------- picking
+  const toScreen = (p) => { const r = canvas.getBoundingClientRect(); const v = p.clone().project(getCamera()); return { x: (v.x + 1) / 2 * r.width, y: (1 - v.y) / 2 * r.height, z: v.z }; };
+  const local = (e) => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  const solids = () => model.children.filter((o) => o.visible && !o.isLine);
+  const kept = (h) => !h.object.material.clippingPlanes?.length || h.object.material.clippingPlanes.every((pl) => pl.distanceToPoint(h.point) >= 0);
+  /** Is this world point in view, or behind a surface? (what the eye sees is what may be picked) */
+  function unoccluded(p) {
+    const r = canvas.getBoundingClientRect(), q = toScreen(p);
+    raycaster.setFromCamera(new THREE.Vector2((q.x / r.width) * 2 - 1, -(q.y / r.height) * 2 + 1), getCamera());
+    const hit = raycaster.intersectObjects(solids(), false).find(kept);
+    return !hit || hit.distance >= raycaster.ray.origin.distanceTo(p) - scaleHint * 1e-3;
+  }
+  let scaleHint = 1;
+  function pick(e) {
+    if (dirty) build();
+    const m = local(e);
+    const near = [];
+    for (const s of snaps) { const q = toScreen(s.p); if (q.z > 1) continue; const d = Math.hypot(q.x - m.x, q.y - m.y); if (d < SNAP_PX) near.push([d, s]); }
+    for (const [, s] of near.sort((a, b) => a[0] - b[0]).slice(0, 6)) if (unoccluded(s.p)) return { snap: s, f: s.f, p: s.p };
+    const curves = [];
+    for (const f of features) {
+      let bd = CURVE_PX;
+      for (let k = 0; k + 1 < f.pts.length; k++) {
+        const a = toScreen(f.pts[k]), b = toScreen(f.pts[k + 1]);
+        if (a.z > 1 || b.z > 1) continue;
+        bd = Math.min(bd, segDist(m, a, b));
+      }
+      if (bd < CURVE_PX) curves.push([bd, f]);
+    }
+    for (const [, f] of curves.sort((a, b) => a[0] - b[0]).slice(0, 6)) { const p = nearestOn(f, e); if (unoccluded(p)) return { f, p }; }
+    // a face, or any surface
+    const r = canvas.getBoundingClientRect();
+    raycaster.setFromCamera(new THREE.Vector2((m.x / r.width) * 2 - 1, -(m.y / r.height) * 2 + 1), getCamera());
+    const hit = raycaster.intersectObjects(solids(), false).find(kept);
+    if (!hit) return null;
+    const faces = hit.object.userData.faces;
+    const face = faces?.find((f) => hit.faceIndex >= f.first && hit.faceIndex < f.first + f.count);
+    return { p: hit.point.clone(), face: face && { mesh: hit.object, ...face } };
+  }
+  const segDist = (m, a, b) => { const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy || 1; const t = Math.max(0, Math.min(1, ((m.x - a.x) * dx + (m.y - a.y) * dy) / l2)); return Math.hypot(m.x - a.x - t * dx, m.y - a.y - t * dy); };
+  /** Closest point on a feature's polyline to the pointer's ray. */
+  function nearestOn(f, e) {
+    const r = canvas.getBoundingClientRect(), m = local(e);
+    raycaster.setFromCamera(new THREE.Vector2((m.x / r.width) * 2 - 1, -(m.y / r.height) * 2 + 1), getCamera());
+    let best = f.pts[0], bd = Infinity; const tmp = new THREE.Vector3();
+    for (let k = 0; k + 1 < f.pts.length; k++) {
+      const d = raycaster.ray.distanceSqToSegment(f.pts[k], f.pts[k + 1], null, tmp);
+      if (d < bd) { bd = d; best = tmp.clone(); }
+    }
+    return best;
+  }
+
+  // ----------------------------------------------------------------- hover
+  function clearHl() { for (const o of [...hl.children]) { hl.remove(o); o.geometry?.dispose(); } }
+  function marker(p, group, k = 0.004) {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(getOrbit().dist * k, 10, 8), new THREE.MeshBasicMaterial({ color: RED, depthTest: false }));
+    s.position.copy(p); s.renderOrder = 4; group.add(s);
+  }
+  function polyline(pts, group) { const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat); l.renderOrder = 4; group.add(l); }
+  function faceMesh(face, group) {
+    const { mesh, first, count } = face;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', mesh.geometry.getAttribute('position'));
+    g.setIndex(new THREE.BufferAttribute(mesh.geometry.index.array.subarray(first * 3, (first + count) * 3), 1));
+    const fm = new THREE.Mesh(g, faceMat); fm.applyMatrix4(mesh.matrixWorld); fm.renderOrder = 4; group.add(fm);
+  }
+  function onHover(e) {
+    if (!on) return;
+    clearHl();
+    hover = pick(e);
+    if (hover?.f) polyline(hover.f.closed ? [...hover.f.pts, hover.f.pts[0]] : hover.f.pts, hl);
+    if (hover?.snap) marker(hover.snap.p, hl, 0.005);
+    if (hover?.face) faceMesh(hover.face, hl);
+    if (pending && hover && !(hover.f && !hover.snap)) {
+      const r = between(pending, entity(hover, e), !!hover.snap, e.shiftKey, true);
+      if (r) { polyline([r.a, r.b], hl); say(`${fmt(r.a.distanceTo(r.b))}  ${deltas(r.a, r.b)}`); }
+    }
+    canvas.style.cursor = hover ? 'crosshair' : 'not-allowed';
+  }
+  const entity = (h, e) => (h.face && !h.snap && !h.f && !e.altKey ? { face: faceData(h.face), raw: h.face } : { p: h.p.clone() });
+
+  // ----------------------------------------------------------------- faces
+  const faceCache = new Map();
+  /** Triangles of a face in world space, its centroid, and its normal when it is planar. */
+  function faceData(face) {
+    const k = `${face.mesh.id}:${face.first}`;
+    if (faceCache.has(k)) return faceCache.get(k);
+    const { mesh, first, count } = face;
+    const pos = mesh.geometry.getAttribute('position'), idx = mesh.geometry.index.array, M = mesh.matrixWorld;
+    const tris = [], nAvg = new THREE.Vector3(), centroid = new THREE.Vector3(), tmp = new THREE.Vector3();
+    let area = 0;
+    for (let t = first; t < first + count; t++) {
+      const tri = new THREE.Triangle(
+        new THREE.Vector3().fromBufferAttribute(pos, idx[3 * t]).applyMatrix4(M),
+        new THREE.Vector3().fromBufferAttribute(pos, idx[3 * t + 1]).applyMatrix4(M),
+        new THREE.Vector3().fromBufferAttribute(pos, idx[3 * t + 2]).applyMatrix4(M));
+      const ar = tri.getArea(); if (!ar) continue;
+      tris.push(tri); area += ar;
+      nAvg.addScaledVector(tri.getNormal(tmp), ar); centroid.addScaledVector(tri.getMidpoint(tmp), ar);
+    }
+    centroid.divideScalar(area || 1); nAvg.normalize();
+    const planar = tris.every((t) => t.getNormal(tmp).dot(nAvg) > 0.9998);
+    const data = { tris, n: planar ? nAvg : null, p0: tris[0]?.a ?? centroid, centroid };
+    faceCache.set(k, data);
+    return data;
+  }
+  /** The two ends of the dimension between A and B (points or faces); quick: skip the slow search. */
+  function between(A, B, bIsSnap, free, quick = false) {
+    if (A.face && B.face) {
+      if (A.face.n && B.face.n && Math.abs(A.face.n.dot(B.face.n)) > 0.999) {   // parallel planes: the gap
+        const a = A.face.centroid.clone(), d = B.face.p0.clone().sub(a).dot(A.face.n);
+        return { a, b: a.clone().addScaledVector(A.face.n, d) };
+      }
+      return quick ? null : closest(A.face, B.face);
+    }
+    if (A.face || B.face) {
+      const F = A.face ?? B.face, p = A.face ? B.p : A.p;
+      if (F.n) { const d = p.clone().sub(F.p0).dot(F.n); return { a: p, b: p.clone().addScaledVector(F.n, -d) }; }
+      if (quick) return null;
+      let best = Infinity, foot = p; const tmp = new THREE.Vector3();
+      for (const t of F.tris) { t.closestPointToPoint(p, tmp); const d = p.distanceToSquared(tmp); if (d < best) { best = d; foot = tmp.clone(); } }
+      return { a: p, b: foot };
+    }
+    return { a: A.p, b: orthoSnap(A.p, B.p, bIsSnap, free) };
+  }
+  /** Closest approach of two triangle sets: vertices of each against triangles of the other. */
+  function closest(A, B) {
+    const verts = (F) => { const step = Math.max(1, Math.ceil(F.tris.length * 3 / 400)), out = []; for (let i = 0; i < F.tris.length * 3; i += step) { const t = F.tris[Math.floor(i / 3)]; out.push([t.a, t.b, t.c][i % 3]); } return out; };
+    let best = Infinity, a = A.centroid, b = B.centroid; const tmp = new THREE.Vector3();
+    for (const [P, Q, swap] of [[A, B, false], [B, A, true]]) {
+      for (const v of verts(P)) for (const t of Q.tris) {
+        t.closestPointToPoint(v, tmp); const d = v.distanceToSquared(tmp);
+        if (d < best) { best = d; [a, b] = swap ? [tmp.clone(), v] : [v, tmp.clone()]; }
+      }
+    }
+    return { a, b };
+  }
+  function orthoSnap(a, b, bIsSnap, free) {
+    if (free) return b;
+    const d = b.clone().sub(a), len = d.length();
+    if (!len) return b;
+    const i = [0, 1, 2].reduce((best, k) => (Math.abs(d.getComponent(k)) > Math.abs(d.getComponent(best)) ? k : best), 0);
+    const cos = Math.abs(d.getComponent(i)) / len;
+    if (cos < (bIsSnap ? 0.9995 : 0.96)) return b;       // a real snap only yields to an exact alignment
+    const out = a.clone(); out.setComponent(i, b.getComponent(i)); return out;
+  }
+
+  // ----------------------------------------------------------------- click
+  function onClick(e) {
+    if (!on) return;
+    const h = hover ?? pick(e);
+    if (!h) return;
+    if (!h.snap && h.f) {                                   // the edge itself: one-click dimension
+      pending = null; clearSel();
+      if (h.f.kind === 'arc') add(h.f.closed
+        ? { kind: 'dia', c: h.f.c.toArray(), r: h.f.r, u: h.f.u.toArray(), v: h.f.v.toArray() }
+        : { kind: 'rad', c: h.f.c.toArray(), r: h.f.r, p: h.f.pts[Math.floor(h.f.pts.length / 2)].toArray() });
+      else add({ kind: 'len', a: h.f.a.toArray(), b: h.f.b.toArray() });
+      return;
+    }
+    const ent = entity(h, e);
+    if (!pending) {
+      pending = ent; clearHl();
+      if (ent.face) faceMesh(ent.raw, sel); else marker(ent.p, sel);
+      say(ent.face ? (ent.face.n ? 'face selected (planar) — pick a second face or a point' : 'face selected — pick a second face or a point') : 'point set — pick a second point or a face');
+      return;
+    }
+    const r = between(pending, ent, !!h.snap, e.shiftKey);
+    add({ kind: 'dist', a: r.a.toArray(), b: r.b.toArray() });
+    pending = null; clearSel();
+  }
+  function clearSel() { for (const o of [...sel.children]) { sel.remove(o); o.geometry?.dispose(); } }
+  function add(d) { dims.push(d); render(); onChange?.(); say(text(d)); }
+
+  // ----------------------------------------------------------------- dims
+  const fmt = (v) => v.toFixed(3);
+  const deltas = (a, b) => `(Δx ${fmt(Math.abs(a.x - b.x))}  Δy ${fmt(Math.abs(a.y - b.y))}  Δz ${fmt(Math.abs(a.z - b.z))})`;
+  function text(d) {
+    const V = (arr) => new THREE.Vector3(...arr);
+    if (d.kind === 'dia') return `⌀${fmt(d.r * 2)}`;
+    if (d.kind === 'rad') return `R${fmt(d.r)}`;
+    return fmt(V(d.a).distanceTo(V(d.b)));
+  }
+  function label(t, pos, d) {
+    const el = document.createElement('div');
+    el.className = 'mlabel'; el.textContent = t; el.title = 'Click to remove';
+    el.userData = { pos };
+    el.addEventListener('click', (ev) => { ev.stopPropagation(); dims = dims.filter((x) => x !== d); render(); onChange?.(); });
+    layer.appendChild(el); labels.push(el);
+  }
+  function render() {
+    for (const o of [...dimGroup.children]) { dimGroup.remove(o); o.geometry?.dispose(); }
+    for (const l of labels) l.remove();
+    labels = [];
+    const V = (arr) => new THREE.Vector3(...arr);
+    for (const d of dims) {
+      if (d.kind === 'dist' || d.kind === 'len') {
+        const a = V(d.a), b = V(d.b);
+        polyline([a, b], dimGroup); marker(a, dimGroup); marker(b, dimGroup);
+        label(text(d), a.clone().lerp(b, 0.5), d);
+      } else if (d.kind === 'dia') {
+        const c = V(d.c), u = V(d.u), v = V(d.v);
+        const ring = []; for (let k = 0; k <= 72; k++) { const t = k / 72 * Math.PI * 2; ring.push(c.clone().addScaledVector(u, Math.cos(t) * d.r).addScaledVector(v, Math.sin(t) * d.r)); }
+        polyline(ring, dimGroup);
+        const a = c.clone().addScaledVector(u, -d.r), b = c.clone().addScaledVector(u, d.r);
+        polyline([a, b], dimGroup); marker(a, dimGroup); marker(b, dimGroup);
+        label(text(d), c.clone().addScaledVector(u, d.r * 0.5), d);
+      } else if (d.kind === 'rad') {
+        const c = V(d.c), p = V(d.p);
+        polyline([c, p], dimGroup); marker(c, dimGroup); marker(p, dimGroup);
+        label(text(d), c.clone().lerp(p, 0.5), d);
+      }
+    }
+    const footer = document.querySelector('#measures');
+    if (footer && dims.length) footer.textContent = dims.map(text).join(' · ');
+  }
+  function projectLabels() {
+    const r = canvas.getBoundingClientRect();
+    for (const l of labels) {
+      const v = l.userData.pos.clone().project(getCamera());
+      l.style.left = `${(v.x + 1) / 2 * r.width}px`;
+      l.style.top = `${(1 - v.y) / 2 * r.height}px`;
+      l.hidden = v.z > 1;
+    }
+  }
+
+  return {
+    get on() { return on; },
+    setOn(v) { on = v; pending = null; clearHl(); clearSel(); canvas.style.cursor = v ? 'crosshair' : ''; if (v) dirty = true; },
+    invalidate() { dirty = true; faceCache.clear(); },
+    hover: onHover, click: onClick, projectLabels,
+    get dims() { return dims; },
+    get features() { if (dirty) build(); return features; },   // for headless drives
+    debugPick(clientX, clientY) { const h = pick({ clientX, clientY }); if (!h) return null; const fd = h.face && faceData(h.face); return { snap: h.snap?.kind, f: h.f?.kind, p: h.p.toArray(), face: h.face && { mesh: h.face.mesh.userData.name, first: h.face.first, count: h.face.count, planar: !!fd.n, n: fd.n?.toArray(), p0: fd.p0.toArray(), centroid: fd.centroid.toArray() } }; },
+    load(list) { dims = Array.isArray(list) ? list : []; render(); },
+    clear() { dims = []; pending = null; clearHl(); clearSel(); faceCache.clear(); render(); },
+  };
+}
