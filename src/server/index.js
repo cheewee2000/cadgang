@@ -16,6 +16,7 @@ import { CellDocument } from '../core/cells.js';
 import { apiRouter } from './api.js';
 import { cellsRouter } from './cells.js';
 import { viewRouter } from './view.js';
+import { historyRouter } from './history.js';
 import { initBrep } from '../core/brep.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -67,7 +68,13 @@ app.get('/api/project', (req, res) => res.json({ dir: project.dir, cells: cells.
 app.post('/api/project', (req, res, next) => {
   try { setProject(String(req.body?.dir || '')); res.json({ dir: project.dir, cells: cells.filePath }); } catch (e) { next(e); }
 });
-app.use('/api/cells', cellsRouter(cells, ROOT, { project }));
+const cellsApi = cellsRouter(cells, ROOT, { project });
+// Versions live beside the document: <project>/cadgang/history/ (or data/history/ in dev).
+app.use('/api/cells/history', historyRouter(cells, {
+  dirOf: () => path.join(path.dirname(cells.filePath || CELLS_PATH), 'history'),
+  modelOf: cellsApi.modelOf, broadcast,
+}));
+app.use('/api/cells', cellsApi);
 app.use('/api/view', viewRouter());
 // A body that is not JSON (a literal NaN, a stray comma) is a client error in
 // the API's own shape, not Express's HTML page with a stack trace on it.

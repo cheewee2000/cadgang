@@ -239,6 +239,13 @@ export class CellDocument {
     return this.toJSON();
   }
 
+  /** Replace the stack with a saved snapshot ({cells, output, counter}) — one undo step. */
+  restore(snapshot) {
+    this._pushUndo();
+    this._restore({ cells: structuredClone(snapshot.cells), output: snapshot.output ?? null, counter: snapshot.counter ?? snapshot.cells.length });
+    return this.toJSON();
+  }
+
   redo() {
     if (!this._redo.length) throw new GraphError('Nothing to redo');
     this._undo.push(this._snapshot());

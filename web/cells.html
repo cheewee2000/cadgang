@@ -38,9 +38,11 @@
         <span class="stack-label">CELL STACK</span>
         <span class="stack-head-right">
           <span id="stackCount" class="stack-count"></span>
+          <button id="historyToggle" class="ghost" title="Versions: every meaningful change, with a look and a note">HISTORY</button>
           <button id="graphToggle" class="ghost" title="Show the derived dependency graph">DEPS</button>
         </span>
       </div>
+      <div id="historyPanel" hidden></div>
       <div id="graphPanel" hidden></div>
       <div id="docWarn" hidden></div>
       <div id="stack"></div>
@@ -52,6 +54,7 @@
     <div id="dragbar" title="Drag to resize"></div>
     <div id="viewport">
       <div id="pickBar" hidden></div>
+      <div id="versionBar" hidden></div>
     </div>
   </main>
 

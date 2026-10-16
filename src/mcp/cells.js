@@ -503,6 +503,74 @@ Args:
   );
 
   server.registerTool(
+    'cadgang_cells_history',
+    {
+      title: 'Version history of the cell stack',
+      description: `List the versions of the cell document, or fetch one version with its rendered look.
+
+Versions are made automatically: a structural edit (cell added/removed/moved, code, prompt, sketch, selections, output) becomes a version ~1.5 s after the burst settles; parameter scrubs become one version once the knobs have been idle 20 s; a revert or an explicit save is a version at once. Each carries an AUTO annotation written from the diff ("changed params (h 10 → 20) on 'body'; volume +100%, size z +10") plus any note you or the user added, the measures, and a PNG. They live in <project>/cadgang/history/.
+
+Use it to tell the user what changed between two states, to find the version they liked ("the one before the lid got taller"), and before a revert.
+
+Args:
+  - n: a version number — returns that version in full with its image. Omit to list.
+  - limit: with no n, how many of the newest versions to list (default 20).`,
+      inputSchema: { n: z.number().int().positive().optional(), limit: z.number().int().min(1).max(200).default(20) },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ n, limit }) => {
+      try {
+        if (n === undefined) {
+          const { dir, versions } = await call('/cells/history');
+          return ok({ dir, total: versions.length, versions: versions.slice(-limit) });
+        }
+        const { snapshot, ...v } = await call(`/cells/history/${n}`);
+        const content = [{ type: 'text', text: JSON.stringify({ ...v, cells: snapshot.cells.map((c) => ({ id: c.id, kind: c.kind, prompt: c.prompt, params: c.params })) }, null, 2) }];
+        const img = await fetch(`${base}/api/cells/history/${n}.png`);
+        if (img.ok) content.push({ type: 'image', data: Buffer.from(await img.arrayBuffer()).toString('base64'), mimeType: 'image/png' });
+        return { content };
+      } catch (e) { return fail(e); }
+    }
+  );
+
+  server.registerTool(
+    'cadgang_cells_save_version',
+    {
+      title: 'Save a version now, or annotate one',
+      description: `Make a version of the current stack right now with a note, or add/replace the note on an existing version.
+
+Do this at milestones the autosave policy cannot know about — "the bracket the user approved", "before trying the thinner wall" — and to write down WHY a change was made next to the automatic WHAT. Returns the version.
+
+Args:
+  - note: the annotation
+  - n: an existing version to annotate instead of saving a new one`,
+      inputSchema: { note: z.string().max(2000), n: z.number().int().positive().optional() },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ note, n }) => {
+      try {
+        if (n !== undefined) return ok(await call(`/cells/history/${n}/note`, { method: 'POST', body: { note } }));
+        return ok(await call('/cells/history', { method: 'POST', body: { note } }));
+      } catch (e) { return fail(e); }
+    }
+  );
+
+  server.registerTool(
+    'cadgang_cells_revert',
+    {
+      title: 'Revert the stack to a version',
+      description: `Restore the whole cell stack to version n. One undo step; also recorded as a new version ("reverted to #n"), so nothing is ever lost — reverting is itself revertible.
+
+Look at the version first (cadgang_cells_history with n) unless the user named it.`,
+      inputSchema: { n: z.number().int().positive() },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ n }) => {
+      try { return ok(await call(`/cells/history/${n}/revert`, { method: 'POST', body: {} })); } catch (e) { return fail(e); }
+    }
+  );
+
+  server.registerTool(
     'cadgang_cells_export',
     {
       title: 'Export the cell stack',

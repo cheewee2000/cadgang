@@ -319,3 +319,19 @@ footer {
 /* Clicking a node in the graph should land you somewhere you can see. */
 .cell.flash { background: var(--paper-2); }
 .stack-head-right { display: flex; align-items: baseline; gap: var(--sp-2); }
+
+/* ------------------------------------------------------------ history */
+#historyPanel { border-bottom: var(--bw-hair) solid var(--rule); max-height: 40vh; overflow-y: auto; }
+#historyPanel[hidden] { display: none; }
+.hist-head { display: flex; align-items: center; justify-content: space-between; padding: var(--sp-2) var(--sp-3); font-size: var(--fs-12); color: var(--ink-faint); letter-spacing: var(--ls-label); }
+.hist-head button { font-size: var(--fs-12); padding: 2px 8px; }
+.version { display: grid; grid-template-columns: 96px 1fr; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-top: var(--bw-hair) solid var(--rule-soft); cursor: pointer; }
+.version:hover, .version.viewing { background: var(--paper-2); }
+.version img { width: 96px; height: 72px; object-fit: contain; background: var(--paper); border: var(--bw-hair) solid var(--rule); display: block; }
+.version .v-meta { display: flex; gap: var(--sp-2); font-size: var(--fs-12); color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.version .v-kind { text-transform: uppercase; letter-spacing: var(--ls-label); }
+.version .v-note { font-size: var(--fs-14); color: var(--ink); margin: 2px 0; }
+.version .v-auto { font-size: var(--fs-12); color: var(--ink-soft); line-height: 1.4; }
+#versionBar { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); background: var(--paper); border-bottom: var(--bw-hair) solid var(--ink); font-size: var(--fs-12); letter-spacing: var(--ls-label); z-index: 2; }
+#versionBar[hidden] { display: none; }
+#versionBar button { font-size: var(--fs-12); padding: 2px 8px; }

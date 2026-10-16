@@ -121,6 +121,21 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     @objc func showCells(_ s: Any?) { web.load(URLRequest(url: BASE.appendingPathComponent("cells"))) }
     @objc func showViewer(_ s: Any?) { load() }
 
+    // The v1 page still asks with confirm(); without these a WKWebView answers silently.
+    func webView(_ w: WKWebView, runJavaScriptAlertPanelWithMessage m: String, initiatedByFrame f: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        let a = NSAlert(); a.messageText = m; a.runModal(); completionHandler()
+    }
+    func webView(_ w: WKWebView, runJavaScriptConfirmPanelWithMessage m: String, initiatedByFrame f: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        let a = NSAlert(); a.messageText = m; a.addButton(withTitle: "OK"); a.addButton(withTitle: "Cancel")
+        completionHandler(a.runModal() == .alertFirstButtonReturn)
+    }
+    func webView(_ w: WKWebView, runJavaScriptTextInputPanelWithPrompt p: String, defaultText: String?, initiatedByFrame f: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        let a = NSAlert(); a.messageText = p; a.addButton(withTitle: "OK"); a.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24)); field.stringValue = defaultText ?? ""
+        a.accessoryView = field
+        completionHandler(a.runModal() == .alertFirstButtonReturn ? field.stringValue : nil)
+    }
+
     // <input type=file> inside the page
     func webView(_ w: WKWebView, runOpenPanelWith p: WKOpenPanelParameters, initiatedByFrame f: WKFrameInfo,
                  completionHandler: @escaping ([URL]?) -> Void) {

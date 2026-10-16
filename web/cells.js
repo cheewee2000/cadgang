@@ -686,6 +686,98 @@ $('#graphToggle').onclick = () => {
   renderGraph();
 };
 
+// ------------------------------------------------------------------ history
+
+/**
+ * Versions are made by the server's autosave policy (a structural edit, or
+ * knobs left alone for 20 s); here they are a strip of looks with their
+ * automatic notes. Clicking one shows THAT version's geometry in the viewport
+ * without touching the document; REVERT restores it as one undo step.
+ */
+let historyOpen = localStorage.getItem('cadgang-cells-history') === '1';
+let viewingVersion = null;
+
+function ago(iso) {
+  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return `${Math.round(s)}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+async function renderHistory() {
+  const panel = $('#historyPanel');
+  panel.hidden = !historyOpen;
+  $('#historyToggle').classList.toggle('on', historyOpen);
+  if (!historyOpen) return;
+  let versions = [];
+  try { versions = (await api('/history')).versions; } catch (e) { panel.innerHTML = ''; return; }
+  panel.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'hist-head';
+  head.innerHTML = `<span>${versions.length} VERSION${versions.length === 1 ? '' : 'S'}</span>`;
+  const save = document.createElement('button');
+  save.className = 'ghost'; save.textContent = 'SAVE NOW'; save.title = 'Make a version of the current stack now, with a note';
+  save.onclick = async () => {
+    try { const v = await api('/history', { method: 'POST', body: {} }); say(v.n ? `saved #${v.n}` : v.reason); } catch (e) { say(e.message, true); }
+  };
+  head.appendChild(save);
+  panel.appendChild(head);
+  for (const v of [...versions].reverse()) {
+    const el = document.createElement('div');
+    el.className = 'version' + (viewingVersion === v.n ? ' viewing' : '');
+    el.innerHTML = `
+      <img src="${API}/history/${v.n}.png?t=${encodeURIComponent(v.at)}" alt="" onerror="this.style.visibility='hidden'">
+      <div>
+        <div class="v-meta"><span>#${v.n}</span><span class="v-kind">${v.kind}</span><span>${ago(v.at)}</span><span>${v.cells} cell${v.cells === 1 ? '' : 's'}</span></div>
+        ${v.note ? `<div class="v-note"></div>` : ''}
+        <div class="v-auto"></div>
+      </div>`;
+    if (v.note) el.querySelector('.v-note').textContent = v.note;
+    el.querySelector('.v-auto').textContent = v.auto?.text || '';
+    el.title = 'Click to look at this version; it does not change the document';
+    el.onclick = () => viewVersion(v.n);
+    panel.appendChild(el);
+  }
+}
+
+async function viewVersion(n) {
+  const bar = $('#versionBar');
+  try {
+    say(`loading #${n}…`);
+    const mesh = await api(`/history/${n}/mesh`);
+    viewingVersion = n;
+    setGeometry(mesh);
+    bar.hidden = false;
+    bar.innerHTML = '';
+    const label = document.createElement('span');
+    label.textContent = `VIEWING VERSION #${n}` + (mesh.measures ? ` · vol ${fmt(mesh.measures.volume)} mm³ · ${mesh.measures.bbox.size.map(fmt).join(' × ')} mm` : '');
+    const revert = document.createElement('button'); revert.className = 'ghost'; revert.textContent = 'REVERT TO THIS';
+    revert.onclick = async () => {
+      try { await api(`/history/${n}/revert`, { method: 'POST', body: {} }); say(`reverted to #${n}`); leaveVersion(); } catch (e) { say(e.message, true); }
+    };
+    const back = document.createElement('button'); back.className = 'ghost'; back.textContent = 'BACK TO CURRENT';
+    back.onclick = leaveVersion;
+    bar.append(label, revert, back);
+    say('');
+    renderHistory();
+  } catch (e) { say(e.message, true); }
+}
+
+function leaveVersion() {
+  viewingVersion = null;
+  $('#versionBar').hidden = true;
+  if (lastMesh) setGeometry(lastMesh);
+  refresh({ structural: false });
+  renderHistory();
+}
+
+$('#historyToggle').onclick = () => {
+  historyOpen = !historyOpen;
+  localStorage.setItem('cadgang-cells-history', historyOpen ? '1' : '0');
+  renderHistory();
+};
+
 // ------------------------------------------------------------------ refresh
 
 /**
@@ -750,6 +842,7 @@ async function refresh({ structural = true } = {}) {
   }
 
   await renderGraph();
+  renderHistory();
 
   // A failed assertion is a property of the DOCUMENT, so it is said once at the
   // top of the stack rather than only inside the cell that noticed.
@@ -773,7 +866,8 @@ async function refresh({ structural = true } = {}) {
     // the pick is made.
     const mesh = await api(pick ? `/mesh?cell=${encodeURIComponent(pick.source)}` : '/mesh');
     lastMesh = mesh;
-    setGeometry(mesh);
+    // Looking at an old version: keep showing it, but have the current mesh ready for BACK.
+    if (viewingVersion === null) setGeometry(mesh);
     frame(m?.bbox);
     // When the newest cell is broken the server falls back to the deepest one
     // that built. Say so — a viewport quietly showing an older state is worse
@@ -841,6 +935,7 @@ function connect() {
     // signature check inside, while a drawn line or a turned knob must not
     // remount every canvas on the page.
     if (msg.type === 'cells_changed' && msg.revision !== doc.revision) refresh({ structural: false });
+    if (msg.type === 'history_changed') renderHistory();
   };
   // Claude Code authoring in the background is the normal case, so a dropped
   // socket must not leave the transcript silently stale.

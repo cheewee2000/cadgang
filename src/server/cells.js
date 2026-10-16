@@ -56,8 +56,11 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
    * say which cell that was. Everything else stays strict: introspecting or
    * exporting a different cell than the one asked for is worse than an error.
    */
-  async function withShape(req, body, { partial = false, requireAssertions = false } = {}) {
-    const target = req.query.cell || req.body?.cell || doc.terminal;
+  async function withShape(req, body, opts = {}) {
+    return withShapeOf(doc, req.query.cell || req.body?.cell || doc.terminal, body, opts);
+  }
+
+  async function withShapeOf(document, target, body, { partial = false, requireAssertions = false } = {}) {
     if (!target) throw new GraphError('The cell document is empty — add a cell first');
     await initBrep();
     const scope = beginBrepScope();
@@ -65,7 +68,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
       // Walk the whole chain: a broken cell above the target only matters if the
       // target needed what it made. A box built from scratch under a half-drawn
       // sketch still has a topology to report.
-      const run = evaluateCells(doc, target, { stopOnError: false });
+      const run = evaluateCells(document, target, { stopOnError: false });
       const shown = run.value ? target : partial ? run.lastGood : null;
       if (!shown) {
         const mine = run.report.find((c) => c.id === target && c.status !== 'ok');
@@ -549,6 +552,26 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
       });
     } catch (e) { fail(res, e); }
   });
+
+  /**
+   * What the history keeps per version: measures, optionally a rendered look
+   * and the viewport mesh. Works on ANY CellDocument (a version's snapshot
+   * loaded into a scratch document), so a past version can be looked at in 3D
+   * without restoring it.
+   */
+  r.modelOf = async (document = doc, { png = false, mesh = false, width = 320, height = 240 } = {}) =>
+    withShapeOf(document, document.terminal, ({ shape, shown }) => {
+      const out = { shown, measures: measuresOf(shape) };
+      const diag = Math.hypot(...out.measures.bbox.size) || 1;
+      const tol = Math.min(0.1, Math.max(0.01, diag / 2000));
+      if (png || mesh) {
+        const t = tessellate(shape, { tolerance: tol });
+        const edges = tessellateEdges(shape, { tolerance: tol });
+        if (png) out.png = renderMesh(t, edges, brepBBox(shape), { width, height, yaw: -35, pitch: 25 });
+        if (mesh) out.mesh = { positions: Array.from(t.positions), normals: Array.from(t.normals), indices: Array.from(t.indices), faces: t.faces, edges };
+      }
+      return out;
+    }, { partial: true });
 
   // Anything else under this router is a typo, and answers as JSON like the rest.
   r.use((req, res) => res.status(404).json({ error: `No such API route: ${req.method} ${req.originalUrl}` }));
