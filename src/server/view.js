@@ -43,7 +43,19 @@ async function localFile(req) {
   if (!mayReadLocal(req)) throw Object.assign(new Error('Reading local paths is only available in the desktop app, or from this computer'), { status: 403 });
   const p = String(req.query.path || '');
   if (!path.isAbsolute(p)) throw Object.assign(new Error('path must be absolute'), { status: 400 });
-  return { name: path.basename(p), buffer: await fs.readFile(p) };
+  return { name: path.basename(p), path: p, buffer: await fs.readFile(p) };
+}
+
+/** Poll each opened local file; a changed mtime tells the pages to reload it in place. */
+export function fileWatcher(broadcast) {
+  const watched = new Set();   // ponytail: watchers live for the process; unwatch on page close if a long session opens thousands
+  return (p) => {
+    if (watched.has(p)) return;
+    watched.add(p);
+    fsSync.watchFile(p, { interval: 1000 }, (cur, prev) => {
+      if (cur.mtimeMs !== prev.mtimeMs && cur.size > 0) broadcast({ type: 'file_changed', path: p });
+    });
+  };
 }
 
 /**
@@ -73,6 +85,8 @@ export function pack(m) {
  *   POST    /api/view/open {paths}      tell every open page to open these files (the MCP tool)
  */
 export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
+  const watch = fileWatcher(broadcast);
+  const local = async (req) => { const f = await localFile(req); watch(f.path); return f; };
   const r = express.Router();
   const slug = (subject) => crypto.createHash('sha1').update(String(subject)).digest('hex').slice(0, 16);
   const markupPath = (subject) => path.join(dataDir, 'markups', `${slug(subject)}.json`);
@@ -133,14 +147,14 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
 
   r.get('/file', async (req, res, next) => {
     try {
-      const { name, buffer } = await localFile(req);
+      const { name, buffer } = await local(req);
       res.set('Content-Type', 'application/octet-stream').set('X-Name', encodeURIComponent(name)).send(buffer);
     } catch (e) { next(e); }
   });
 
   r.post('/tessellate', express.raw({ type: () => true, limit: '500mb' }), async (req, res, next) => {
     try {
-      const src = req.query.path ? await localFile(req) : { name: String(req.query.name || 'part.step'), buffer: req.body };
+      const src = req.query.path ? await local(req) : { name: String(req.query.name || 'part.step'), buffer: req.body };
       if (!src.buffer?.length) throw Object.assign(new Error('Empty upload — send the file as the raw request body'), { status: 400 });
       const t0 = Date.now();
       // Deflection is a bbox ratio: 0.001 is CAD-viewer quality; coarser for huge assemblies is the caller's call.

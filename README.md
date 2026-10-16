@@ -34,6 +34,7 @@ No build step; the page is plain ES modules. `CADGANG_PORT` picks the port, `CAD
 - **Undo/redo** (⌘Z / ⇧⌘Z) covers every view change, dimension and stroke. **Right-click** opens the command menu; every button shows its hotkey on hover.
 - Rotation has no limits. Scroll rotates, shift-scroll pans, pinch zooms, double-click re-centres.
 - **DXF** drawings are paper: drag and scroll pan, two-finger spin turns in 90° steps (`[` `]` on a keyboard), **Flip** (B) turns the sheet over. Lines, polylines with bulges, circles, arcs, ellipses, splines and block inserts are drawn; text, dimensions and hatches are skipped and counted.
+- A file opened by path reloads in place when it changes on disk (export again from your CAD; the camera stays).
 - `?open=/abs/a.step|/abs/b.stl`, `?section=z:0.3`, `?explode=0.4` set the viewer from a URL.
 
 | Key | Action | Key | Action |
@@ -66,7 +67,7 @@ The repo ships `.mcp.json` (and `.codex/config.toml`), so opening it in Claude C
 | `POST /api/view/open {paths}` | Tell open pages to open files |
 | `GET /api/health` | Version and connected pages |
 
-`ws://…/ws` says hello with the server version (pages reload when it changed) and broadcasts `markup_changed`, `snapshot_request` and `open`.
+`ws://…/ws` says hello with the server version (pages reload when it changed) and broadcasts `markup_changed`, `snapshot_request`, `open` and `file_changed` (a local file opened by path was rewritten).
 
 ## Layout
 

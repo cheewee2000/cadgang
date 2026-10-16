@@ -215,7 +215,7 @@ function applyExplode() {
 }
 $('#explode').addEventListener('input', applyExplode);
 
-function finishLoad(name, ms) {
+function finishLoad(name, ms, keep = false) {
   const box = new THREE.Box3().setFromObject(model);
   if (box.isEmpty()) { say(`${name}: nothing to show`, true); return; }
   bbox = box;
@@ -238,8 +238,7 @@ function finishLoad(name, ms) {
   setupSection();
   // A flat drawing is read from above and handled like paper: pan, turn in quarters, flip over.
   ui.flat = size.z < 1e-9; $('#sideBtn').hidden = !ui.flat;
-  if (ui.flat) setView('3');
-  fit();
+  if (!keep) { if (ui.flat) setView('3'); fit(); }   // a reload of a changed file keeps the camera
   edges.visible = ui.edges;
   say(`${name} in ${ms} ms`);
   loadMarkup();
@@ -510,7 +509,7 @@ async function openBuffers(files) {
 }
 
 /** Open from absolute paths — the macOS shell calls this with what Finder handed it. */
-window.cadgangOpen = async function cadgangOpen(paths) {
+window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
   const t0 = performance.now();
   clearModel();
   subject = [].concat(paths).join('|');   // markups attach to the file by path
@@ -527,7 +526,7 @@ window.cadgangOpen = async function cadgangOpen(paths) {
       shown++; label = name;
     } catch (e) { loadFailed(name, e); return; }
   }
-  if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0));
+  if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0), keep);
 };
 
 async function filesToBuffers(fileList) {
@@ -644,6 +643,7 @@ let pageVersion = null;
     if (msg.type === 'snapshot_request') postSnapshot();
     if (msg.type === 'markup_changed' && msg.subject === subject) loadMarkup();
     if (msg.type === 'open' && msg.paths?.length) window.cadgangOpen(msg.paths);   // pushed from MCP
+    if (msg.type === 'file_changed' && subject.split('|').includes(msg.path)) { say('file changed, reloading…'); window.cadgangOpen(subject.split('|'), { keep: true }); }
   };
   ws.onclose = () => setTimeout(connect, 1500);
 })();
