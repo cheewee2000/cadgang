@@ -222,6 +222,25 @@ test('geometry comes out as triangles, STEP, and a PNG', async () => {
   assert.deepEqual([...png.data.subarray(1, 4)], [0x50, 0x4e, 0x47]);
 });
 
+test('a compound keeps touching parts as separate bodies, and exports as STL', async () => {
+  await api('/', { method: 'POST', body: { id: 'asm', prompt: 'two stacked boxes kept apart', code: `
+export const params = {};
+export default ({ brep }) => brep.compound(brep.box(10, 10, 10), brep.translate(brep.box(10, 10, 10), [0, 0, 10]));
+` } });
+  const ev = await api('/evaluate?cell=asm');
+  assert.equal(ev.data.measures.bodies, 2);
+  assert.equal(ev.data.measures.volume, 2000);
+  const stl = await api('/export/stl?cell=asm');
+  assert.equal(stl.status, 200);
+  assert.equal(stl.headers.get('content-type'), 'model/stl');
+  const tris = stl.data.readUInt32LE(80);
+  assert.equal(stl.data.length, 84 + 50 * tris);
+  assert.equal(tris, 24); // two boxes, 12 triangles each
+  const q = await api('/query?cell=asm', { method: 'POST', body: { expression: 'brep.mass(shape, 1.04)' } });
+  assert.ok(Math.abs(q.data.value - 2.08) < 1e-9, `mass ${q.data.value}`);
+  await api('/asm', { method: 'DELETE' });
+});
+
 test('a delete that would orphan a reference is refused', async () => {
   await api('/round', { method: 'PATCH', body: { refs: ['body'] } });
   const r = await api('/body', { method: 'DELETE' });
@@ -559,7 +578,9 @@ test('a failing assertion refuses the export but not the viewport', async () => 
   assert.equal(bad.status, 400, 'export should refuse');
   assert.match(bad.data.error, /Refusing to export/);
   assert.match(bad.data.error, /min wall/);
-  assert.equal((await api('/export/stl')).status, 404, 'STEP is the only export');
+  const badStl = await api('/export/stl');
+  assert.equal(badStl.status, 400, 'STL refuses too');
+  assert.match(badStl.data.error, /Refusing to export/);
 
   await api('/toothin', { method: 'DELETE' });
   const ok = await api('/export/step');

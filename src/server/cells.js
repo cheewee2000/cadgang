@@ -14,6 +14,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import express from 'express';
+import { toBinarySTL } from '../core/stl.js';
 import { GraphError } from '../core/errors.js';
 import {
   evaluateCells, evaluationOrder, dependenciesOf, dependencyGraph, hasUnresolvedSelections,
@@ -459,13 +460,13 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
       }
       await withShape(req, ({ shape, target }) => {
         const probe = compileCell(
-          `export default ({ q, input }) => { const shape = input; return (${expression}); };`,
+          `export default ({ q, brep, input }) => { const shape = input; return (${expression}); };`,
           { id: `query:${target}` }
         );
         const result = probe.run(cellApi({ input: shape }));
         if (result instanceof Query) {
           res.json({ cell: target, source: expression, ...result.explain() });
-        } else if (typeof result === 'number') {
+        } else if (typeof result === 'number' && /\.count\(\)\s*$/.test(expression)) {
           res.json({ cell: target, source: expression, count: result });
         } else if (Array.isArray(result) && result.every((d) => d && typeof d === 'object' && 'kind' in d)) {
           res.json({ cell: target, source: expression, count: result.length, matched: result });
@@ -473,10 +474,13 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
           res.json({ cell: target, source: expression, count: 1, matched: [result] });
         } else if (result && typeof result === 'object' && 'expression' in result) {
           res.json({ cell: target, source: expression, ...result });
-        } else {
+        } else if (result == null || typeof result === 'string' || typeof result === 'function') {
           throw new GraphError(
-            'That expression did not produce a query. Build one with q.faces(shape) or q.edges(shape).'
+            'That expression did not produce a query or a measure. Build one with q.faces(shape) or q.edges(shape), or measure with brep.mass(shape, 1.04), brep.centroid(shape), brep.bbox(shape).'
           );
+        } else {
+          // A measure: brep.mass(shape, 1.04), brep.centroid(shape), brep.bbox(shape)…
+          res.json({ cell: target, source: expression, value: result });
         }
       });
     } catch (e) { fail(res, e); }
@@ -534,6 +538,21 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
     } catch (e) { fail(res, e); }
   });
 
+  /** STL for printing: the exact solid tessellated at the viewport tolerance (or ?tolerance=). Refuses like STEP does. */
+  r.get('/export/stl', async (req, res) => {
+    try {
+      await withShape(req, ({ shape, target }) => {
+        const t = tessellate(shape, { tolerance: tolerance(req, shape) });
+        const stl = toBinarySTL(t.positions, t.indices, target);
+        const savedTo = saveExport(req.query.file, 'stl', stl);
+        res.setHeader('Content-Type', 'model/stl');
+        res.setHeader('Content-Disposition', `attachment; filename="${target}.stl"`);
+        if (savedTo) res.setHeader('X-Saved-To', savedTo);
+        res.send(stl);
+      }, { requireAssertions: true });
+    } catch (e) { fail(res, e); }
+  });
+
   /** PNG preview: the exact solid's tessellation, rasterised with its edges drawn over. */
   r.get('/preview.png', async (req, res) => {
     try {
@@ -544,6 +563,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
           height: parseInt(req.query.height || '480', 10),
           yaw: parseFloat(req.query.yaw ?? '-35'),
           pitch: parseFloat(req.query.pitch ?? '25'),
+          theme: 'paper',
         });
         res.setHeader('Content-Type', 'image/png');
         res.setHeader('X-Width', String(Math.max(64, Math.min(1600, parseInt(req.query.width || '640', 10)))));

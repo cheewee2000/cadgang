@@ -1021,7 +1021,8 @@ export function brepOffset(shape, distance) {
     } catch (e) {
       if (distance < 0 && /null|not type/i.test(String(e?.message))) {
         throw new GraphError(
-          `offset by ${distance} mm left nothing: every wall of the part is thinner than ${2 * -distance} mm, so shrinking it that far collapses it`
+          `offset by ${distance} mm left nothing: some feature of the part is thinner than ${2 * -distance} mm and collapsed — ` +
+          `a fillet with a radius under the wall thickness is the usual one (shell BEFORE filleting, or fillet with radius ≥ wall)`
         );
       }
       throw e;
@@ -1051,6 +1052,11 @@ export function brepDraft(shape, faces, angle, pull, neutralAt) {
     builder.delete();
     return out;
   });
+}
+
+/** Several shapes kept as separate bodies in one compound: an assembly, nothing fused. */
+export function brepCompound(shapes) {
+  return attempt('compound', () => track(rc.compoundShapes(shapes)));
 }
 
 /** How many separate solids a result holds: a union of bodies that do not touch is two. */
@@ -1210,7 +1216,10 @@ export function tessellate(shape, { tolerance = 0.01, angularTolerance = 0.3 } =
   requireSolid(shape, 'shape');
   return attempt('tessellation', () => {
     let mesh = shape.mesh({ tolerance: Math.max(tolerance, COARSE), angularTolerance });
-    if (tolerance < COARSE && mesh.triangles.length / 3 <= MESH_BUDGET) {
+    // Triangle count grows about linearly with 1/tolerance, so judge the budget
+    // on the FINE count the coarse one predicts — judging the coarse count let a
+    // 21k-triangle thread refine into 259k triangles and 9 s.
+    if (tolerance < COARSE && (mesh.triangles.length / 3) * (COARSE / tolerance) <= MESH_BUDGET) {
       mesh = shape.mesh({ tolerance, angularTolerance });
     }
     const groups = mesh.faceGroups ?? [];
@@ -1265,21 +1274,32 @@ export function tightBounds(shape) {
   // analytic box; their triangulation is the honest extent, to its deflection.
   const faces = Array.isArray(shape.faces) ? shape.faces : [];
   const curvedFree = faces.every((f) => ['PLANE', 'CYLINDRE', 'CONE', 'SPHERE', 'TORUS'].includes(f.geomType));
-  if (faces.length && !curvedFree) {
-    const tol = 0.01;
-    const { positions } = tessellate(shape, { tolerance: tol });
-    const min = [Infinity, Infinity, Infinity]; const max = [-Infinity, -Infinity, -Infinity];
-    for (let i = 0; i < positions.length; i += 3) {
-      for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], positions[i + k]); max[k] = Math.max(max[k], positions[i + k]); }
-    }
-    return { min: min.map((v) => v - tol), max: max.map((v) => v + tol) };
-  }
   const box = new OC.Bnd_Box_1();
   OC.BRepBndLib.AddOptimal(shape.wrapped, box, true, false);
   const lo = box.CornerMin();
   const hi = box.CornerMax();
   const out = { min: [lo.X(), lo.Y(), lo.Z()], max: [hi.X(), hi.Y(), hi.Z()] };
   lo.delete(); hi.delete(); box.delete();
+  if (faces.length && !curvedFree) {
+    // The COARSE mesh is enough: its vertices lie ON the surface and OCCT puts
+    // vertices on every edge and seam, so the box is exact on planar extents and
+    // short by at most the deflection at a curved extreme between vertices —
+    // never long, so it is not padded (the old 0.01 pad read an 80 mm part as
+    // 80.02). Clipped to the analytic box, which is exact on planar faces and a
+    // wall thickness too wide on offset surfaces. A fixed 0.01 mesh here cost
+    // 5.7 s and 224k triangles on a small thread, on EVERY evaluate, and was
+    // what made threaded parts stall the app.
+    const tol = 0;
+    const { positions } = tessellate(shape, { tolerance: COARSE });
+    const min = [Infinity, Infinity, Infinity]; const max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < positions.length; i += 3) {
+      for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], positions[i + k]); max[k] = Math.max(max[k], positions[i + k]); }
+    }
+    return {
+      min: min.map((v, k) => Math.max(v - tol, out.min[k])),
+      max: max.map((v, k) => Math.min(v + tol, out.max[k])),
+    };
+  }
   return out;
 }
 

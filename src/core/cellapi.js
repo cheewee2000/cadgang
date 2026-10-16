@@ -26,6 +26,7 @@ const brep = Object.freeze({
   torus: ops.torus,
   cone: ops.cone,
   union: ops.union,
+  compound: ops.compound,
   subtract: ops.subtract,
   intersect: ops.intersect,
   fillet: ops.fillet,

@@ -814,7 +814,7 @@ async function renderHistory() {
   panel.appendChild(head);
   for (const v of [...versions].reverse()) {
     const el = document.createElement('div');
-    el.className = 'version' + (viewingVersion === v.n ? ' viewing' : '');
+    el.className = 'hver' + (viewingVersion === v.n ? ' viewing' : '');
     el.innerHTML = `
       <img src="${API}/history/${v.n}.png?t=${encodeURIComponent(v.at)}" alt="" onerror="this.style.visibility='hidden'">
       <div>

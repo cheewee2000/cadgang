@@ -27,6 +27,7 @@ import {
   brepLoft,
   brepSweep,
   brepPolyline,
+  brepCompound,
   brepSpline,
   brepHelix,
   brepOffset,
@@ -168,6 +169,17 @@ function boolean(op, base, tools) {
 export const union = (base, ...tools) => boolean('union', base, tools.flat());
 export const subtract = (base, ...tools) => boolean('subtract', base, tools.flat());
 export const intersect = (base, ...tools) => boolean('intersect', base, tools.flat());
+
+/**
+ * Parts kept as SEPARATE bodies — an assembly, not a fuse. A lid seated on a
+ * body unions into one solid because they touch; compound keeps them distinct,
+ * measures report bodies = N, and STEP writes N solids.
+ */
+export function compound(...shapes) {
+  const list = shapes.flat().filter(Boolean);
+  if (list.length < 2) throw new GraphError('compound() needs at least two shapes to keep apart');
+  return brepCompound(list.map((s, i) => borrow(s, `shape${i + 1}`)));
+}
 
 // ---------------------------------------------------------------- modifiers
 

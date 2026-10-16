@@ -31,7 +31,8 @@ export function optionsRouter(doc, { modelOf, broadcast = () => {} }) {
   /** Apply one option to a document (scratch or real) through the document's own validation. */
   function apply(target, cell, opt) {
     if (cell && target.indexOf(cell) >= 0) {
-      return target.commitCompile(cell, { code: opt.code, prompt: opt.prompt, params: opt.params, compiledBy: 'option' });
+      // An option may change only params: it then keeps the cell's code.
+      return target.commitCompile(cell, { code: opt.code || target.get(cell).code, prompt: opt.prompt, params: opt.params, compiledBy: 'option' });
     }
     return target.addCell({ id: cell || undefined, prompt: opt.prompt || opt.label, code: opt.code, params: opt.params, compiledBy: 'option' });
   }
@@ -47,7 +48,7 @@ export function optionsRouter(doc, { modelOf, broadcast = () => {} }) {
       if (!Array.isArray(options) || options.length < 2 || options.length > 8) throw Object.assign(new Error('Send 2–8 options'), { status: 400 });
       const results = [];
       for (const opt of options) {
-        const entry = { label: String(opt.label || `option ${results.length + 1}`), prompt: opt.prompt ?? null, code: String(opt.code || ''), params: opt.params ?? null, measures: null, error: null, png: null };
+        const entry = { label: String(opt.label || `option ${results.length + 1}`), prompt: opt.prompt ?? null, code: opt.code ? String(opt.code) : null, params: opt.params ?? null, measures: null, error: null, png: null };
         try {
           const tmp = scratch();
           apply(tmp, cell, entry);

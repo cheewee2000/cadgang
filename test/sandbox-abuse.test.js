@@ -13,6 +13,8 @@ test('a one-line module compiles', () => {
   const c = compileCell('export const params = { w: 2 }; export default ({ p }) => p.w * 2;');
   assert.equal(c.run(cellApi({ params: { w: 2 } })), 4);
   assert.throws(() => transformCellSource('export const params = {}; export function nope() {}'), /may only 'export const params' and 'export default'/);
+  // No space before the parenthesis is still an export default, not a stray export.
+  assert.equal(compileCell('export const params={};export default({p})=>3;').run({}), 3);
 });
 
 test('import() is refused at compile time, so nothing can escape the sandbox later', async () => {

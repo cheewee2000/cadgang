@@ -60,7 +60,7 @@ export function transformCellSource(code) {
     /(^|[;\n])[ \t]*export[ \t]+const[ \t]+params[ \t]*=/,
     (_, lead) => `${lead}const params = ${CARRIER}.params =`
   );
-  out = out.replace(/(^|[;\n])[ \t]*export[ \t]+default[ \t]+/, (_, lead) => `${lead}${CARRIER}.default = `);
+  out = out.replace(/(^|[;\n])[ \t]*export[ \t]+default\b[ \t]*/, (_, lead) => `${lead}${CARRIER}.default = `);
   // A dynamic import cannot be refused from inside the realm: Node invokes the
   // loader callback in a microtask, so the failure lands after the cell has
   // returned, as a process-level exception. Refuse it before it can run.

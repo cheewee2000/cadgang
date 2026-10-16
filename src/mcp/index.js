@@ -397,7 +397,8 @@ const transport = new StdioServerTransport();
 await server.connect(transport);
 // Claude Code starts this server in the project folder: make it cadgang's project
 // folder too, so exports and the cell document live next to the user's work.
-fetch(`${BASE}/api/project`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: process.cwd() }) })
-  .then((r) => r.ok && console.error(`cadgang project folder: ${process.cwd()}`))
+fetch(`${BASE}/api/project`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: process.cwd(), ifUnset: true }) })
+  .then((r) => r.ok && r.json())
+  .then((p) => p && console.error(p.kept ? `cadgang project folder stays ${p.dir} (a document is open there)` : `cadgang project folder: ${p.dir}`))
   .catch(() => {});
 console.error(`cadgang-mcp-server connected (target: ${BASE})`);

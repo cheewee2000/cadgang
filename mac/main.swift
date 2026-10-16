@@ -50,7 +50,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
             let res = Bundle.main.resourceURL!
             let p = Process()
             p.executableURL = res.appendingPathComponent("node")
-            p.arguments = [res.appendingPathComponent("app/src/server/index.js").path]
+            p.arguments = [res.appendingPathComponent("app/src/server/supervise.js").path]
             let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("cadgang")
             try? FileManager.default.createDirectory(at: support.appendingPathComponent("exports"), withIntermediateDirectories: true)

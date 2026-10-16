@@ -18,7 +18,7 @@ import { cellsRouter } from './cells.js';
 import { viewRouter } from './view.js';
 import { historyRouter } from './history.js';
 import { optionsRouter } from './options.js';
-import { initBrep } from '../core/brep.js';
+import { initBrep, brepHeapBytes } from '../core/brep.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -47,11 +47,25 @@ function broadcast(obj) {
 // The API is live state — never let it be cached. Behind a reverse proxy that stamps a
 // default freshness lifetime on responses (DreamHost's Apache adds max-age=172800) a cached
 // /api/health or /api/document freezes the UI against a stale revision forever.
+let inflight = 0;
 app.use('/api', (req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.set('Expires', '0');
+  inflight++; res.once('close', () => { inflight--; });
   next();
 });
+// The OCCT WASM heap only ever grows; near its 2 GB cap every operation fails
+// with malloc errors and nothing crashes, so the supervisor never restarts it.
+// Leave on purpose between requests instead — the documents are autosaved and
+// supervise.js brings the server straight back.
+const HEAP_LIMIT = parseInt(process.env.CADGANG_HEAP_LIMIT || String(1.5 * 2 ** 30), 10);
+setInterval(() => {
+  const heap = brepHeapBytes();
+  if (heap > HEAP_LIMIT && inflight === 0) {
+    console.error(`cadgang: kernel heap ${(heap / 2 ** 20).toFixed(0)} MB over the ${(HEAP_LIMIT / 2 ** 20).toFixed(0)} MB limit — restarting for a fresh kernel`);
+    process.exit(75);
+  }
+}, 5000).unref();
 // The project folder: where exports land and where the cell document lives
 // (<project>/cadgang/cells.json). The MCP server sets it to Claude Code's cwd
 // when it starts; opening a file in the desktop app sets it to that file's
@@ -67,7 +81,14 @@ function setProject(dir) {
 if (project.dir) setProject(project.dir);
 app.get('/api/project', (req, res) => res.json({ dir: project.dir, cells: cells.filePath }));
 app.post('/api/project', (req, res, next) => {
-  try { setProject(String(req.body?.dir || '')); res.json({ dir: project.dir, cells: cells.filePath }); } catch (e) { next(e); }
+  try {
+    // ifUnset (the MCP server on connect): never swap a document someone is
+    // working in for the folder Claude Code happened to start in.
+    if (req.body?.ifUnset && project.dir && cells.cells.length) {
+      return res.json({ dir: project.dir, cells: cells.filePath, kept: true });
+    }
+    setProject(String(req.body?.dir || '')); res.json({ dir: project.dir, cells: cells.filePath });
+  } catch (e) { next(e); }
 });
 const cellsApi = cellsRouter(cells, ROOT, { project });
 // Versions live beside the document: <project>/cadgang/history/ (or data/history/ in dev).

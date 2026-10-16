@@ -40,6 +40,8 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     torus(majorR, minorR) about z; cone(r1, r2, h, {center}) — r2 = 0 for a point, r1 ≠ r2 for a frustum;
     coil(r, pitch, height, sectionR, {section:'circle'|'square'|'triangle', lefthand}) — a spring
   booleans: union/subtract/intersect(base, ...tools); interference(a, b) -> shared volume (0 = no clash).
+    compound(...shapes) keeps parts as SEPARATE bodies — an assembly, nothing fused: a lid seated on its body, a cap on a
+    bottle. Measures report bodies = N and STEP writes N solids (union would fuse anything that touches).
     A union of bodies that do not touch is a MULTI-BODY result (a gap under 0.01 mm is a gap): measures report
     \`bodies\`, and assert.singleBody(shape) refuses it — write that assertion for any part meant to be one piece.
   sketch → solid: extrude(sketch, distance, {symmetric, offset, twist:deg, endScale}) — endScale 0.5 tapers to half size;
@@ -63,7 +65,8 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     decorations, and shell before threading or use length to keep the thread clear of curved inner surfaces.
   modifiers: fillet(shape, edgeQuery, radius|fn(edge)); chamfer(shape, edgeQuery, distance | {distances:[a,b], face:faceQuery}
     | {distance, angle, face}); shell(shape, faceQuery|null, thickness) — POSITIVE hollows INWARD, negative grows outward,
-    null query seals a void; lofts and other cornered curved bodies shell by whole-body offset, which can only OPEN planar faces; offset(shape, distance) grows every face (negative shrinks);
+    null query seals a void; shell BEFORE filleting whenever a fillet radius is under the wall thickness (the inward offset
+    collapses such a fillet and the shell fails); lofts and other cornered curved bodies shell by whole-body offset, which can only OPEN planar faces; offset(shape, distance) grows every face (negative shrinks);
     pushPull(shape, planarFaceQuery, distance) — Press Pull: move faces out (+) or in (−);
     draft(shape, faceQuery, deg, {pull=[0,0,1], neutralAt}) tapers faces for mould release, faces staying put on the
     neutral plane (default: the bottom along pull); split(shape, origin, normal) | split(shape, toolShape) -> {above, below};
@@ -626,7 +629,7 @@ Args:
       inputSchema: {
         cell: z.string().optional(),
         options: z.array(z.object({
-          label: z.string().max(80), prompt: z.string().optional(), code: z.string(), params: z.record(z.any()).optional(),
+          label: z.string().max(80), prompt: z.string().optional(), code: z.string().optional().describe('Omit to keep the cell\'s code and change only params'), params: z.record(z.any()).optional(),
         })).min(2).max(8),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -653,24 +656,26 @@ Args:
     'cadgang_cells_export',
     {
       title: 'Export the cell stack',
-      description: `Write the cell stack's solid to <filename>.step in the project folder (the folder this MCP server was started in, i.e. Claude Code's cwd) and return the path.
+      description: `Write the cell stack's solid to <filename>.step (or .stl) in the project folder and return the path.
 
-STEP is the only export. Cells are exact B-rep the whole way through, so the file reopens in Fusion, SolidWorks or OnShape as editable geometry rather than a faceted import.
+STEP is the default: cells are exact B-rep the whole way through, so the file reopens in Fusion, SolidWorks or OnShape as editable geometry rather than a faceted import. STL is for printing: the same solid tessellated (fine, scaled to the part).
 
 Args:
   - filename: base name, no extension
-  - cell: cell to export (defaults to the output/last cell)`,
+  - cell: cell to export (defaults to the output/last cell)
+  - format: 'step' (default) | 'stl'`,
       inputSchema: {
         filename: z.string().regex(/^[\w.-]+$/, 'Use letters, digits, dot, dash, underscore only'),
         cell: z.string().optional(),
+        format: z.enum(['step', 'stl']).optional(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ filename, cell }) => {
+    async ({ filename, cell, format = 'step' }) => {
       try {
         const qs = new URLSearchParams({ file: filename });
         if (cell) qs.set('cell', cell);
-        const res = await fetch(`${base}/api/cells/export/step?${qs}`);
+        const res = await fetch(`${base}/api/cells/export/${format}?${qs}`);
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error || `cadgang API error (HTTP ${res.status})`);
@@ -679,7 +684,7 @@ Args:
         return ok({
           savedTo: res.headers.get('x-saved-to'),
           bytes,
-          format: 'STEP AP214 (exact B-rep)',
+          format: format === 'stl' ? 'binary STL (tessellated)' : 'STEP AP214 (exact B-rep)',
         });
       } catch (e) { return fail(e); }
     }
