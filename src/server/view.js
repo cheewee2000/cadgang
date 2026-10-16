@@ -24,8 +24,22 @@ import { importCadFile } from '../core/step.js';
 const DESKTOP = process.env.CADGANG_DESKTOP === '1';
 export const CAD_EXT = /\.(step|stp|iges|igs|brep)$/i;
 
+/**
+ * Who may read files by local path: the desktop shell, or anything on THIS
+ * machine. The app adopts a dev server already on 4477 (started without the
+ * flag), and Finder opens then failed. A request from the loopback interface
+ * that did not come through a proxy (the VPS sits behind Apache, which always
+ * stamps X-Forwarded-For) is the user at this computer.
+ */
+export function mayReadLocal(req) {
+  if (DESKTOP) return true;
+  const ip = String(req.socket?.remoteAddress || req.ip || '');
+  const loopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  return loopback && !req.headers['x-forwarded-for'] && !req.headers['x-real-ip'];
+}
+
 async function localFile(req) {
-  if (!DESKTOP) throw Object.assign(new Error('Reading local paths is only available in the desktop app'), { status: 403 });
+  if (!mayReadLocal(req)) throw Object.assign(new Error('Reading local paths is only available in the desktop app, or from this computer'), { status: 403 });
   const p = String(req.query.path || '');
   if (!path.isAbsolute(p)) throw Object.assign(new Error('path must be absolute'), { status: 400 });
   return { name: path.basename(p), buffer: await fs.readFile(p) };

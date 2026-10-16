@@ -83,6 +83,8 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
   measures: volume(shape); area(shape); bbox(shape) -> {min,max,size}; bodies(shape) -> count of separate solids;
     centroid(shape) -> [x,y,z]; mass(shape, g/cm³) -> grams;
     distance(a, b) closest approach; length(shape, edgeQuery) total edge length
+  importStep(file, {body}) — an exact solid from a STEP file in the project folder (path relative to it): body i in file
+    order, or every body as one compound. Parsed once per file; then edit it like anything built here (pushPull, split, subtract).
   NOT available (kernel build lacks the binding): delete/replace face, non-uniform scale, surface tools, sheet metal, text.
 
 q — q.faces(shape) / q.edges(shape), then chain filters. A revolved line reads as cylindrical/conical and a shelled

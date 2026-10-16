@@ -72,6 +72,7 @@ const brep = Object.freeze({
   centroid: ops.centroid,
   distance: ops.distance,
   bodies: ops.bodies,
+  importStep: ops.importStep,
 });
 
 /** The `q` namespace: face and edge queries. */

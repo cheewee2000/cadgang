@@ -1193,6 +1193,28 @@ export async function importStepExact(buffer) {
   return track(shape);
 }
 
+/**
+ * The same, synchronously, for cell programs (which cannot await): the bytes go
+ * to OCCT through its virtual FS. Returns the file's solids in file order,
+ * UNTRACKED — the caller owns them (ops.importStep keeps them across runs).
+ */
+export function importStepSolids(buffer) {
+  const k = kernel();
+  const name = `/import-${Date.now()}-${Math.random().toString(36).slice(2)}.step`;
+  return attempt('STEP import', () => {
+    OC.FS.writeFile(name, new Uint8Array(buffer));
+    const reader = new OC.STEPControl_Reader_1();
+    try {
+      if (!reader.ReadFile(name)) throw new GraphError('the file is not readable STEP');
+      reader.TransferRoots(new OC.Message_ProgressRange_1());
+      return [...k.iterTopo(reader.OneShape(), 'solid')].map((s) => k.cast(s));
+    } finally {
+      OC.FS.unlink(name);
+      reader.delete();
+    }
+  });
+}
+
 // -------------------------------------------------------------- tessellation
 
 /**

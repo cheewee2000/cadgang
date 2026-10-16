@@ -19,6 +19,7 @@ import { viewRouter } from './view.js';
 import { historyRouter } from './history.js';
 import { optionsRouter } from './options.js';
 import { initBrep, brepHeapBytes } from '../core/brep.js';
+import { setImportRoot } from '../core/ops.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -76,6 +77,7 @@ function setProject(dir) {
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw Object.assign(new Error(`Not a folder: ${dir}`), { status: 400 });
   if (project.dir === dir) return;
   project.dir = dir;
+  setImportRoot(dir);
   cells.openAt(path.join(dir, 'cadgang', 'cells.json'));
 }
 if (project.dir) setProject(project.dir);

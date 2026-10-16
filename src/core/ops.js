@@ -15,6 +15,8 @@
  * different solid and it would silently select nothing.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { GraphError } from './errors.js';
 import {
   borrowBrepShape as borrow,
@@ -45,7 +47,39 @@ import {
   brepBodies,
   tightBounds,
   requireSolid,
+  importStepSolids,
 } from './brep.js';
+
+// ------------------------------------------------------------------ import
+
+let importRoot = process.cwd();
+/** The folder importStep reads from: the project folder, set by the server. */
+export function setImportRoot(dir) { importRoot = path.resolve(dir || process.cwd()); }
+const importCache = new Map(); // full path -> { mtime, solids (untracked, never freed) }
+
+/**
+ * An exact solid from a STEP file in the project folder, untouched: body `i`
+ * in file order, or every body as one compound. The parse is cached per file
+ * and mtime, so re-running the stack costs a clone, not a read.
+ */
+export function importStep(file, { body = null } = {}) {
+  const full = path.resolve(importRoot, String(file));
+  if (!full.startsWith(importRoot + path.sep)) throw new GraphError(`importStep: '${file}' is outside the project folder ${importRoot}`);
+  let st;
+  try { st = fs.statSync(full); } catch { throw new GraphError(`importStep: no file '${file}' in ${importRoot}`); }
+  let hit = importCache.get(full);
+  if (!hit || hit.mtime !== st.mtimeMs) {
+    hit = { mtime: st.mtimeMs, solids: importStepSolids(fs.readFileSync(full)) };
+    importCache.set(full, hit);
+  }
+  const { solids } = hit;
+  if (!solids.length) throw new GraphError(`importStep: '${file}' holds no solids`);
+  if (body === null) return solids.length === 1 ? track(solids[0].clone()) : compound(...solids);
+  if (!(Number.isInteger(body) && body >= 0 && body < solids.length)) {
+    throw new GraphError(`importStep: '${file}' has bodies 0..${solids.length - 1}, not ${body}`);
+  }
+  return track(solids[body].clone());
+}
 
 const vsub = (a, b) => a.map((c, i) => c - b[i]);
 const vadd = (a, b) => a.map((c, i) => c + b[i]);
