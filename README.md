@@ -1,4 +1,4 @@
-# cadgang
+# CADgang
 
 A CAD viewer and markup tool. Open a STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, GLB, FBX or DXF file, cut it, measure it, draw on it. The markups are anchored on the model and Claude Code can see them over MCP, so "the edge I circled" means something. Runs as a web page or as a Mac app that updates itself.
 
