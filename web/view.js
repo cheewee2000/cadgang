@@ -694,12 +694,15 @@ const CMDS = [
   { sep: true },
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },
+  ...[['p', 'pen', 'Pen'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['r', 'erase', 'Erase']].map(([key, t, label]) => ({ key, label, btn: `[data-tool="${t}"]`, run: () => markup.setTool(t), on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
+  { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
+  { sep: true },
   { key: 'd', label: 'Dark / light', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.theme === 'dark' },
   { key: 'o', meta: true, label: 'Open…', btn: '#openBtn', run: () => $('#fileInput').click() },
   { key: 'z', meta: true, label: 'Undo', run: undo },
   { key: 'z', meta: true, shift: true, label: 'Redo', run: redo },
 ];
-const keyLabel = (c) => (c.shift ? '⇧' : '') + (c.meta ? '⌘' : '') + (c.key === 'Escape' ? 'Esc' : c.key.toUpperCase());
+const keyLabel = (c) => (c.shift ? '⇧' : '') + (c.meta ? '⌘' : '') + ({ Escape: 'Esc', Backspace: '⌫' }[c.key] ?? c.key.toUpperCase());
 
 window.addEventListener('keydown', (e) => {
   if (e.target.matches('input,select,textarea') || e.altKey) return;
