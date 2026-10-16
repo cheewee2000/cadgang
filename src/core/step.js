@@ -53,12 +53,16 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
   const positions = new Float32Array(vTotal * 3);
   const indices = new Uint32Array(iTotal);
   const faces = [];
+  const bodies = []; // one per imported solid: {first, count, name} in triangles
   let vOff = 0, iOff = 0;
   for (const m of result.meshes) {
     positions.set(m.attributes.position.array, vOff * 3);
     const idx = m.index.array;
     for (let i = 0; i < idx.length; i++) indices[iOff + i] = idx[i] + vOff;
     const triOff = iOff / 3, triCount = idx.length / 3;
+    // OCCT's writer names unnamed solids after itself ("Open CASCADE STEP translator 7.6 1.2"); say "body 2".
+    const raw = String(m.name || '').trim();
+    bodies.push({ first: triOff, count: triCount, name: raw && !/^Open CASCADE/i.test(raw) ? raw : `body ${bodies.length + 1}` });
     const brep = Array.isArray(m.brep_faces) && m.brep_faces.length ? m.brep_faces : null;
     if (brep) {
       for (const f of brep) {
@@ -83,6 +87,7 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
     positions: Array.from(welded.positions),
     indices: Array.from(welded.indices),
     faces,
+    bodies,
     bbox,
     vertexCount: welded.positions.length / 3,
     triangleCount: welded.indices.length / 3,

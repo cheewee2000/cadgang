@@ -37,7 +37,7 @@ function say(text, isError = false) {
 // ----------------------------------------------------------------- viewport
 
 const viewport = $('#viewport');
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', stencil: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.localClippingEnabled = true;
 viewport.appendChild(renderer.domElement);
@@ -83,6 +83,20 @@ function clearModel() {
     g.clear();
   }
   bbox = null;
+  $('#bodies').replaceChildren(); $('#bodies').hidden = true;
+  $('#explode').value = 0;
+}
+
+/** The triangles of one body as their own geometry (vertices compacted so its bounding box is its own). */
+function subGeometry(pos, idx, first, count) {
+  const map = new Map(); const outIdx = new Uint32Array(count * 3); const outPos = [];
+  for (let i = 0; i < count * 3; i++) {
+    const v = idx[first * 3 + i];
+    let j = map.get(v);
+    if (j === undefined) { j = map.size; map.set(v, j); outPos.push(pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]); }
+    outIdx[i] = j;
+  }
+  return { pos: Float32Array.from(outPos), idx: outIdx };
 }
 
 /** Face-border edges from a tessellation that knows its B-rep faces. */
@@ -105,10 +119,11 @@ function faceBorderEdges(pos, idx, faces) {
   return new Float32Array(out);
 }
 
-function addMesh(geo, { edgeLines, flat = false } = {}) {
+function addMesh(geo, { edgeLines, flat = false, name = '' } = {}) {
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
   const m = new THREE.Mesh(geo);
   m.userData.flat = flat;
+  m.userData.name = name || `body ${model.children.length + 1}`;
   styleMesh(m);
   model.add(m);
   // Crease edges on an arbitrary mesh are a guess; over a million triangles the
@@ -122,8 +137,51 @@ function addMesh(geo, { edgeLines, flat = false } = {}) {
     const l = new THREE.LineSegments(eg, edgeMaterial);
     l.renderOrder = 1;
     edges.add(l);
+    m.userData.edges = l;
   }
 }
+
+// ------------------------------------------------------------------- bodies
+//
+// One mesh per body (a STEP assembly, a multi-body compound). The panel lists
+// them with a checkbox each; EXPLODE slides every body out from the assembly
+// centre along its own offset. Hiding a body hides its edges and its section cap.
+
+function listBodies() {
+  const panel = $('#bodies');
+  panel.replaceChildren();
+  panel.hidden = model.children.length < 2;
+  const centre = bbox.getCenter(new THREE.Vector3());
+  for (const m of model.children) {
+    m.geometry.computeBoundingBox();
+    m.userData.offset = m.geometry.boundingBox.getCenter(new THREE.Vector3()).sub(centre);
+    const row = document.createElement('label');
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = m.visible;
+    cb.addEventListener('change', () => setBodyVisible(m, cb.checked));
+    const nm = document.createElement('span'); nm.textContent = m.userData.name;
+    nm.title = 'Click: only this body · Shift-click: all bodies';
+    nm.addEventListener('click', (e) => {
+      e.preventDefault();
+      for (const o of model.children) setBodyVisible(o, e.shiftKey || o === m);
+      for (const r of panel.querySelectorAll('input')) r.checked = model.children[[...panel.children].indexOf(r.parentElement)].visible;
+    });
+    row.append(cb, nm);
+    panel.appendChild(row);
+  }
+}
+function setBodyVisible(m, on) {
+  m.visible = on;
+  if (m.userData.edges) m.userData.edges.visible = on;
+}
+function applyExplode() {
+  const k = parseFloat($('#explode').value) / 100;
+  for (const m of model.children) {
+    const off = m.userData.offset ?? new THREE.Vector3();
+    m.position.copy(off).multiplyScalar(k * 2);
+    if (m.userData.edges) m.userData.edges.position.copy(m.position);
+  }
+}
+$('#explode').addEventListener('input', applyExplode);
 
 function finishLoad(name, ms) {
   const box = new THREE.Box3().setFromObject(model);
@@ -140,6 +198,7 @@ function finishLoad(name, ms) {
   $('#stats').textContent = `${model.children.length} BOD${model.children.length === 1 ? 'Y' : 'IES'} · ${tris.toLocaleString()} TRIS · ${verts.toLocaleString()} VERTS · ${ms} MS`;
   $('#drop').hidden = true;
   placeGrid();
+  listBodies();
   setupSection();
   fit();
   edges.visible = ui.edges;
@@ -229,13 +288,59 @@ attachOrbitInput(renderer.domElement, { orbit, getCamera: () => camera, THREE, h
 
 // ------------------------------------------------------------------ section
 
+// Caps: the classic stencil trick. For every body, its back faces increment the
+// stencil and its front faces decrement it where the plane cuts; where the count
+// is non-zero the cap quad shows — a solid-looking cut instead of a hollow shell.
+const caps = new THREE.Group();
+scene.add(caps);
+const capPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial({
+  color: 0x9a9892, metalness: 0.2, roughness: 0.6, stencilWrite: true, stencilRef: 0,
+  stencilFunc: THREE.NotEqualStencilFunc, stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp, stencilZPass: THREE.ReplaceStencilOp,
+}));
+capPlane.renderOrder = 2;
+capPlane.onAfterRender = () => renderer.clearStencil();
+capPlane.visible = false;
+scene.add(capPlane);
+function stencilMaterial(side, op) {
+  return new THREE.MeshBasicMaterial({
+    side, depthWrite: false, depthTest: false, colorWrite: false, stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc,
+    stencilFail: op, stencilZFail: op, stencilZPass: op, clippingPlanes: [section.plane],
+  });
+}
+function buildCaps() {
+  for (const o of caps.children) o.children.forEach((c) => c.material.dispose());
+  caps.clear();
+  if (!section.axis || !bbox) { capPlane.visible = false; return; }
+  for (const m of model.children) {
+    const g = new THREE.Group();
+    const back = new THREE.Mesh(m.geometry, stencilMaterial(THREE.BackSide, THREE.IncrementWrapStencilOp));
+    const front = new THREE.Mesh(m.geometry, stencilMaterial(THREE.FrontSide, THREE.DecrementWrapStencilOp));
+    back.renderOrder = 1; front.renderOrder = 1;
+    g.add(back, front);
+    g.userData.body = m;
+    caps.add(g);
+  }
+  const size = bbox.getSize(new THREE.Vector3()).length() * 3;
+  capPlane.geometry.dispose(); capPlane.geometry = new THREE.PlaneGeometry(size, size);
+  capPlane.visible = true;
+}
+function placeCaps() {
+  if (!capPlane.visible) return;
+  for (const g of caps.children) { g.visible = g.userData.body.visible; g.position.copy(g.userData.body.position); }
+  const n = section.plane.normal;
+  capPlane.position.copy(n).multiplyScalar(-section.plane.constant);
+  capPlane.lookAt(capPlane.position.clone().add(n));
+}
+
 function setupSection() {
   const axis = $('#sectAxis').value;
   section.axis = axis;
   $('#sectPos').disabled = $('#sectFlip').disabled = !axis;
   const planes = axis && bbox ? [section.plane] : [];
   for (const m of model.children) m.material.clippingPlanes = planes;
+  edgeMaterial.clippingPlanes = planes; // edges follow the cut, or they float over the cap
   updateSection();
+  buildCaps();
   clearMeasure();
 }
 function updateSection() {
@@ -249,7 +354,6 @@ function updateSection() {
 $('#sectAxis').addEventListener('change', setupSection);
 $('#sectPos').addEventListener('input', updateSection);
 $('#sectFlip').addEventListener('click', () => { section.flip *= -1; updateSection(); });
-// ponytail: open section, no cap faces — add a stencil cap pass if the hollow look misleads.
 
 // ------------------------------------------------------------------ loaders
 
@@ -277,17 +381,25 @@ async function parseMesh(ext, buffer, name) {
 }
 
 function parseCad(buffer) {
-  const u32 = new Uint32Array(buffer, 0, 3);
-  const [nPos, nIdx, nFaces] = u32;
-  let off = 12;
+  const [nPos, nIdx, nFaces, nBodies, nNameBytes] = new Uint32Array(buffer, 0, 5);
+  let off = 20;
   const pos = new Float32Array(buffer, off, nPos); off += nPos * 4;
   const idx = new Uint32Array(buffer, off, nIdx); off += nIdx * 4;
-  const fr = new Uint32Array(buffer, off, nFaces * 2);
+  const fr = new Uint32Array(buffer, off, nFaces * 2); off += nFaces * 8;
+  const br = new Uint32Array(buffer, off, nBodies * 2); off += nBodies * 8;
+  const names = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, off, nNameBytes)));
   const faces = Array.from({ length: nFaces }, (_, i) => ({ first: fr[2 * i], count: fr[2 * i + 1] }));
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setIndex(new THREE.BufferAttribute(idx, 1));
-  return [{ geo, edgeLines: faceBorderEdges(pos, idx, faces) }];
+  const parts = [];
+  for (let b = 0; b < nBodies; b++) {
+    const first = br[2 * b], count = br[2 * b + 1];
+    const sub = subGeometry(pos, idx, first, count);
+    const own = faces.filter((f) => f.first >= first && f.first < first + count).map((f) => ({ first: f.first - first, count: f.count }));
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(sub.pos, 3));
+    geo.setIndex(new THREE.BufferAttribute(sub.idx, 1));
+    parts.push({ geo, edgeLines: faceBorderEdges(sub.pos, sub.idx, own), name: names[b] });
+  }
+  return parts;
 }
 
 async function api(path, { method = 'GET', body } = {}) {
@@ -315,7 +427,7 @@ async function openBuffers(files) {
       const parts = CAD_EXT.test(name)
         ? parseCad(await fetchBuffer(`/api/view/tessellate?name=${encodeURIComponent(name)}`, { method: 'POST', body: buffer }))
         : await parseMesh(ext, buffer, name);
-      for (const p of parts) addMesh(p.geo, p);
+      for (const p of parts) addMesh(p.geo, p.name ? p : { ...p, name });
       shown++; label = name;
     } catch (e) { say(`${name}: ${e.message}`, true); return; }
   }
@@ -338,7 +450,7 @@ window.cadgangOpen = async function cadgangOpen(paths) {
       const parts = CAD_EXT.test(name)
         ? parseCad(await fetchBuffer(`/api/view/tessellate?${q}`, { method: 'POST' }))
         : await parseMesh(name.toLowerCase().split('.').pop(), await fetchBuffer(`/api/view/file?${q}`), name);
-      for (const part of parts) addMesh(part.geo, part);
+      for (const part of parts) addMesh(part.geo, part.name ? part : { ...part, name });
       shown++; label = name;
     } catch (e) { say(`${name}: ${e.message}`, true); return; }
   }
@@ -519,6 +631,7 @@ new ResizeObserver(resize).observe(viewport);
 (function loop() {
   resize();
   applyCamera();
+  placeCaps();
   renderer.render(scene, camera);
   projectLabels();
   markup.projectLabels();
@@ -526,6 +639,8 @@ new ResizeObserver(resize).observe(viewport);
 })();
 
 fetch('/api/health').then((r) => r.json()).then((h) => { $('#version').textContent = 'v' + h.version; }).catch(() => {});
+// For headless drives: the scene objects behind the page.
+window.__view = { model, caps, capPlane, section };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
 // ?open=/abs/a.step|/abs/b.stl — the same local-path door, for the shell and for headless tests.

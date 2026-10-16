@@ -48,6 +48,10 @@
         <button id="sectFlip" class="ghost" title="Flip which side is kept" disabled>Flip</button>
       </label>
       <span class="sep"></span>
+      <label class="sect" title="Slide the bodies apart from the assembly centre">Explode
+        <input id="explode" type="range" min="0" max="100" value="0" />
+      </label>
+      <span class="sep"></span>
       <button id="themeToggle" class="ghost" title="Toggle light / dark">DARK</button>
       <span class="version"><span class="idcode">CWT_SW_CADGANG_VIEW</span> <span class="idver" id="version"></span></span>
     </div>
@@ -55,6 +59,7 @@
 
   <main>
     <div id="viewport">
+      <div id="bodies" class="bodies" hidden title="Bodies: tick to show, click a name to see only it, shift-click for all"></div>
       <div id="measureLayer" class="measure-layer"></div>
       <div id="markupLayer" class="measure-layer"></div>
       <div id="markupTools" class="markup-tools" title="Markup: anchored on the model; Claude sees it through cadgang_screen">

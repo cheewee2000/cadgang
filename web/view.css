@@ -20,3 +20,9 @@ button.ghost.on { border-color: var(--ink); }
 .note-label, .note-input { position: absolute; transform: translate(-50%, calc(-100% - 12px)); background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--signal-red); padding: 1px 6px; font: inherit; font-size: var(--fs-12); white-space: nowrap; pointer-events: none; }
 .note-input { pointer-events: auto; width: 180px; outline: none; border-radius: 0; }
 .note-label[hidden] { display: none; }
+/* body list */
+.bodies { position: absolute; left: var(--sp-3); top: var(--sp-3); z-index: 2; display: flex; flex-direction: column; gap: 2px; max-height: 60%; overflow: auto; background: var(--paper); border: var(--bw-hair) solid var(--rule); padding: var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); }
+.bodies[hidden] { display: none; }
+.bodies label { display: flex; align-items: center; gap: var(--sp-2); cursor: pointer; white-space: nowrap; }
+.bodies input { accent-color: var(--ink); margin: 0; }
+.bodies span:hover { text-decoration: underline; }

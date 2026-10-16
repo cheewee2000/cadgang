@@ -45,13 +45,21 @@ async function localFile(req) {
   return { name: path.basename(p), buffer: await fs.readFile(p) };
 }
 
-/** Pack a tessellation as [u32 nPos, u32 nIdx, u32 nFaces][f32 pos][u32 idx][u32 first,count ...]. */
-function pack(m) {
+/**
+ * Pack a tessellation as
+ *   [u32 nPos, nIdx, nFaces, nBodies, nNameBytes][f32 pos][u32 idx][u32 face first,count…][u32 body first,count…][utf8 JSON names]
+ * Bodies are triangle ranges, one per imported solid, so the viewer can show, hide and explode them one by one.
+ */
+export function pack(m) {
   const pos = Float32Array.from(m.positions), idx = Uint32Array.from(m.indices);
   const faces = new Uint32Array(m.faces.length * 2);
   m.faces.forEach((f, i) => { faces[2 * i] = f.first; faces[2 * i + 1] = f.count; });
-  const head = Uint32Array.of(pos.length, idx.length, m.faces.length);
-  return Buffer.concat([head, pos, idx, faces].map((a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength)));
+  const bodyList = m.bodies?.length ? m.bodies : [{ first: 0, count: idx.length / 3, name: m.name || 'body' }];
+  const bodies = new Uint32Array(bodyList.length * 2);
+  bodyList.forEach((b, i) => { bodies[2 * i] = b.first; bodies[2 * i + 1] = b.count; });
+  const names = Buffer.from(JSON.stringify(bodyList.map((b) => b.name)), 'utf8');
+  const head = Uint32Array.of(pos.length, idx.length, m.faces.length, bodyList.length, names.length);
+  return Buffer.concat([...[head, pos, idx, faces, bodies].map((a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength)), names]);
 }
 
 /**
