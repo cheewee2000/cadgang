@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import { sketchCanvas } from './sketchcanvas.js';
 import { renderDepGraph } from './depgraph.js';
 import { attachOrbitInput } from './orbitinput.js';
+import { createMarkup } from './markup.js';
 
 const $ = (sel) => document.querySelector(sel);
 const API = '/api/cells';
@@ -686,6 +687,36 @@ $('#graphToggle').onclick = () => {
   renderGraph();
 };
 
+
+// ------------------------------------------------------------------ markup
+
+const markup = createMarkup({
+  THREE, renderer, scene, orbit, layer: $('#markupLayer'), tools: $('#markupTools'),
+  getCamera: () => camera, getTargets: () => (meshObj ? [meshObj] : []),
+  onChange: (items) => {
+    clearTimeout(markupTimer);
+    markupTimer = setTimeout(() => {
+      fetch('/api/view/markup', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ markups: items }) }).catch((e) => say(e.message, true));
+      postSnapshot();
+    }, 400);
+  },
+});
+let markupTimer = null;
+let snapshotTimer = null;
+/** Post what is on screen; coalesced, since a stroke is many change events. */
+function postSnapshot() {
+  clearTimeout(snapshotTimer);
+  snapshotTimer = setTimeout(() => {
+    try {
+      const png = markup.snapshot();
+      fetch('/api/view/snapshot', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ png, page: 'cells', subject: lastMesh?.cell ?? null, camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() } }) }).catch(() => {});
+    } catch {}
+  }, 150);
+}
+fetch('/api/view/markup').then((r) => r.json()).then((d) => markup.load(d.markups)).catch(() => {});
+(function labels() { markup.projectLabels(); requestAnimationFrame(labels); })();
+
 // ------------------------------------------------------------------ history
 
 /**
@@ -936,6 +967,8 @@ function connect() {
     // remount every canvas on the page.
     if (msg.type === 'cells_changed' && msg.revision !== doc.revision) refresh({ structural: false });
     if (msg.type === 'history_changed') renderHistory();
+    if (msg.type === 'snapshot_request') postSnapshot();
+    if (msg.type === 'markup_changed') fetch('/api/view/markup').then((r) => r.json()).then((d) => markup.load(d.markups)).catch(() => {});
   };
   // Claude Code authoring in the background is the normal case, so a dropped
   // socket must not leave the transcript silently stale.

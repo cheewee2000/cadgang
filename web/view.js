@@ -18,6 +18,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ThreeMFLoader } from 'three/addons/loaders/3MFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { attachOrbitInput } from './orbitinput.js';
+import { createMarkup } from './markup.js';
 
 const $ = (s) => document.querySelector(s);
 const ui = { edges: true, wire: false, grid: true, look: 'shaded', ortho: false };
@@ -143,6 +144,7 @@ function finishLoad(name, ms) {
   fit();
   edges.visible = ui.edges;
   say(`${name} in ${ms} ms`);
+  postSnapshot();
 }
 
 function placeGrid() {
@@ -286,6 +288,13 @@ function parseCad(buffer) {
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setIndex(new THREE.BufferAttribute(idx, 1));
   return [{ geo, edgeLines: faceBorderEdges(pos, idx, faces) }];
+}
+
+async function api(path, { method = 'GET', body } = {}) {
+  const res = await fetch('/api/view' + path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
 }
 
 async function fetchBuffer(url, init) {
@@ -459,6 +468,42 @@ let theme = 'light';
 try { theme = localStorage.getItem(THEME_KEY) || theme; } catch {}
 applyTheme(theme);
 
+
+// ------------------------------------------------------------------ markup
+
+const markup = createMarkup({
+  THREE, renderer, scene, orbit, layer: $('#markupLayer'), tools: $('#markupTools'),
+  getCamera: () => camera, getTargets: () => model.children,
+  onChange: (items) => {
+    clearTimeout(markupTimer);
+    markupTimer = setTimeout(() => {
+      api('/markup', { method: 'PUT', body: { markups: items } }).catch((e) => say(e.message, true));
+      postSnapshot();
+    }, 400);
+  },
+});
+let markupTimer = null;
+let snapshotTimer = null;
+/** Post what is on screen; coalesced, since a stroke is many change events. */
+function postSnapshot() {
+  clearTimeout(snapshotTimer);
+  snapshotTimer = setTimeout(() => {
+    try {
+      const png = markup.snapshot();
+      fetch('/api/view/snapshot', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ png, page: 'view', subject: $('#fileName').textContent, camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() } }) }).catch(() => {});
+    } catch {}
+  }, 150);
+}
+fetch('/api/view/markup').then((r) => r.json()).then((d) => markup.load(d.markups)).catch(() => {});
+
+const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+ws.onmessage = (ev) => {
+  const msg = JSON.parse(ev.data);
+  if (msg.type === 'snapshot_request') postSnapshot();
+  if (msg.type === 'markup_changed') fetch('/api/view/markup').then((r) => r.json()).then((d) => markup.load(d.markups)).catch(() => {});
+};
+
 // -------------------------------------------------------------------- loop
 
 function resize() {
@@ -475,6 +520,7 @@ new ResizeObserver(resize).observe(viewport);
   applyCamera();
   renderer.render(scene, camera);
   projectLabels();
+  markup.projectLabels();
   requestAnimationFrame(loop);
 })();
 

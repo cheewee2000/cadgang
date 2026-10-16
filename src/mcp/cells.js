@@ -571,6 +571,48 @@ Look at the version first (cadgang_cells_history with n) unless the user named i
   );
 
   server.registerTool(
+    'cadgang_screen',
+    {
+      title: 'See what the user sees',
+      description: `The live viewport as the user sees it, with their markups drawn on, plus the markups as data.
+
+The user never has to take a screenshot: the open cadgang window renders itself and posts the PNG here. Call this whenever they point at something — "this", "here", "the edge I circled", "make it look like my sketch" — or when you want to check that what you built looks right from THEIR angle.
+
+Markups are anchored on the model in 3D (points are world coordinates in mm), so a stroke or an arrow tells you WHERE on the part; notes carry text. Kinds: 'pen' (points: a polyline), 'arrow' (points: [tail, head]), 'note' (points: [anchor], text).
+
+Returns the image, the camera (yaw/pitch/dist/target), which page and subject (file or cell) is shown, and the markup list. If no window is open you get the last snapshot (if any) and fresh:false — say so and fall back to cadgang_cells_render.
+
+Args:
+  - fresh: ask the open window for a new frame first (default true); false returns whatever was last posted, instantly.`,
+      inputSchema: { fresh: z.boolean().default(true) },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ fresh }) => {
+      try {
+        const { screen, markups, fresh: got } = await call(`/view/screen${fresh ? '?fresh=1&wait=4' : ''}`);
+        const text = { fresh: got, at: screen?.at ?? null, page: screen?.page ?? null, subject: screen?.subject ?? null, camera: screen?.camera ?? null, markups };
+        const content = [{ type: 'text', text: JSON.stringify(text, null, 2) }];
+        if (screen?.png) content.push({ type: 'image', data: screen.png, mimeType: 'image/png' });
+        else content[0].text += '\n\nNo window has posted a frame yet — open the cadgang app (or /view or /cells in a browser).';
+        return { content };
+      } catch (e) { return fail(e); }
+    }
+  );
+
+  server.registerTool(
+    'cadgang_markup_clear',
+    {
+      title: 'Clear the user\'s markups',
+      description: 'Remove every markup from the viewport once you have acted on them, so the next round starts clean. Tell the user you did.',
+      inputSchema: {},
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    async () => {
+      try { return ok(await call('/view/markup', { method: 'PUT', body: { markups: [] } })); } catch (e) { return fail(e); }
+    }
+  );
+
+  server.registerTool(
     'cadgang_cells_export',
     {
       title: 'Export the cell stack',

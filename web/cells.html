@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="cwandt.css" />
   <link rel="stylesheet" href="style.css" />
   <link rel="stylesheet" href="cells.css" />
+  <link rel="stylesheet" href="view.css" />
   <script type="importmap">
     { "imports": { "three": "./vendor/three.module.js" } }
   </script>
@@ -55,6 +56,14 @@
     <div id="viewport">
       <div id="pickBar" hidden></div>
       <div id="versionBar" hidden></div>
+      <div id="markupLayer" class="measure-layer"></div>
+      <div id="markupTools" class="markup-tools" title="Markup: anchored on the model; Claude sees it through cadgang_screen">
+        <button class="ghost" data-tool="pen">PEN</button>
+        <button class="ghost" data-tool="arrow">ARROW</button>
+        <button class="ghost" data-tool="note">NOTE</button>
+        <button class="ghost" data-tool="erase">ERASE</button>
+        <button class="ghost" data-clear="1">CLEAR</button>
+      </div>
     </div>
   </main>
 

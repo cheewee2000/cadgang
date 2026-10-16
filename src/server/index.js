@@ -75,7 +75,7 @@ app.use('/api/cells/history', historyRouter(cells, {
   modelOf: cellsApi.modelOf, broadcast,
 }));
 app.use('/api/cells', cellsApi);
-app.use('/api/view', viewRouter());
+app.use('/api/view', viewRouter({ dirOf: () => path.dirname(cells.filePath || CELLS_PATH), broadcast }));
 // A body that is not JSON (a literal NaN, a stray comma) is a client error in
 // the API's own shape, not Express's HTML page with a stack trace on it.
 app.use('/api', (err, req, res, next) => {

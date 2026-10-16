@@ -14,3 +14,9 @@ button.ghost.on { border-color: var(--ink); }
 #look { font: inherit; font-size: var(--fs-12); border: var(--bw-hair) solid var(--rule); background: var(--paper); color: var(--ink); border-radius: 0; height: 36px; }
 .measure-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .mlabel { position: absolute; transform: translate(-50%, -140%); background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--signal-red); padding: 1px 6px; font-size: var(--fs-12); white-space: nowrap; }
+/* markup, shared by both viewports */
+.markup-tools { position: absolute; right: var(--sp-3); top: var(--sp-3); display: flex; gap: var(--sp-1); z-index: 2; }
+.markup-tools button { font-size: var(--fs-12); padding: 4px 8px; background: var(--paper); }
+.note-label, .note-input { position: absolute; transform: translate(-50%, calc(-100% - 12px)); background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--signal-red); padding: 1px 6px; font: inherit; font-size: var(--fs-12); white-space: nowrap; pointer-events: none; }
+.note-input { pointer-events: auto; width: 180px; outline: none; border-radius: 0; }
+.note-label[hidden] { display: none; }
