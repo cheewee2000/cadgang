@@ -20,6 +20,8 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { attachOrbitInput } from './orbitinput.js';
 
 const $ = (s) => document.querySelector(s);
+const ui = { edges: true, wire: false, grid: true, look: 'shaded', ortho: false };
+const section = { plane: new THREE.Plane(new THREE.Vector3(0, 0, -1), 0), axis: '', flip: 1 };
 const CAD_EXT = /\.(step|stp|iges|igs|brep)$/i;
 
 let statusTimer = null;
@@ -40,16 +42,33 @@ renderer.localClippingEnabled = true;
 viewport.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1e6);
+const persp = new THREE.PerspectiveCamera(40, 1, 0.1, 1e6);
+const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, -1e6, 1e6);
+let camera = persp;
 const key = new THREE.DirectionalLight(0xfffdf8, 2.4);
 key.position.set(60, -80, 120);
 const fill = new THREE.DirectionalLight(0xf3e9d8, 0.9);
 fill.position.set(-90, 50, -30);
 scene.add(key, fill, new THREE.AmbientLight(0xffffff, 1.15), new THREE.HemisphereLight(0xffffff, 0xdedbd4, 0.6));
 
-const material = new THREE.MeshStandardMaterial({
-  color: 0xb9b8b3, metalness: 0.25, roughness: 0.5, side: THREE.DoubleSide, clipShadows: true,
-});
+/** Render presets. Every mesh carries its own instance so per-mesh flags (flat, wire, clipping) never leak. */
+const PRESETS = {
+  shaded: () => new THREE.MeshStandardMaterial({ color: 0xb9b8b3, metalness: 0.25, roughness: 0.5 }),
+  metal: () => new THREE.MeshStandardMaterial({ color: 0xcfd0d2, metalness: 0.95, roughness: 0.28 }),
+  plastic: () => new THREE.MeshStandardMaterial({ color: 0xe8e4dc, metalness: 0, roughness: 0.65 }),
+  glass: () => new THREE.MeshPhysicalMaterial({ color: 0xdfe8ee, metalness: 0, roughness: 0.05, transmission: 0.9, thickness: 2, transparent: true, opacity: 0.6 }),
+  xray: () => new THREE.MeshBasicMaterial({ color: 0x2f5d8a, transparent: true, opacity: 0.18, depthWrite: false }),
+  normals: () => new THREE.MeshNormalMaterial(),
+};
+function styleMesh(m) {
+  const mat = PRESETS[ui.look]();
+  mat.side = THREE.DoubleSide;
+  mat.flatShading = !!m.userData.flat;
+  mat.wireframe = ui.wire;
+  mat.clippingPlanes = section.axis && bbox ? [section.plane] : [];
+  m.material?.dispose();
+  m.material = mat;
+}
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x2f5d8a, transparent: true, opacity: 0.85 });
 const model = new THREE.Group();     // meshes
 const edges = new THREE.Group();     // their edge overlays
@@ -59,7 +78,7 @@ let bbox = null;
 
 function clearModel() {
   for (const g of [model, edges]) {
-    for (const o of g.children) { o.geometry?.dispose(); if (o.material !== material && o.material !== edgeMaterial) o.material?.dispose?.(); }
+    for (const o of g.children) { o.geometry?.dispose(); if (o.material !== edgeMaterial) o.material?.dispose?.(); }
     g.clear();
   }
   bbox = null;
@@ -87,8 +106,9 @@ function faceBorderEdges(pos, idx, faces) {
 
 function addMesh(geo, { edgeLines, flat = false } = {}) {
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
-  const m = new THREE.Mesh(geo, flat ? material.clone() : material);
-  if (flat) m.material.flatShading = true;
+  const m = new THREE.Mesh(geo);
+  m.userData.flat = flat;
+  styleMesh(m);
   model.add(m);
   // Crease edges on an arbitrary mesh are a guess; over a million triangles the
   // guess costs seconds and reads as noise, so skip it there.
@@ -151,8 +171,15 @@ function applyCamera() {
   );
   camera.up.set(0, 0, 1);
   camera.lookAt(orbit.target);
-  camera.near = Math.max(orbit.dist / 1000, 0.01);
-  camera.far = orbit.dist * 100;
+  if (camera === persp) {
+    camera.near = Math.max(orbit.dist / 1000, 0.01);
+    camera.far = orbit.dist * 100;
+  } else {
+    // Same framing as the perspective view at this distance: the visible half-height at the target.
+    const h = orbit.dist * Math.tan(THREE.MathUtils.degToRad(persp.fov / 2));
+    camera.top = h; camera.bottom = -h; camera.left = -h * persp.aspect; camera.right = h * persp.aspect;
+    camera.near = -orbit.dist * 100; camera.far = orbit.dist * 100;
+  }
   camera.updateProjectionMatrix();
 }
 
@@ -160,7 +187,7 @@ function fit() {
   if (!bbox) return;
   bbox.getCenter(orbit.target);
   const r = bbox.getSize(new THREE.Vector3()).length() / 2;
-  orbit.dist = r / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.1;
+  orbit.dist = r / Math.sin(THREE.MathUtils.degToRad(persp.fov / 2)) * 1.1;
 }
 
 const VIEWS = { 1: [0, 0], 2: [Math.PI, 0], 3: [0, Math.PI / 2 - 1e-4], 4: [0, -Math.PI / 2 + 1e-4], 5: [Math.PI / 2, 0], 6: [-Math.PI / 2, 0], 7: [-0.6, 0.5] };
@@ -168,7 +195,7 @@ function setView(n) { const v = VIEWS[n]; if (v) { orbit.yaw = v[0]; orbit.pitch
 
 let drag = null;
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey };
+  drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey, downX: e.clientX, downY: e.clientY, click: e.button === 0 };
   renderer.domElement.setPointerCapture(e.pointerId);
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
@@ -185,7 +212,10 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     orbit.pitch = THREE.MathUtils.clamp(orbit.pitch + dy * 0.006, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
   }
 });
-renderer.domElement.addEventListener('pointerup', () => { drag = null; });
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (drag?.click && measure.on && Math.hypot(e.clientX - drag.downX, e.clientY - drag.downY) < 4) measureClick(e);
+  drag = null;
+});
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 const raycaster = new THREE.Raycaster();
 function hitAt(e) {
@@ -193,11 +223,10 @@ function hitAt(e) {
   raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   return raycaster.intersectObjects(model.children, false)[0]?.point ?? null;
 }
-attachOrbitInput(renderer.domElement, { orbit, camera, THREE, hitAt });
+attachOrbitInput(renderer.domElement, { orbit, getCamera: () => camera, THREE, hitAt });
 
 // ------------------------------------------------------------------ section
 
-const section = { plane: new THREE.Plane(new THREE.Vector3(0, 0, -1), 0), axis: '', flip: 1 };
 function setupSection() {
   const axis = $('#sectAxis').value;
   section.axis = axis;
@@ -205,6 +234,7 @@ function setupSection() {
   const planes = axis && bbox ? [section.plane] : [];
   for (const m of model.children) m.material.clippingPlanes = planes;
   updateSection();
+  clearMeasure();
 }
 function updateSection() {
   if (!section.axis || !bbox) return;
@@ -320,18 +350,87 @@ $('#fileInput').addEventListener('change', async (e) => { if (e.target.files.len
 
 // ----------------------------------------------------------------- toggles
 
-const ui = { edges: true, wire: false, grid: true };
 function toggle(name, btn) {
   ui[name] = !ui[name];
   $(btn).classList.toggle('on', ui[name]);
   edges.visible = ui.edges;
   if (grid) grid.visible = ui.grid;
-  for (const m of model.children) m.material.wireframe = ui.wire;
+  for (const m of model.children) styleMesh(m);
 }
 $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
 $('#gridBtn').addEventListener('click', () => toggle('grid', '#gridBtn'));
 $('#fitBtn').addEventListener('click', fit);
+$('#look').addEventListener('change', (e) => { ui.look = e.target.value; for (const m of model.children) styleMesh(m); });
+function setOrtho(on) {
+  ui.ortho = on;
+  camera = on ? ortho : persp;
+  $('#orthoBtn').classList.toggle('on', on);
+}
+$('#orthoBtn').addEventListener('click', () => setOrtho(!ui.ortho));
+
+// ------------------------------------------------------------------ measure
+//
+// Two clicks on the model, one distance. Points are kept in world space and
+// their labels are DOM nodes projected every frame, so they stay crisp at any
+// zoom. ponytail: point-to-point only — edge/face/radius picking needs the
+// B-rep topology, which the viewer gets once the cell document is wired in.
+
+const measure = { on: false, pts: [], objs: [], labels: [] };
+const measureLayer = $('#measureLayer');
+function clearMeasure() {
+  for (const o of measure.objs) { scene.remove(o); o.geometry?.dispose(); }
+  for (const l of measure.labels) l.remove();
+  measure.pts = []; measure.objs = []; measure.labels = [];
+}
+function setMeasure(on) {
+  measure.on = on;
+  $('#measureBtn').classList.toggle('on', on);
+  renderer.domElement.style.cursor = on ? 'crosshair' : '';
+  if (!on) clearMeasure();
+}
+$('#measureBtn').addEventListener('click', () => setMeasure(!measure.on));
+function addLabel(text, pos) {
+  const el = document.createElement('div');
+  el.className = 'mlabel';
+  el.textContent = text;
+  el.userData = { pos };
+  measureLayer.appendChild(el);
+  measure.labels.push(el);
+}
+function markerAt(p) {
+  const r = orbit.dist * 0.004;
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), new THREE.MeshBasicMaterial({ color: 0xd11d1d, depthTest: false }));
+  m.position.copy(p); m.renderOrder = 3;
+  scene.add(m); measure.objs.push(m);
+}
+function measureClick(e) {
+  const p = hitAt(e);
+  if (!p) return;
+  if (measure.pts.length === 2) clearMeasure();
+  measure.pts.push(p.clone());
+  markerAt(p);
+  if (measure.pts.length === 2) {
+    const [a, b] = measure.pts;
+    const g = new THREE.BufferGeometry().setFromPoints([a, b]);
+    const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xd11d1d, depthTest: false }));
+    line.renderOrder = 3;
+    scene.add(line); measure.objs.push(line);
+    const d = a.distanceTo(b), dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y), dz = Math.abs(a.z - b.z);
+    addLabel(`${d.toFixed(3)}`, a.clone().lerp(b, 0.5));
+    say(`${d.toFixed(3)}  (Δx ${dx.toFixed(3)}  Δy ${dy.toFixed(3)}  Δz ${dz.toFixed(3)})`);
+    $('#measures').textContent = `${d.toFixed(3)} · Δx ${dx.toFixed(3)} · Δy ${dy.toFixed(3)} · Δz ${dz.toFixed(3)}`;
+  }
+}
+function projectLabels() {
+  const r = renderer.domElement.getBoundingClientRect();
+  for (const l of measure.labels) {
+    const v = l.userData.pos.clone().project(camera);
+    l.style.left = `${(v.x + 1) / 2 * r.width}px`;
+    l.style.top = `${(1 - v.y) / 2 * r.height}px`;
+    l.hidden = v.z > 1;
+  }
+}
 window.addEventListener('keydown', (e) => {
   if (e.target.matches('input,select,textarea')) return;
   if (e.metaKey && e.key === 'o') { e.preventDefault(); $('#fileInput').click(); return; }
@@ -340,6 +439,9 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'e') toggle('edges', '#edgesBtn');
   else if (e.key === 'w') toggle('wire', '#wireBtn');
   else if (e.key === 'g') toggle('grid', '#gridBtn');
+  else if (e.key === 'o') setOrtho(!ui.ortho);
+  else if (e.key === 'm') setMeasure(!measure.on);
+  else if (e.key === 'Escape') setMeasure(false);
   else if (VIEWS[e.key]) setView(e.key);
 });
 
@@ -363,8 +465,8 @@ function resize() {
   const w = viewport.clientWidth, h = viewport.clientHeight;
   if (renderer.domElement.width !== w * renderer.getPixelRatio() || renderer.domElement.height !== h * renderer.getPixelRatio()) {
     renderer.setSize(w, h);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
+    persp.aspect = w / h;
+    persp.updateProjectionMatrix();
   }
 }
 new ResizeObserver(resize).observe(viewport);
@@ -372,6 +474,7 @@ new ResizeObserver(resize).observe(viewport);
   resize();
   applyCamera();
   renderer.render(scene, camera);
+  projectLabels();
   requestAnimationFrame(loop);
 })();
 

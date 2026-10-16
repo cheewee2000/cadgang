@@ -6,14 +6,15 @@
  *   double-click    centre the orbit on the point under the pointer
  * Dragging keeps whatever the page already does (orbit / right-drag pan).
  */
-export function attachOrbitInput(el, { orbit, camera, THREE, hitAt, yawSign = 1 }) {
+export function attachOrbitInput(el, { orbit, camera, getCamera = () => camera, THREE, hitAt, yawSign = 1 }) {
   el.addEventListener('wheel', (e) => {
     e.preventDefault();
     if (e.ctrlKey || e.altKey) { orbit.dist *= Math.exp(e.deltaY * 0.01); return; }
     if (e.shiftKey) {
       const k = orbit.dist * 0.0015;
-      const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
-      const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+      const cam = getCamera();
+      const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
+      const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
       orbit.target.addScaledVector(right, e.deltaX * k).addScaledVector(up, -e.deltaY * k);
       return;
     }
@@ -24,7 +25,7 @@ export function attachOrbitInput(el, { orbit, camera, THREE, hitAt, yawSign = 1 
   el.addEventListener('dblclick', (e) => {
     const p = hitAt(e);
     if (!p) return;
-    orbit.dist = camera.position.distanceTo(p);   // the camera stays put; only the pivot moves
+    orbit.dist = getCamera().position.distanceTo(p);   // the camera stays put; only the pivot moves
     orbit.target.copy(p);
   });
 }

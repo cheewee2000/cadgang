@@ -30,6 +30,13 @@
       <button id="edgesBtn" class="ghost on" title="Edges (E)">Edges</button>
       <button id="wireBtn" class="ghost" title="Wireframe (W)">Wire</button>
       <button id="gridBtn" class="ghost on" title="Grid (G)">Grid</button>
+      <button id="orthoBtn" class="ghost" title="Orthographic (O)">Ortho</button>
+      <select id="look" title="Render preset">
+        <option value="shaded">shaded</option><option value="metal">metal</option><option value="plastic">plastic</option>
+        <option value="glass">glass</option><option value="xray">x-ray</option><option value="normals">normals</option>
+      </select>
+      <span class="sep"></span>
+      <button id="measureBtn" class="ghost" title="Measure two points (M, Esc to stop)">Measure</button>
       <span class="sep"></span>
       <label class="sect">Section
         <select id="sectAxis"><option value="">off</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
@@ -38,22 +45,23 @@
       </label>
       <span class="sep"></span>
       <button id="themeToggle" class="ghost" title="Toggle light / dark">DARK</button>
-      <span id="status" class="status"></span>
       <span class="version"><span class="idcode">CWT_SW_CADGANG_VIEW</span> <span class="idver" id="version"></span></span>
     </div>
   </header>
 
   <main>
     <div id="viewport">
+      <div id="measureLayer" class="measure-layer"></div>
       <div id="drop" class="drop">
         <div>Drop a STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF or FBX file here.</div>
-        <div class="drop-hint">Scroll: rotate · Shift-scroll: pan · Pinch: zoom · Double-click: centre · Views: 1 front 2 back 3 top 4 bottom 5 right 6 left 7 iso</div>
+        <div class="drop-hint">Scroll: rotate · Shift-scroll: pan · Pinch: zoom · Double-click: centre · M measure · O ortho · Views: 1 front 2 back 3 top 4 bottom 5 right 6 left 7 iso</div>
       </div>
     </div>
   </main>
 
   <footer>
     <div id="measures"></div>
+    <span id="status" class="status"></span>
     <div id="stats"></div>
   </footer>
 
