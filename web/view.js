@@ -63,7 +63,7 @@ const PRESETS = {
 };
 function styleMesh(m) {
   const mat = PRESETS[ui.look]();
-  mat.side = THREE.DoubleSide;
+  mat.side = section.axis && bbox ? THREE.FrontSide : THREE.DoubleSide;
   mat.flatShading = !!m.userData.flat;
   mat.wireframe = ui.wire;
   mat.clippingPlanes = section.axis && bbox ? [section.plane] : [];
@@ -288,52 +288,33 @@ attachOrbitInput(renderer.domElement, { orbit, getCamera: () => camera, THREE, h
 
 // ------------------------------------------------------------------ section
 
-// Caps: the classic stencil trick. For every body, its back faces increment the
-// stencil and its front faces decrement it where the plane cuts; where the count
-// is non-zero the cap quad shows — a solid-looking cut instead of a hollow shell.
-const caps = new THREE.Group();
-scene.add(caps);
-const capPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial({
-  color: 0x9a9892, metalness: 0.2, roughness: 0.6, stencilWrite: true, stencilRef: 0,
-  stencilFunc: THREE.NotEqualStencilFunc, stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp, stencilZPass: THREE.ReplaceStencilOp,
-}));
-capPlane.renderOrder = 2;
-capPlane.onAfterRender = () => renderer.clearStencil();
-capPlane.visible = false;
-scene.add(capPlane);
-function stencilMaterial(side, op) {
-  return new THREE.MeshBasicMaterial({
-    side, depthWrite: false, depthTest: false, colorWrite: false, stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc,
-    stencilFail: op, stencilZFail: op, stencilZPass: op, clippingPlanes: [section.plane],
-  });
-}
+// Caps: when a section is on, each body renders front faces only and a twin
+// mesh renders its BACK faces in a flat cap colour. Looking into the cut you see
+// solid material, hollow walls read as rings, and nothing depends on stencil
+// parity — the stencil version held on a shelled box and failed on a merged
+// STEP in WebKit.
+const capMaterial = new THREE.MeshBasicMaterial({ color: 0x8e8c86, side: THREE.BackSide });
 function buildCaps() {
-  for (const o of caps.children) o.children.forEach((c) => c.material.dispose());
-  caps.clear();
-  if (!section.axis || !bbox) { capPlane.visible = false; return; }
   for (const m of model.children) {
-    const g = new THREE.Group();
-    const back = new THREE.Mesh(m.geometry, stencilMaterial(THREE.BackSide, THREE.IncrementWrapStencilOp));
-    const front = new THREE.Mesh(m.geometry, stencilMaterial(THREE.FrontSide, THREE.DecrementWrapStencilOp));
-    back.renderOrder = 1; front.renderOrder = 1;
-    g.add(back, front);
-    g.userData.body = m;
-    caps.add(g);
+    if (m.userData.cap) { m.remove(m.userData.cap); m.userData.cap = null; }
+    const on = !!section.axis && !!bbox;
+    m.material.side = on ? THREE.FrontSide : THREE.DoubleSide;
+    if (!on) continue;
+    const cap = new THREE.Mesh(m.geometry, capMaterial);
+    cap.renderOrder = -1;
+    m.add(cap);
+    m.userData.cap = cap;
   }
-  const size = bbox.getSize(new THREE.Vector3()).length() * 3;
-  capPlane.geometry.dispose(); capPlane.geometry = new THREE.PlaneGeometry(size, size);
-  capPlane.visible = true;
-}
-function placeCaps() {
-  if (!capPlane.visible) return;
-  for (const g of caps.children) { g.visible = g.userData.body.visible; g.position.copy(g.userData.body.position); }
-  const n = section.plane.normal;
-  capPlane.position.copy(n).multiplyScalar(-section.plane.constant);
-  capPlane.lookAt(capPlane.position.clone().add(n));
+  capMaterial.clippingPlanes = section.axis && bbox ? [section.plane] : [];
 }
 
+function setSectionAxis(axis) {
+  $('#sectAxis').dataset.axis = axis;
+  for (const b of $('#sectAxis').querySelectorAll('[data-sect]')) b.classList.toggle('on', b.dataset.sect === axis);
+  setupSection();
+}
 function setupSection() {
-  const axis = $('#sectAxis').value;
+  const axis = $('#sectAxis').dataset.axis;
   section.axis = axis;
   $('#sectPos').disabled = $('#sectFlip').disabled = !axis;
   const planes = axis && bbox ? [section.plane] : [];
@@ -351,7 +332,7 @@ function updateSection() {
   const n = new THREE.Vector3(); n.setComponent(i, -section.flip);
   section.plane.set(n, section.flip * at);
 }
-$('#sectAxis').addEventListener('change', setupSection);
+for (const b of $('#sectAxis').querySelectorAll('[data-sect]')) b.addEventListener('click', () => setSectionAxis(b.dataset.sect));
 $('#sectPos').addEventListener('input', updateSection);
 $('#sectFlip').addEventListener('click', () => { section.flip *= -1; updateSection(); });
 
@@ -619,12 +600,19 @@ function postSnapshot() {
 }
 fetch('/api/view/markup').then((r) => r.json()).then((d) => markup.load(d.markups)).catch(() => {});
 
-const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-ws.onmessage = (ev) => {
-  const msg = JSON.parse(ev.data);
-  if (msg.type === 'snapshot_request') postSnapshot();
-  if (msg.type === 'markup_changed') fetch('/api/view/markup').then((r) => r.json()).then((d) => markup.load(d.markups)).catch(() => {});
-};
+// The server restarts under the app (a deploy, the heap watchdog); reconnect, and when
+// it comes back as a NEWER version reload so the page is never older than its server.
+let pageVersion = null;
+(function connect() {
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'hello' && msg.version) { if (pageVersion && pageVersion !== msg.version) location.reload(); pageVersion = msg.version; }
+    if (msg.type === 'snapshot_request') postSnapshot();
+    if (msg.type === 'markup_changed') fetch('/api/view/markup').then((r) => r.json()).then((d) => markup.load(d.markups)).catch(() => {});
+  };
+  ws.onclose = () => setTimeout(connect, 1500);
+})();
 
 // -------------------------------------------------------------------- loop
 
@@ -640,7 +628,6 @@ new ResizeObserver(resize).observe(viewport);
 (function loop() {
   resize();
   applyCamera();
-  placeCaps();
   renderer.render(scene, camera);
   projectLabels();
   markup.projectLabels();
@@ -649,9 +636,16 @@ new ResizeObserver(resize).observe(viewport);
 
 fetch('/api/health').then((r) => r.json()).then((h) => { $('#version').textContent = 'v' + h.version; }).catch(() => {});
 // For headless drives: the scene objects behind the page.
-window.__view = { model, caps, capPlane, section };
+window.__view = { model, section };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
 // ?open=/abs/a.step|/abs/b.stl — the same local-path door, for the shell and for headless tests.
-const openArg = new URLSearchParams(location.search).get('open');
-if (openArg) window.cadgangOpen(openArg.split('|'));
+// ?section=z:0.3 and ?explode=0.4 set the tools once the file is in (a pushed view, a test harness).
+const params = new URLSearchParams(location.search);
+const openArg = params.get('open');
+if (openArg) window.cadgangOpen(openArg.split('|')).then(() => {
+  const sec = params.get('section')?.match(/^([xyz]):([\d.]+)$/);
+  if (sec) { $('#sectPos').value = Math.round(parseFloat(sec[2]) * 1000); setSectionAxis(sec[1]); }
+  const ex = parseFloat(params.get('explode'));
+  if (ex > 0) { $('#explode').value = Math.round(ex * 100); applyExplode(); }
+});

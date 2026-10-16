@@ -9,7 +9,7 @@
 button.ghost.on { border-color: var(--ink); }
 .sect { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); }
 .sect input[type=range] { width: 120px; accent-color: var(--ink); }
-.sect select { font: inherit; border: var(--bw-hair) solid var(--rule); background: var(--paper); color: var(--ink); border-radius: 0; }
+.sect button { font-size: var(--fs-12); padding: 4px 8px; }
 .drop[hidden] { display: none; }
 #look { font: inherit; font-size: var(--fs-12); border: var(--bw-hair) solid var(--rule); background: var(--paper); color: var(--ink); border-radius: 0; height: 36px; }
 .measure-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }

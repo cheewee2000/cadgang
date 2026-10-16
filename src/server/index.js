@@ -24,6 +24,7 @@ import { setImportRoot } from '../core/ops.js';
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
 const PORT = parseInt(process.env.CADGANG_PORT || '4477', 10);
+const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 const DOC_PATH = process.env.CADGANG_DOC || path.join(ROOT, 'data', 'document.json');
 const CELLS_PATH = process.env.CADGANG_CELLS || path.join(ROOT, 'data', 'cells.json');
 
@@ -143,7 +144,7 @@ doc.onChange(() => broadcast({ type: 'document_changed', revision: doc.revision 
 cells.onChange(() => broadcast({ type: 'cells_changed', revision: cells.revision }));
 
 wss.on('connection', (ws) => {
-  ws.send(JSON.stringify({ type: 'hello', revision: doc.revision, cellsRevision: cells.revision }));
+  ws.send(JSON.stringify({ type: 'hello', revision: doc.revision, cellsRevision: cells.revision, version: VERSION }));
 });
 
 server.listen(PORT, () => {

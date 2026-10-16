@@ -1020,6 +1020,8 @@ function connect() {
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
+    // A server that came back NEWER than this page: reload, so the page is never older than its server.
+    if (msg.type === 'hello' && msg.version) { if (window.__pageVersion && window.__pageVersion !== msg.version) location.reload(); window.__pageVersion = msg.version; }
     // Only cell traffic matters here; the v1 graph shares the socket.
     // Non-structural on purpose: a real change of structure is caught by the
     // signature check inside, while a drawn line or a turned knob must not
