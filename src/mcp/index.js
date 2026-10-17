@@ -100,13 +100,15 @@ server.registerTool(
       return ok({
         request,
         questions: [
-          'Sheet: A4, A3, A2, Letter or Tabloid? Landscape or portrait? (default A3 landscape)',
-          'Units: mm or inch, and how many decimals? (default mm, 2; the model is in mm)',
+          'Sheet: A3 landscape is the template (templates/drawing/README.md; reference set templates/drawing/Ultra Bench T Drawing v4.pdf). A4, A2, Letter or Tabloid, portrait, only if they ask.',
+          'Units: mm or inch, and how many decimals? (default mm; linear 1, diameters 2; the model is in mm)',
           'Which side is the FRONT (the face you look at in the front view): +x, -x, +y, -y, +z or -z? And which axis is up? (default front -y, up +z, the viewer\'s own front view)',
-          'Views: front, top, right, iso — which? (default all four, third-angle projection)',
+          'Views: front, top, right, iso — which? (default all four, third-angle projection, views as line art)',
           'Scale: fit, 1:1, 1:2, 2:1, 1:5… (default fit, the largest standard scale that fits the sheet)',
-          'Dimensions: the sheet shows the dimensions placed in the viewer with Measure (M). Ask them to place the ones the drawing needs now, then confirm "done". Use cadgang_screen to check what they placed.',
-          'Title block: title, part number, revision, material, finish, drawn by, date (default today), general tolerances (default by units), notes (a list, optional).',
+          'Dimensions: the sheet draws the dimensions placed in the viewer with Measure (M) with extension lines and arrows (diameters and radii as leaders), each in the first view that shows it fully. Ask them to place the ones the drawing needs now, then confirm "done". Use cadgang_screen to check what they placed.',
+          'Title block (the template\'s cells): title, DWG no. (part number), rev (default A), created by, approved by (default the date), document type (default Fabrication drawing) and sheet title, document status (default FOR FABRICATION), date of issue (default today), sheet n of N for a set.',
+          'Notes: material, finish and general tolerances become the first numbered notes; then their own notes (a list); "DO NOT SCALE DRAWING" is always last. A parts list (item, qty, part number, material) goes top right if they want one.',
+        ],
         ],
       });
     } catch (e) { return fail(e); }
@@ -117,7 +119,7 @@ server.registerTool(
   'cadgang_drawing_make',
   {
     title: 'Render the drawing sheet',
-    description: 'Send the collected spec to the CADgang window: it renders the views with the dimensions drawn on, lays out the sheet, saves <model>.drawing.html next to the model and opens it in a new window (⌘P prints it to PDF at the stated scale). Returns the file path.',
+    description: 'Send the collected spec to the CADgang window: it renders the views with the dimensions drawn on, lays out the sheet, saves <model>.drawing.html next to the model and opens it in a new window (⌘P prints it to PDF at the stated scale). The sheet follows the CW&T drawing template (templates/drawing/README.md). Returns the file path.',
     inputSchema: {
       sheet: z.enum(['A4', 'A3', 'A2', 'Letter', 'Tabloid']).default('A3'),
       landscape: z.boolean().default(true),
@@ -127,9 +129,13 @@ server.registerTool(
       up: z.enum(['+x', '-x', '+y', '-y', '+z', '-z']).default('+z'),
       views: z.array(z.enum(['front', 'top', 'right', 'iso'])).default(['front', 'top', 'right', 'iso']),
       scale: z.union([z.literal('fit'), z.number().positive()]).default('fit'),
-      title: z.string().optional(), part: z.string().optional(), rev: z.string().optional(),
-      material: z.string().optional(), finish: z.string().optional(), drawnBy: z.string().optional(), date: z.string().optional(),
-      tolerances: z.string().optional(), notes: z.array(z.string()).optional(), source: z.string().optional(),
+      title: z.string().optional(), dwg: z.string().optional().describe('DWG no. / part number'), part: z.string().optional().describe('alias of dwg'), rev: z.string().default('A'),
+      material: z.string().optional(), finish: z.string().optional(), tolerances: z.string().optional(), notes: z.array(z.string()).optional(),
+      parts: z.array(z.object({ item: z.union([z.string(), z.number()]), qty: z.union([z.string(), z.number()]), part: z.string(), material: z.string().optional() })).optional().describe('parts list, top right'),
+      dept: z.string().default('CW&T'), technicalRef: z.string().optional(), createdBy: z.string().optional(), drawnBy: z.string().optional().describe('alias of createdBy'),
+      approvedBy: z.string().optional(), doctype: z.string().default('Fabrication drawing'), sheetTitle: z.string().optional().describe('appended to the document type, e.g. ULTRA TOP'),
+      status: z.string().default('FOR FABRICATION'), date: z.string().optional().describe('date of issue, default today'),
+      sheetNo: z.number().int().positive().optional(), sheetCount: z.number().int().positive().optional(), source: z.string().optional(),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },

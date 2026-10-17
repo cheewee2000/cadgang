@@ -49,7 +49,9 @@ No build step; the page is plain ES modules. `CADGANG_PORT` picks the port, `CAD
 
 ## Drawing
 
-Press **Drawing** with a file open. The viewer registers what is on screen and copies a prompt to the clipboard; paste it into Claude Code. Claude calls `cadgang_drawing_request`, asks the questions a sheet needs one at a time (sheet and orientation, units, which side is the front, which views, scale, the dimensions to place with Measure, title block and notes), then calls `cadgang_drawing_make`. The viewer renders the views itself (front, top, right in third angle, an isometric at half scale), draws your dimensions on them, lays out the sheet in millimetres and saves `<model>.drawing.html` next to the model, opened in a new window. ⌘P prints it to PDF at the stated scale.
+Press **Drawing** with a file open. The viewer registers what is on screen and copies a prompt to the clipboard; paste it into Claude Code. Claude calls `cadgang_drawing_request`, asks the questions a sheet needs one at a time (sheet and orientation, units, which side is the front, which views, scale, the dimensions to place with Measure, title block, notes, parts list), then calls `cadgang_drawing_make`. The viewer renders the views itself as line art (front, top, right in third angle, an isometric at half scale), draws your dimensions with extension lines and arrows (diameters and radii as leaders), lays out the sheet in the **CW&T drawing template** — ISO frame with zone grid, 180 × 45 mm title block with the CW&T wordmark, upper-case numbered notes, optional parts list, sheet n/N — and saves `<model>.drawing.html` next to the model, opened in a new window. ⌘P prints it to PDF at the stated scale.
+
+The template is documented in [`templates/drawing/README.md`](templates/drawing/README.md); the reference set is `templates/drawing/Ultra Bench T Drawing v4.pdf` (drawn from a STEP with [stepdraw](https://github.com/cheewee2000/stepdraw) and the spec next to it), which shows every element the template uses: balloons, parts list, sections, schedules.
 
 ## Claude Code (MCP)
 
@@ -91,7 +93,8 @@ web/dxf.js            DXF entities → line segments per layer
 web/markup.js         pen, arrow, note on the model; the screen snapshot
 web/orbitinput.js     trackpad: scroll rotates, pinch zooms, spin turns paper
 web/cwandt.css        CW&T design system; style.css is the page on top of it
-web/drawing.js        the drawing sheet: ortho views from the viewer, dimensions, title block, mm layout
+web/drawing.js        the drawing sheet in the CW&T template: line-art views, dimension lines, title block, notes, parts list
+templates/drawing/    the drawing template (README) and its reference set, Ultra Bench T Drawing v4.pdf
 web/explode.js        explode vectors: along a shared bore axis, off a mating plane, along a channel, out of a pocket, else radial; no collisions
 mac/main.swift        WKWebView shell, file associations, Sparkle; build.sh, release.sh, cadgang-open, the icon
 test/                 node --test: local-path rules, STEP bodies, DXF entities, explode rules, the icon; explode.harness.mjs runs the solver on a real file
