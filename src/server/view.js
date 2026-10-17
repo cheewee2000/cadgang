@@ -114,7 +114,9 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     try {
       const m = /^data:image\/png;base64,(.+)$/.exec(String(req.body?.png || ''));
       if (!m) throw Object.assign(new Error('png must be a data:image/png;base64 URL'), { status: 400 });
+      const was = latest?.subject;
       latest = { png: Buffer.from(m[1], 'base64'), camera: req.body.camera ?? null, subject: req.body.subject ?? null, at: new Date().toISOString() };
+      if (latest.subject !== was) broadcast({ type: 'subject', subject: latest.subject });   // a ?follow page opens it too
       try { fsSync.mkdirSync(dataDir, { recursive: true }); fsSync.writeFileSync(path.join(dataDir, 'screen.png'), latest.png); } catch {}
       const w = waiters; waiters = [];
       for (const fn of w) fn();

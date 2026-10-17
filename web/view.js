@@ -327,13 +327,39 @@ const VIEWS = { 1: [0, 0], 2: [Math.PI, 0], 3: [0, Math.PI / 2 - 1e-4], 4: [0, -
 function setView(n) { const v = VIEWS[n]; if (v) { orbit.yaw = v[0]; orbit.pitch = v[1]; } }
 
 let drag = null;
+function pan(dx, dy) {
+  const k = orbit.dist * 0.0015;
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+  orbit.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+}
+// Fingers (an iPad): one turns, two pinch-zoom and pan. The pencil never gets here — markup takes it.
+const touches = new Map();   // pointerId → last {x, y} of each finger down
+const pair = () => { const [a, b] = [...touches.values()]; return { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; };
+for (const t of ['gesturestart', 'gesturechange', 'gestureend'])   // WebKit's own pinch would zoom a second time
+  renderer.domElement.addEventListener(t, (e) => { if (touches.size) { e.preventDefault(); e.stopImmediatePropagation(); } }, { capture: true });
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey, downX: e.clientX, downY: e.clientY, click: e.button === 0 };
+  if (e.pointerType === 'touch') {
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    renderer.domElement.setPointerCapture(e.pointerId);
+    if (touches.size > 1) { drag = null; return; }
+  }
+  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey, downX: e.clientX, downY: e.clientY, click: e.button === 0 };
   if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
   renderer.domElement.setPointerCapture(e.pointerId);
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
+  if (touches.size > 1) {
+    if (!touches.has(e.pointerId)) return;
+    const before = pair();
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const now = pair();
+    if (before.d > 0 && now.d > 0) orbit.dist *= before.d / now.d;
+    pan(now.x - before.x, now.y - before.y);
+    return;
+  }
   if (!drag) { if (measure.on) measure.hover(e); else renderer.domElement.classList.toggle('oncap', onCap(e)); return; }
+  if (drag.id !== e.pointerId) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.x = e.clientX; drag.y = e.clientY;
   if (drag.sect) {
@@ -347,10 +373,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     return;
   }
   if (drag.pan || ui.flat) {
-    const k = orbit.dist * 0.0015;
-    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
-    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
-    orbit.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+    pan(dx, dy);
   } else {
     orbit.yaw += dx * 0.006;
     orbit.pitch += dy * 0.006;
@@ -362,7 +385,9 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (e.button === 2 && still) showMenu(e.clientX, e.clientY);
   if (drag?.sect) commit();
   drag = null;
+  touches.delete(e.pointerId);
 });
+renderer.domElement.addEventListener('pointercancel', (e) => { drag = null; touches.delete(e.pointerId); });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 const raycaster = new THREE.Raycaster();
 function hitAt(e) {
@@ -667,6 +692,11 @@ const markup = createMarkup({
 });
 let markupTimer = null;
 let subject = '';   // what is open: the file path(s) from the shell, or the dropped file name(s)
+// ?follow — a second screen (an iPad with a pencil) on the Mac app's server: it opens what the Mac
+// has open and follows when that changes. It is never Claude's eyes (no focus, no snapshots);
+// its markups reach the Mac's window through the markup_changed broadcast like any other page's.
+const follow = new URLSearchParams(location.search).has('follow');
+const followTo = (s) => { if (follow && s && s !== subject && s.startsWith('/')) window.cadgangOpen(s.split('|'), { keep: true }); };
 function markupChanged(items) {
   clearTimeout(markupTimer);
   markupTimer = setTimeout(() => {
@@ -681,6 +711,7 @@ function loadMarkup() {
 let snapshotTimer = null;
 /** Post what is on screen; coalesced, since a stroke is many change events. */
 function postSnapshot() {
+  if (follow) return;
   clearTimeout(snapshotTimer);
   snapshotTimer = setTimeout(() => {
     try {
@@ -696,7 +727,7 @@ function postSnapshot() {
 let pageVersion = null;
 let ws = null;
 // Several tabs or windows share one server; the one the user last touched is the one Claude opens into and screens.
-const focus = () => { if (ws?.readyState === 1 && document.hasFocus()) ws.send(JSON.stringify({ type: 'focus' })); };
+const focus = () => { if (!follow && ws?.readyState === 1 && document.hasFocus()) ws.send(JSON.stringify({ type: 'focus' })); };
 window.addEventListener('focus', focus);
 document.addEventListener('pointerdown', focus);
 document.addEventListener('visibilitychange', focus);
@@ -710,6 +741,7 @@ document.addEventListener('visibilitychange', focus);
     if (msg.type === 'markup_changed' && msg.subject === subject) loadMarkup();
     if (msg.type === 'open' && msg.paths?.length) window.cadgangOpen(msg.paths);   // pushed from MCP
     if (msg.type === 'drawing' && msg.spec) makeDrawing(msg.spec);
+    if (msg.type === 'subject') followTo(msg.subject);
     if (msg.type === 'file_changed' && subject.split('|').includes(msg.path)) { say('file changed, reloading…'); window.cadgangOpen(subject.split('|'), { keep: true }); }
   };
   ws.onclose = () => setTimeout(connect, 1500);
@@ -745,6 +777,7 @@ if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
 // ?section=z:0.3 and ?explode=0.4 set the tools once the file is in (a pushed view, a test harness).
 const params = new URLSearchParams(location.search);
 const openArg = params.get('open');
+if (follow) fetch('/api/view/screen').then((r) => r.json()).then((d) => followTo(d.screen?.subject)).catch(() => {});
 if (openArg) window.cadgangOpen(openArg.split('|')).then(() => {
   const sec = params.get('section')?.match(/^([xyz]):([\d.]+)$/);
   if (sec) { $('#sectPos').value = Math.round(parseFloat(sec[2]) * 1000); setSectionAxis(sec[1]); }

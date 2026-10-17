@@ -100,22 +100,29 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   const uid = () => Math.random().toString(36).slice(2, 9);
   let last = null;
 
+  // Which tool a press uses: the chosen one — except a finger, which always orbits, and a stylus
+  // (Apple Pencil), which draws even with no tool chosen. On an iPad the pencil marks up and the
+  // hand turns the part, no mode switch; the mouse keeps the explicit tool.
+  const toolFor = (e) => (e.pointerType === 'touch' ? null : tool || (e.pointerType === 'pen' ? 'pen' : null));
+  const mine = (e) => !!current || (!!tool && e.pointerType !== 'touch');
+
   canvas.addEventListener('pointerdown', (e) => {
-    if (!tool || e.button !== 0) return;
+    const using = e.button === 0 ? toolFor(e) : null;
+    if (!using) return;
     e.stopImmediatePropagation(); e.preventDefault();
     const p = pointAt(e);
     if (!p) return;
     canvas.setPointerCapture(e.pointerId);
     last = { x: e.clientX, y: e.clientY };
-    if (tool === 'pen') current = { id: uid(), kind: 'pen', points: [p] };
-    else if (tool === 'arrow') current = { id: uid(), kind: 'arrow', points: [p, p] };
-    else if (tool === 'note') { startNote(p, e); }
-    else if (tool === 'erase') { eraseAt(e); }
+    if (using === 'pen') current = { id: uid(), kind: 'pen', points: [p] };
+    else if (using === 'arrow') current = { id: uid(), kind: 'arrow', points: [p, p] };
+    else if (using === 'note') { startNote(p, e); }
+    else if (using === 'erase') { eraseAt(e); }
     rebuild();
   }, { capture: true });
 
   canvas.addEventListener('pointermove', (e) => {
-    if (!tool) return;
+    if (!mine(e)) return;
     e.stopImmediatePropagation();
     if (!current) return;
     if (current.kind === 'pen') {
@@ -130,7 +137,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   }, { capture: true });
 
   canvas.addEventListener('pointerup', (e) => {
-    if (!tool) return;
+    if (!mine(e)) return;
     e.stopImmediatePropagation();
     if (!current) return;
     const ok = current.kind === 'pen' ? current.points.length > 1 : new THREE.Vector3(...current.points[0]).distanceTo(new THREE.Vector3(...current.points[1])) > 1e-6;

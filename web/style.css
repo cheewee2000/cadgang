@@ -104,7 +104,7 @@ input[type="range"] { accent-color: var(--ink); }
 /* ------------------------------------------------------------ viewer */
 main { display: flex; flex: 1 1 auto; min-height: 0; }
 #viewport { flex: 1 1 auto; position: relative; min-width: 0; }
-#viewport canvas { display: block; }
+#viewport canvas { display: block; touch-action: none; }   /* fingers and a pencil reach the page, not Safari's scroll/zoom */
 footer {
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
   padding: 6px var(--sp-4); border-top: var(--bw-hair) solid var(--rule);
