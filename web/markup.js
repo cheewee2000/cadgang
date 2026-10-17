@@ -8,14 +8,28 @@
  * persisted per project, and `snapshot()` composites the live canvas and the
  * notes into one PNG the server hands to the `cadgang_screen` MCP tool.
  */
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+
 export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTargets, layer, tools, onChange }) {
   const group = new THREE.Group();
   group.renderOrder = 5;
   scene.add(group);
   const raycaster = new THREE.Raycaster();
-  const COLOR = 0xd11d1d;
-  const lineMat = new THREE.LineBasicMaterial({ color: COLOR, depthTest: false, transparent: true });
-  const solidMat = new THREE.MeshBasicMaterial({ color: COLOR, depthTest: false });
+  const COLOR = '#d11d1d', WIDTH = 1;   // what items without a colour or width (older files) get
+  // The pen: colour + width (px) for the next mark, kept per viewer
+  const PEN_KEY = 'cadgang.pen';
+  let pen = { color: COLOR, width: 2 };
+  try { pen = { ...pen, ...JSON.parse(localStorage.getItem(PEN_KEY) || '{}') }; } catch {}
+  // Fat lines (a WebGL line is always 1 px): one pair of materials per colour+width, resolution kept per frame
+  const mats = new Map();
+  const matFor = (color = COLOR, width = WIDTH) => {
+    const k = `${color}/${width}`;
+    if (!mats.has(k)) mats.set(k, { line: new LineMaterial({ color, linewidth: width, depthTest: false, transparent: true }), solid: new THREE.MeshBasicMaterial({ color, depthTest: false }) });
+    return mats.get(k);
+  };
+  const fatLine = (pts, mat) => new Line2(new LineGeometry().setPositions(pts.flatMap((p) => p.toArray())), mat);
   let tool = null;
   let items = [];
   let current = null;
@@ -48,10 +62,11 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     const objs = [];
     const pts = item.points.map((p) => new THREE.Vector3(...p));
     const scale = orbit.dist * 0.012;
+    const { line: lineMat, solid: solidMat } = matFor(item.color, item.width);
     if (item.kind === 'pen' && pts.length > 1) {
-      objs.push(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
+      objs.push(fatLine(pts, lineMat));
     } else if (item.kind === 'arrow' && pts.length === 2) {
-      objs.push(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
+      objs.push(fatLine(pts, lineMat));
       const dir = pts[1].clone().sub(pts[0]);
       if (dir.length() > 1e-6) {
         const cone = new THREE.Mesh(new THREE.ConeGeometry(scale * 0.35, scale, 12), solidMat);
@@ -78,6 +93,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
         el.className = 'note-label';
         el.textContent = item.text || '…';
         el.dataset.id = item.id;
+        el.style.borderColor = item.color || COLOR;
         layer.appendChild(el);
       }
     }
@@ -86,6 +102,8 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
 
   /** Called every frame: keep note labels on their anchors. */
   function projectLabels() {
+    const r = canvas.getBoundingClientRect();
+    for (const m of mats.values()) m.line.resolution.set(r.width, r.height);
     for (const el of layer.querySelectorAll('.note-label')) {
       const item = items.find((i) => i.id === el.dataset.id);
       if (!item) continue;
@@ -114,9 +132,9 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (!p) return;
     canvas.setPointerCapture(e.pointerId);
     last = { x: e.clientX, y: e.clientY };
-    if (using === 'pen') current = { id: uid(), kind: 'pen', points: [p] };
-    else if (using === 'arrow') current = { id: uid(), kind: 'arrow', points: [p, p] };
-    else if (using === 'note') { startNote(p, e); }
+    if (using === 'pen') current = { id: uid(), kind: 'pen', points: [p], ...pen };
+    else if (using === 'arrow') current = { id: uid(), kind: 'arrow', points: [p, p], ...pen };
+    else if (using === 'note') { startNote(p, e); }   // startNote reads pen for its colour
     else if (using === 'erase') { eraseAt(e); }
     rebuild();
   }, { capture: true });
@@ -169,7 +187,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
         // By id: the server's change echo reloads `items` while the user types, so `item` may be stale.
         const live = item && (items.find((i) => i.id === item.id) || item);
         if (live) live.text = el.value.trim();
-        else items.push({ id: uid(), kind: 'note', points: [p], text: el.value.trim(), at: new Date().toISOString() });
+        else items.push({ id: uid(), kind: 'note', points: [p], text: el.value.trim(), color: pen.color, at: new Date().toISOString() });
         changed();
       }
       el.remove(); noteInput = null; rebuild();
@@ -202,9 +220,18 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     canvas.style.cursor = tool ? 'crosshair' : '';
     if (!tool) { current = null; rebuild(); }
   }
+  function setPen(next) {
+    pen = { ...pen, ...next };
+    try { localStorage.setItem(PEN_KEY, JSON.stringify(pen)); } catch {}
+    for (const b of tools.querySelectorAll('[data-color]')) b.classList.toggle('on', b.dataset.color === pen.color);
+    for (const b of tools.querySelectorAll('[data-width]')) b.classList.toggle('on', +b.dataset.width === pen.width);
+  }
+  setPen({});
   tools.addEventListener('click', (e) => {
     const b = e.target.closest('[data-tool]');
     if (b) { setTool(b.dataset.tool); return; }
+    const c = e.target.closest('[data-color]'); if (c) { setPen({ color: c.dataset.color }); return; }
+    const w = e.target.closest('[data-width]'); if (w) { setPen({ width: +w.dataset.width }); return; }
     if (e.target.closest('[data-clear]')) { items = []; changed(); rebuild(); }
   });
 
@@ -226,7 +253,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       if (s.behind) continue;
       const text = item.text, w = ctx.measureText(text).width + 12 * k, h = 20 * k;
       ctx.fillStyle = '#ffffff'; ctx.fillRect(s.x * k - w / 2, s.y * k - 12 * k - h, w, h);
-      ctx.strokeStyle = '#d11d1d'; ctx.lineWidth = k; ctx.strokeRect(s.x * k - w / 2, s.y * k - 12 * k - h, w, h);
+      ctx.strokeStyle = item.color || COLOR; ctx.lineWidth = k; ctx.strokeRect(s.x * k - w / 2, s.y * k - 12 * k - h, w, h);
       ctx.fillStyle = '#000000'; ctx.fillText(text, s.x * k - w / 2 + 6 * k, s.y * k - 12 * k - 3 * k);
     }
     return c.toDataURL('image/png');

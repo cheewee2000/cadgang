@@ -141,6 +141,9 @@ select.ghost:hover { opacity: 0.55; }
 /* markup, shared by both viewports */
 .markup-tools { position: absolute; right: var(--sp-3); top: var(--sp-3); display: flex; gap: var(--sp-1); z-index: 2; }
 .markup-tools button { font-size: var(--fs-12); padding: 4px 8px; background: var(--paper); }
+.markup-tools .swatch { width: 22px; padding: 0; background: var(--swatch); }
+.markup-tools .swatch.on { box-shadow: inset 0 0 0 2px var(--paper); border-color: var(--ink); }
+.markup-sep { width: var(--bw-hair); background: var(--rule); margin: 0 var(--sp-1); }
 .note-label, .note-input { position: absolute; transform: translate(-50%, calc(-100% - 12px)); background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--signal-red); padding: 1px 6px; font: inherit; font-size: var(--fs-12); white-space: nowrap; pointer-events: none; }
 .note-input { pointer-events: auto; width: 180px; outline: none; border-radius: 0; }
 .note-label[hidden] { display: none; }
