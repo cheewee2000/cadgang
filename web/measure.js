@@ -51,7 +51,8 @@ export function cylinderFit(tris, centroid, scaleHint = 0) {
   let gap = angs[0] + Math.PI * 2 - angs[angs.length - 1]; for (let i = 1; i < angs.length; i++) gap = Math.max(gap, angs[i] - angs[i - 1]);
   const span = Math.PI * 2 - gap;
   const toSurf = centroid.clone().sub(c); toSurf.addScaledVector(axis, -toSurf.dot(axis)).normalize();
-  return { axis, c, r: cyl.r, u, v, span, closed: span > THREE.MathUtils.degToRad(300), p: c.clone().addScaledVector(toSurf, cyl.r) };
+  let t0 = Infinity, t1 = -Infinity; for (const p of verts) { const t = p.dot(axis); if (t < t0) t0 = t; if (t > t1) t1 = t; }   // extent along the axis
+  return { axis, c, r: cyl.r, u, v, span, t0, t1, closed: span > THREE.MathUtils.degToRad(300), p: c.clone().addScaledVector(toSurf, cyl.r) };
 }
 
 /** Algebraic (Kåsa) circle fit: x²+y²+Dx+Ey+F=0. */

@@ -86,7 +86,7 @@ web/orbitinput.js     trackpad: scroll rotates, pinch zooms, spin turns paper
 web/cwandt.css        CW&T design system; style.css is the page on top of it
 web/explode.js        explode vectors: along a shared bore axis, off a mating plane, along a channel, out of a pocket, else radial; no collisions
 mac/main.swift        WKWebView shell, file associations, Sparkle; build.sh, release.sh, cadgang-open, the icon
-test/                 node --test: local-path rules, STEP bodies, DXF entities, the icon
+test/                 node --test: local-path rules, STEP bodies, DXF entities, explode rules, the icon; explode.harness.mjs runs the solver on a real file
 ```
 
 ## Credits

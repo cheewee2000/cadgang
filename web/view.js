@@ -209,6 +209,8 @@ function solveExplode() {
   say(`explode vectors solved in ${Math.round(performance.now() - t0)} ms`);
 }
 $('#solveBtn').addEventListener('click', () => { say('solving explode vectors…'); setTimeout(solveExplode, 30); });
+// For a headless drive or a console: what the solver decided.
+window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null }));
 /** The tick of each body row takes its colour when COLOR is on. */
 function paintRows() {
   [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.style.accentColor = ui.color ? `#${partColor(i).getHexString()}` : ''; });
@@ -304,8 +306,9 @@ function applyCamera() {
 
 function fit() {
   if (!bbox) return;
-  bbox.getCenter(orbit.target);
-  const r = bbox.getSize(new THREE.Vector3()).length() / 2;
+  const b = new THREE.Box3().setFromObject(model);   // what is on screen now, exploded or not
+  b.getCenter(orbit.target);
+  const r = b.getSize(new THREE.Vector3()).length() / 2;
   orbit.dist = r / Math.sin(THREE.MathUtils.degToRad(persp.fov / 2)) * 1.1;
 }
 

@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { explodeOffsets } from '../web/explode.js';
 
 const box = (w, h, d, x, y, z) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z); return new THREE.Mesh(g); };
-const dir = (m) => m.userData.offset.clone().normalize().toArray().map((v) => Math.round(v * 100) / 100);
+const dir = (m) => m.userData.offset.clone().normalize().toArray().map((v) => Math.round(v * 100) / 100 + 0);
 
 test('magnet in a pocket leaves by the open axis, riding on the block; a loose part goes radially', () => {
   const block = merged([box(7, 20, 10, 23.5, 0, 0), box(7, 20, 10, 36.5, 0, 0), box(6, 7, 10, 30, 6.5, 0), box(6, 7, 10, 30, -6.5, 0), box(6, 6, 6, 30, 0, -2)]);
@@ -52,6 +52,23 @@ test('a radial path through another body is replaced by a clear one', () => {
   const cube = box(2, 2, 2, 15, 0, 0);
   explodeOffsets([frame, cube], new THREE.Vector3());
   assert.deepEqual(dir(cube), [0, 1, 0]);
+});
+
+test('facing pockets: a magnet rides the part whose pocket holds it, and leaves toward the other part', () => {
+  // two blocks stacked along Y, each with a Y-axis pocket at the interface, a magnet in each; the pockets share one axis line
+  // faces wind outward like a real solid: a bore's wall faces in, a pocket floor faces the opening
+  const tube = (r, h, y, bore = false) => { const g = new THREE.CylinderGeometry(r, r, h, 48, 1, true); if (bore) g.scale(-1, 1, 1); g.translate(0, y, 0); return new THREE.Mesh(g); };
+  const disc = (r, y, facing) => { const g = new THREE.CircleGeometry(r, 48); g.rotateX(facing > 0 ? -Math.PI / 2 : Math.PI / 2); g.translate(0, y, 0); return new THREE.Mesh(g); };
+  const slab = (y0, y1) => { const g = new THREE.BoxGeometry(30, y1 - y0, 30); g.translate(0, (y0 + y1) / 2, 0); return new THREE.Mesh(g); };
+  const lower = merged([slab(-20, 0), tube(3, 4, -2, true), disc(3, -4, +1)]);   // pocket y -4..0, open at y = 0
+  const upper = merged([slab(0, 20), tube(3, 4, 2, true), disc(3, 4, -1)]);      // pocket y 0..4, open at y = 0
+  const magLow = merged([tube(2.9, 3, -2.5), disc(2.9, -4, -1), disc(2.9, -1, +1)]);
+  const magUp = merged([tube(2.9, 3, 2.5), disc(2.9, 1, -1), disc(2.9, 4, +1)]);
+  explodeOffsets([lower, upper, magLow, magUp], new THREE.Vector3(10, 0, 10));
+  assert.equal(magLow.userData.parent, lower);
+  assert.equal(magUp.userData.parent, upper);
+  assert.deepEqual(dir(magLow), [0, 1, 0]);
+  assert.deepEqual(dir(magUp), [0, -1, 0]);
 });
 
 /** One mesh from several, remembering each input as a B-rep face. */

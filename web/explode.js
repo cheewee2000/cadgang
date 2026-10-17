@@ -58,7 +58,14 @@ export function explodeOffsets(bodies, centre) {
     const half = b.getSize(new THREE.Vector3()).multiplyScalar(0.5);
     return { c: b.getCenter(new THREE.Vector3()), half, r: half.length(), cyl: cylinders(m) };
   });
-  const hitFrom = (c, d, among) => { ray.set(c, d.clone().normalize()); return ray.intersectObjects(among, false)[0]; };
+  // Rays test front faces only, whatever material the viewer draws the bodies with (double-sided
+  // shading would make every wall hit from both sides): probe meshes over the same geometry.
+  const probe = bodies.map((m) => new THREE.Mesh(m.geometry));
+  const hitFrom = (c, d, among) => {
+    ray.set(c, d.clone().normalize());
+    const h = ray.intersectObjects(among.map((b) => probe[bodies.indexOf(b)]), false)[0];
+    return h && { distance: h.distance, object: bodies[probe.indexOf(h.object)] };
+  };
   const plan = bodies.map((m, i) => {
     const { c, half, r } = info[i];
     const radial = c.clone().sub(centre);
@@ -76,8 +83,15 @@ export function explodeOffsets(bodies, centre) {
         if (Math.abs(a.axis.dot(b.axis)) < 0.999 || b.r < 0.98 * a.r || b.r > 1.25 * a.r) continue;
         const off = a.c.clone().sub(b.c); off.addScaledVector(b.axis, -off.dot(b.axis));
         if (off.length() > 0.02 * a.r + 1e-6) continue;   // not on the same line
+        // on the line, but is it in THIS bore? the two must overlap along the axis (the facing pocket of
+        // another part shares the line and touches, but does not overlap)
+        const flip = a.axis.dot(b.axis) < 0, a0 = flip ? -a.t1 : a.t0, a1 = flip ? -a.t0 : a.t1;
+        if (Math.min(a1, b.t1) - Math.max(a0, b.t0) < 0.1 * (a1 - a0)) continue;
+        // which end is open: ask the body that owns the bore alone (a blind pocket's floor blocks one way;
+        // whatever else sits in front of the opening is moving out of the way itself)
         const plus = a.axis.clone(), minus = a.axis.clone().negate();
-        const fp = free(plus), fm = free(minus);
+        const own = (d) => { const h = hitFrom(c, d, [bodies[j]]); return h ? h.distance : Infinity; };
+        const fp = own(plus), fm = own(minus);
         const d = fp > fm ? plus : fm > fp ? minus : (radial.dot(plus) >= 0 ? plus : minus);
         P.cands.push(plus, minus);
         if (!P.dir) { P.dir = d; P.parent = rideOn(bodies[j]); }
@@ -113,24 +127,26 @@ export function explodeOffsets(bodies, centre) {
     return P;
   });
   for (const P of plan) P.offset = P.dir ? P.dir.clone().multiplyScalar(P.radialLen ?? P.len(P.dir)) : new THREE.Vector3();
-  // no collisions: a body whose travel runs into another that is not moving out of its way takes the clearest candidate
+  // no collisions, judged on absolute motion (a part riding on its pocket's body moves with it): a body
+  // whose travel runs into another that is not moving out of its way takes the clearest candidate whose
+  // whole travel is clear; none clear, it keeps the direction the rules gave it
+  const absOf = (P, seen = new Set()) => { if (!P.parent || seen.has(P)) return P.offset.clone(); seen.add(P); return P.offset.clone().add(absOf(plan[bodies.indexOf(P.parent)], seen)); };
+  for (const P of plan) P.abs = absOf(P);
   for (const P of plan) {
-    if (!P.dir) continue;
+    if (!P.dir || !P.abs.lengthSq()) continue;
     const others = bodies.filter((o) => o !== P.m && o !== P.parent);
-    const blockedBy = (d, travel) => {
-      const h = hitFrom(info[P.i].c, d, others); if (!h || h.distance > P.ext(d) + travel) return null;
-      const Q = plan[bodies.indexOf(h.object)];
-      const ahead = Q.offset.dot(d) >= P.offset.length();   // it moves along my way at least as far as I do: the gap only grows
-      return ahead ? null : h;
-    };
-    if (!blockedBy(P.dir, 2 * P.offset.length())) continue;
+    const d0 = P.abs.clone().normalize(), travel = 2 * P.abs.length();
+    const h = hitFrom(info[P.i].c, d0, others);
+    if (!h || h.distance > P.ext(d0) + travel) continue;
+    const Q = plan[bodies.indexOf(h.object)];
+    if (Q.abs.dot(d0) >= P.abs.length()) continue;   // it moves my way at least as far as I do: the gap only grows
     let best = null;
     for (const d of P.cands) {
-      const h = hitFrom(info[P.i].c, d, others), f = h ? h.distance : Infinity;
+      const hh = hitFrom(info[P.i].c, d, others), f = hh ? hh.distance : Infinity;
       const score = f + 1e-3 * d.dot(P.radial);   // clearest; ties toward the radial
       if (!best || score > best.score) best = { d, score, f };
     }
-    if (best && best.f > P.ext(best.d)) { P.dir = best.d; P.offset = best.d.clone().multiplyScalar(P.len(best.d)); }
+    if (best && best.f >= P.ext(best.d) + 2 * P.len(best.d)) { P.dir = best.d; P.offset = best.d.clone().multiplyScalar(P.len(best.d)); P.parent = null; }
   }
   for (const P of plan) { P.m.userData.offset = P.offset; P.m.userData.parent = P.parent; }
 }
