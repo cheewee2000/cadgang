@@ -93,6 +93,7 @@ test('a screw whose shank fills its standoff leaves by the head end; a standoff 
   const screw = merged([tube(1, 7.5, 4.75), disc(0, 1, 1, false), tube(2.1, 1, 9), disc(1, 2.1, 8.5, false), disc(0, 2.1, 9.5, true)]);
   explodeOffsets([lid, board, standoff, screw], new THREE.Vector3(12, 0, 6));
   assert.deepEqual(dir(screw), [0, 0, 1]);
+  assert.equal(screw.userData.parent, lid);   // rides the lid its head bears on, not the standoff (which leaves the other way)
   assert.equal(Math.abs(dir(standoff)[2]), 1);   // along the stack, not sideways
 });
 

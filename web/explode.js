@@ -96,6 +96,25 @@ export function explodeOffsets(bodies, centre) {
     }
     return best && { gap: Math.max(0, best.distance - eps), object: bodies[probe.indexOf(best.object)] };
   };
+  // Contact probes, double-sided: an outward ray from just under a face meets a back face first when that face sits
+  // inside another body (a head in its countersink, a thread in its tap drill), a front face within a touch when it rests on one.
+  const probe2 = bodies.map((m) => new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })));
+  // The body a pin's shoulder bears on as it leaves along d: its faces looking back (n·d < -0.3) that rest on or sit in a
+  // body other than the housing. A screw rides the lid under its head, not the standoff it threads into — riding the
+  // standoff, which leaves the other way, it would sink with the board instead of coming out of the lid.
+  const bearing = (i, d, housing) => {
+    const { r, pts } = info[i], eps = 1e-3 * r; let best = -1;
+    for (const { p, n } of pts) {
+      if (n.dot(d) > -0.3) continue;
+      ray.set(p.clone().addScaledVector(n, -eps), n);
+      const h = ray.intersectObjects(probe2, false).find((h) => h.object !== probe2[i]);
+      if (!h) continue;
+      const j = probe2.indexOf(h.object);
+      if (j === housing || (h.face.normal.dot(n) < 0 && h.distance > 0.1 * r + eps)) continue;   // a front face beyond a touch: not resting on it
+      if (best < 0 || info[j].r > info[best].r) best = j;
+    }
+    return best < 0 ? null : bodies[best];
+  };
   const plan = bodies.map((m, i) => {
     const { c, half, r } = info[i];
     const radial = c.clone().sub(centre);
@@ -127,7 +146,7 @@ export function explodeOffsets(bodies, centre) {
         const fp = own(plus), fm = own(minus);
         const d = fp > fm ? plus : fm > fp ? minus : (radial.dot(plus) >= 0 ? plus : minus);
         P.cands.push(plus, minus);
-        if (!P.dir) { P.dir = d; P.parent = rideOn(bodies[j]); P.housing = bodies[j]; P.lip = lip; }
+        if (!P.dir) { P.dir = d; P.parent = rideOn(bearing(i, d, j) ?? bodies[j]); P.housing = bodies[j]; P.lip = lip; }
       }
     }
     P.cands.push(...DIRS);
