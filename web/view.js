@@ -776,7 +776,10 @@ fetch('/api/health').then((r) => r.json()).then((h) => {
   if (!h.lan || follow) return;   // the VPS has no LAN; a follower is already the iPad
   const link = `http://${h.lan}:${h.port}/view?follow`;
   $('#ipadBtn').hidden = false;
-  $('#ipadBtn').addEventListener('click', () => navigator.clipboard.writeText(link).then(() => say(`copied ${link}`), () => say(link)));
+  // In the Mac app the button AirDrops the link: pick the iPad, Safari opens it. Elsewhere it copies.
+  $('#ipadBtn').addEventListener('click', () => window.webkit?.messageHandlers?.cadgang
+    ? window.webkit.messageHandlers.cadgang.postMessage({ cmd: 'airdrop', url: link })
+    : navigator.clipboard.writeText(link).then(() => say(`copied ${link}`), () => say(link)));
 }).catch(() => {});
 // For headless drives: the scene objects behind the page.
 window.__view = { model, section, orbit, ui, measure, THREE, get camera() { return camera; },

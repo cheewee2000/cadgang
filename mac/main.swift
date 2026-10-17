@@ -166,6 +166,8 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         guard let body = m.body as? [String: Any], let cmd = body["cmd"] as? String else { return }
         if cmd == "defaultApp" { makeDefaultViewer() }
+        // AirDrop the ?follow link: the sheet lists nearby devices; the iPad opens it in Safari.
+        if cmd == "airdrop", let s = body["url"] as? String, let u = URL(string: s) { NSSharingService(named: .sendViaAirDrop)?.perform(withItems: [u]) }
     }
 
     /// Become the Finder's app for every extension the viewer reads. One LaunchServices
