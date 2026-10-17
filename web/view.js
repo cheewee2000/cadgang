@@ -39,6 +39,25 @@ function say(text, isError = false) {
   if (text && !isError) statusTimer = setTimeout(() => { el.textContent = ''; }, 4000);
 }
 
+// Loading bar. A CAD file tessellates on the server in one call with no progress signal, so the bar runs on
+// the clock against how long this file took last time (kept per name); a file never seen before gets a
+// sliding bar. ponytail: time estimate, not real progress — stream per-body progress if loads get long.
+const LOAD_KEY = 'cadgang-load-ms';
+const loadTimes = (() => { try { return JSON.parse(localStorage.getItem(LOAD_KEY) || '{}'); } catch { return {}; } })();
+let progressTimer = null;
+function progressStart(name) {
+  const el = $('#progress'), bar = el.firstElementChild, est = loadTimes[name], t0 = performance.now();
+  el.hidden = false; el.classList.toggle('guess', !est); bar.style.width = '0%';
+  clearInterval(progressTimer);
+  if (est) progressTimer = setInterval(() => { bar.style.width = `${Math.min(95, 100 * (performance.now() - t0) / est)}%`; }, 100);
+}
+function progressEnd(name, ms) {
+  clearInterval(progressTimer);
+  const el = $('#progress'); el.classList.remove('guess'); el.firstElementChild.style.width = '100%';
+  setTimeout(() => { el.hidden = true; el.firstElementChild.style.width = '0%'; }, 300);
+  if (name && ms) { loadTimes[name] = ms; try { localStorage.setItem(LOAD_KEY, JSON.stringify(loadTimes)); } catch {} }
+}
+
 // ----------------------------------------------------------------- viewport
 
 const viewport = $('#viewport');
@@ -246,6 +265,7 @@ function applyExplode() {
   measure.invalidate();
 }
 $('#explode').addEventListener('input', applyExplode);
+function setExplode(v) { $('#explode').value = Math.max(0, Math.min(100, v)); applyExplode(); }
 
 function finishLoad(name, ms, keep = false) {
   const box = new THREE.Box3().setFromObject(model);
@@ -560,14 +580,14 @@ async function openBuffers(files) {
   let shown = 0, label = '';
   for (const { name, buffer } of files) {
     const ext = name.toLowerCase().split('.').pop();
-    say(`loading ${name}…`);
+    say(`loading ${name}…`); progressStart(name); const tf = performance.now();
     try {
       const parts = CAD_EXT.test(name)
         ? parseCad(await fetchBuffer(`/api/view/tessellate?name=${encodeURIComponent(name)}`, { method: 'POST', body: buffer }))
         : await parseMesh(ext, buffer, name);
       for (const p of parts) addPart(p, name);
-      shown++; label = name;
-    } catch (e) { loadFailed(name, e); return; }
+      shown++; label = name; progressEnd(name, performance.now() - tf);
+    } catch (e) { progressEnd(); loadFailed(name, e); return; }
   }
   if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0));
 }
@@ -585,15 +605,15 @@ window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
   let shown = 0, label = '';
   for (const p of paths) {
     const name = p.split('/').pop();
-    say(`loading ${name}…`);
+    say(`loading ${name}…`); progressStart(name); const tf = performance.now();
     try {
       const q = `path=${encodeURIComponent(p)}`;
       const parts = CAD_EXT.test(name)
         ? parseCad(await fetchBuffer(`/api/view/tessellate?${q}`, { method: 'POST' }))
         : await parseMesh(name.toLowerCase().split('.').pop(), await fetchBuffer(`/api/view/file?${q}`), name);
       for (const part of parts) addPart(part, name);
-      shown++; label = name;
-    } catch (e) { loadFailed(name, e); return; }
+      shown++; label = name; progressEnd(name, performance.now() - tf);
+    } catch (e) { progressEnd(); loadFailed(name, e); return; }
   }
   if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0), keep);
 };
@@ -817,6 +837,10 @@ const CMDS = [
   { sep: true },
   ...['x', 'y', 'z'].map((a) => ({ key: a, label: `Section ${a.toUpperCase()}`, btn: `[data-sect="${a}"]`, run: () => setSectionAxis(section.axis === a ? '' : a), on: () => section.axis === a })),
   { key: 'i', label: 'Invert section', btn: '#sectFlip', run: () => { if (section.axis) { section.flip *= -1; updateSection(); } } },
+  { sep: true },
+  { key: '0', label: 'Explode all / none', btn: '#explode', run: () => setExplode(+$('#explode').value ? 0 : 100), on: () => +$('#explode').value > 0 },
+  { key: '=', label: 'Explode more', run: () => setExplode(+$('#explode').value + 10) },
+  { key: '-', label: 'Explode less', run: () => setExplode(+$('#explode').value - 10) },
   { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (measure.cancel()) return; setSectionAxis(''); setMeasure(false); } },
   { sep: true },
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
