@@ -47,6 +47,10 @@ No build step; the page is plain ES modules. `CADGANG_PORT` picks the port, `CAD
 | B | Flip drawing over | [ ] | Turn 90° |
 | D | Dark / light | ⌘O ⌘Z ⇧⌘Z | Open, Undo, Redo |
 
+## Drawing
+
+Press **Drawing** with a file open. The viewer registers what is on screen and copies a prompt to the clipboard; paste it into Claude Code. Claude calls `cadgang_drawing_request`, asks the questions a sheet needs one at a time (sheet and orientation, units, which side is the front, which views, scale, the dimensions to place with Measure, title block and notes), then calls `cadgang_drawing_make`. The viewer renders the views itself (front, top, right in third angle, an isometric at half scale), draws your dimensions on them, lays out the sheet in millimetres and saves `<model>.drawing.html` next to the model, opened in a new window. ⌘P prints it to PDF at the stated scale.
+
 ## Claude Code (MCP)
 
 The repo ships `.mcp.json` (and `.codex/config.toml`), so opening it in Claude Code registers the `cadgang` MCP server. Manually: `claude mcp add cadgang -- node /path/to/cadgang/src/mcp/index.js`. The app or `npm start` must be running; set `CADGANG_URL` if it is not on port 4477.
@@ -56,6 +60,8 @@ The repo ships `.mcp.json` (and `.codex/config.toml`), so opening it in Claude C
 | `cadgang_screen` | The live viewport as the user sees it, with their markups drawn on, plus the markups as 3D data (mm), the file on screen and the camera |
 | `cadgang_markup_clear` | Remove the markups of the file on screen once acted on |
 | `cadgang_open` | Open one or more files in the window |
+| `cadgang_drawing_request` | What the user asked a drawing of, and the questions to ask them |
+| `cadgang_drawing_make` | Send the answered spec; the viewer renders and saves the sheet |
 
 ## REST
 
@@ -66,9 +72,10 @@ The repo ships `.mcp.json` (and `.codex/config.toml`), so opening it in Claude C
 | `GET/PUT /api/view/markup?subject=…` | Markups of one file |
 | `POST /api/view/snapshot` · `GET /api/view/screen?fresh=1` · `GET /api/view/screen.png` | The page posts what it shows; Claude reads it |
 | `POST /api/view/open {paths}` | Tell open pages to open files |
+| `POST/GET /api/view/drawing/request` · `POST /api/view/drawing/make {spec}` · `GET /api/view/drawing` | The drawing round trip: request, spec in, the rendered sheet out |
 | `GET /api/health` | Version and connected pages |
 
-`ws://…/ws` says hello with the server version (pages reload when it changed) and broadcasts `markup_changed`, `snapshot_request`, `open` and `file_changed` (a local file opened by path was rewritten).
+`ws://…/ws` says hello with the server version (pages reload when it changed) and broadcasts `markup_changed`, `snapshot_request`, `open`, `drawing` and `file_changed` (a local file opened by path was rewritten).
 
 ## Layout
 
@@ -84,6 +91,7 @@ web/dxf.js            DXF entities → line segments per layer
 web/markup.js         pen, arrow, note on the model; the screen snapshot
 web/orbitinput.js     trackpad: scroll rotates, pinch zooms, spin turns paper
 web/cwandt.css        CW&T design system; style.css is the page on top of it
+web/drawing.js        the drawing sheet: ortho views from the viewer, dimensions, title block, mm layout
 web/explode.js        explode vectors: along a shared bore axis, off a mating plane, along a channel, out of a pocket, else radial; no collisions
 mac/main.swift        WKWebView shell, file associations, Sparkle; build.sh, release.sh, cadgang-open, the icon
 test/                 node --test: local-path rules, STEP bodies, DXF entities, explode rules, the icon; explode.harness.mjs runs the solver on a real file

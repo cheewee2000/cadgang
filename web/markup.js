@@ -215,7 +215,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   }
 
   return {
-    setTool, projectLabels, snapshot,
+    setTool, projectLabels, snapshot, group,
     get items() { return items; },
     load(list) { items = Array.isArray(list) ? list : []; rebuild(); },
     get active() { return !!tool; },

@@ -21,6 +21,7 @@ import { attachOrbitInput } from './orbitinput.js';
 import { createMarkup } from './markup.js';
 import { parseDxf } from './dxf.js';
 import { explodeOffsets, radialOffsets } from './explode.js';
+import { renderDrawing } from './drawing.js';
 import { createMeasure } from './measure.js';
 import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
 
@@ -568,6 +569,24 @@ document.addEventListener('drop', async (e) => {
 });
 $('#openBtn').addEventListener('click', () => $('#fileInput').click());
 $('#newBtn').addEventListener('click', () => window.open(location.pathname));
+// Drawing: the page registers what is open; Claude collects the spec over MCP and sends it back here to render.
+$('#drawBtn').addEventListener('click', async () => {
+  if (!model.children.length) return say('open a file first', true);
+  const size = bbox.getSize(new THREE.Vector3()).toArray().map((v) => +v.toFixed(2));
+  await api('/drawing/request', { method: 'POST', body: { subject, name: $('#fileName').textContent, size, bodies: model.children.map((m) => m.userData.name), dims: measure.dims.length } }).catch((e) => say(e.message, true));
+  const prompt = 'Make the drawing for the file open in CADgang: call cadgang_drawing_request, ask me its questions one at a time, then cadgang_drawing_make.';
+  try { await navigator.clipboard.writeText(prompt); } catch {}
+  say('drawing requested — paste the copied prompt into Claude Code and answer its questions');
+});
+async function makeDrawing(spec) {
+  say('rendering drawing…');
+  try {
+    const html = renderDrawing(spec, { renderer, scene, model, bbox, measure, hide: [grid, markup.group].filter(Boolean), restore: () => { resize(); renderer.setSize(viewport.clientWidth, viewport.clientHeight); } });
+    const r = await api('/drawing/result', { method: 'POST', body: { html, subject } });
+    say(`drawing saved: ${r.path}`);
+    window.open('/api/view/drawing');
+  } catch (e) { say(`drawing failed: ${e.message}`, true); api('/drawing/result', { method: 'POST', body: { error: e.message } }).catch(() => {}); }
+}
 // Only the Mac shell can register file associations; the button exists only inside it.
 $('#defaultBtn').hidden = !window.cadgangDesktop;
 $('#defaultBtn').addEventListener('click', () => window.webkit?.messageHandlers?.cadgang?.postMessage({ cmd: 'defaultApp' }));
@@ -678,6 +697,7 @@ document.addEventListener('visibilitychange', focus);
     if (msg.type === 'snapshot_request') postSnapshot();
     if (msg.type === 'markup_changed' && msg.subject === subject) loadMarkup();
     if (msg.type === 'open' && msg.paths?.length) window.cadgangOpen(msg.paths);   // pushed from MCP
+    if (msg.type === 'drawing' && msg.spec) makeDrawing(msg.spec);
     if (msg.type === 'file_changed' && subject.split('|').includes(msg.path)) { say('file changed, reloading…'); window.cadgangOpen(subject.split('|'), { keep: true }); }
   };
   ws.onclose = () => setTimeout(connect, 1500);

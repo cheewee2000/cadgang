@@ -145,6 +145,36 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     } catch (e) { next(e); }
   });
 
+  // Drawing: the page registers a request; Claude reads it, asks its questions, sends the spec; the
+  // active page renders the sheet and posts the HTML back, which is written next to the model.
+  let drawingRequest = null, drawing = null, drawingWaiters = [];
+  r.post('/drawing/request', (req, res) => { drawingRequest = { ...req.body, at: new Date().toISOString() }; res.json({ ok: true }); });
+  r.get('/drawing/request', (req, res) => res.json({ request: drawingRequest, drawing: drawing && { path: drawing.path, at: drawing.at } }));
+  r.post('/drawing/make', async (req, res) => {
+    const spec = req.body?.spec ?? req.body;
+    const result = new Promise((done) => {
+      const t = setTimeout(() => done({ error: 'The viewer did not answer in 90 s — is a file open in a CADgang window?' }), 90_000);
+      drawingWaiters.push((r) => { clearTimeout(t); done(r); });
+    });
+    broadcast({ type: 'drawing', spec });
+    const r2 = await result;
+    if (r2.error) return res.status(500).json({ error: r2.error });
+    res.json({ path: r2.path, url: '/api/view/drawing' });
+  });
+  r.post('/drawing/result', express.json({ limit: '80mb' }), (req, res) => {
+    const w = drawingWaiters; drawingWaiters = [];
+    if (req.body?.error) { for (const fn of w) fn({ error: req.body.error }); return res.json({ ok: false }); }
+    const subject = String(req.body?.subject || drawingRequest?.subject || '').split('|')[0];
+    const base = subject ? path.basename(subject).replace(/\.[^.]+$/, '') : 'drawing';
+    const dir = subject && path.isAbsolute(subject) && mayReadLocal(req) ? path.dirname(subject) : dataDir;
+    const file = path.join(dir, `${base}.drawing.html`);
+    try { fsSync.mkdirSync(dir, { recursive: true }); fsSync.writeFileSync(file, String(req.body?.html || '')); } catch (e) { for (const fn of w) fn({ error: e.message }); return res.status(500).json({ error: e.message }); }
+    drawing = { html: String(req.body.html), path: file, at: new Date().toISOString() };
+    for (const fn of w) fn({ path: file });
+    res.json({ ok: true, path: file });
+  });
+  r.get('/drawing', (req, res) => (drawing ? res.type('html').send(drawing.html) : res.status(404).json({ error: 'No drawing yet' })));
+
   r.get('/file', async (req, res, next) => {
     try {
       const { name, buffer } = await local(req);
