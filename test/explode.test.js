@@ -23,7 +23,7 @@ test('a lid resting on a box lifts perpendicular to the mating plane, not radial
   const lid = box(20, 20, 2, 0, 0, 6);
   explodeOffsets([body, lid], new THREE.Vector3(8, 8, -3));
   assert.deepEqual(dir(lid), [0, 0, 1]);
-  assert.equal(lid.userData.parent, null);
+  assert.equal(lid.userData.parent, body);   // and goes where the box goes
 });
 
 test('a slide between two walls moves along the channel and rides on the rail', () => {
@@ -69,6 +69,21 @@ test('facing pockets: a magnet rides the part whose pocket holds it, and leaves 
   assert.equal(magUp.userData.parent, upper);
   assert.deepEqual(dir(magLow), [0, 1, 0]);
   assert.deepEqual(dir(magUp), [0, -1, 0]);
+});
+
+test('a screw whose shank fills its standoff leaves by the head end; a standoff between board and lid separates along the stack', () => {
+  // board, tube standoff r 0.8..2 on it, lid with a 2.4 mm clearance hole resting on the standoff, pan-head screw on the lid:
+  // shank r 1 (wider than the bore, as threads are modelled) down the standoff, head r 2.1. One ray from the screw's
+  // centre threaded the bore and called "down" free; the probe from its head says otherwise.
+  const tube = (r, h, z, bore = false) => { const g = new THREE.CylinderGeometry(r, r, h, 48, 1, true); if (bore) g.scale(-1, 1, 1); g.rotateX(Math.PI / 2); g.translate(0, 0, z); return new THREE.Mesh(g); };
+  const disc = (ri, ro, z, up) => { const g = new THREE.RingGeometry(ri, ro, 48); if (!up) g.rotateX(Math.PI); g.translate(0, 0, z); return new THREE.Mesh(g); };
+  const board = box(30, 30, 1, 0, 0, 0.5);
+  const standoff = merged([tube(2, 6, 4), tube(0.8, 6, 4, true), disc(0.8, 2, 7, true), disc(0.8, 2, 1, false)]);
+  const lid = merged([box(13.8, 30, 1.5, -8.1, 0, 7.75), box(13.8, 30, 1.5, 8.1, 0, 7.75), box(2.4, 13.8, 1.5, 0, -8.1, 7.75), box(2.4, 13.8, 1.5, 0, 8.1, 7.75)]);
+  const screw = merged([tube(1, 7.5, 4.75), disc(0, 1, 1, false), tube(2.1, 1, 9), disc(1, 2.1, 8.5, false), disc(0, 2.1, 9.5, true)]);
+  explodeOffsets([lid, board, standoff, screw], new THREE.Vector3(12, 0, 6));
+  assert.deepEqual(dir(screw), [0, 0, 1]);
+  assert.equal(Math.abs(dir(standoff)[2]), 1);   // along the stack, not sideways
 });
 
 /** One mesh from several, remembering each input as a B-rep face. */

@@ -404,7 +404,11 @@ function onCap(e) {
   const r = renderer.domElement.getBoundingClientRect();
   raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   const hit = raycaster.intersectObjects(model.children, true).find((h) => h.object.visible && h.object.parent.visible && section.plane.distanceToPoint(h.point) > -1e-6);
-  return !!hit && hit.object.material === capMaterial;
+  if (!hit) return false;
+  // A model face within two slider steps of the plane is the cut face as far as the eye can tell: the plane
+  // dragged onto a face left the face in front of the cap, and the cap could not be grabbed again.
+  const i = 'xyz'.indexOf(section.axis), tol = 2e-3 * (bbox.max.getComponent(i) - bbox.min.getComponent(i));
+  return hit.object.material === capMaterial || Math.abs(section.plane.distanceToPoint(hit.point)) < tol;
 }
 // World units the plane moves per pixel of pointer travel in x and y: one unit
 // along the axis, projected to screen at the grabbed cap point, then inverted.

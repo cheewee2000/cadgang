@@ -56,23 +56,52 @@ export function explodeOffsets(bodies, centre) {
     m.geometry.computeBoundingBox();
     const b = m.geometry.boundingBox;
     const half = b.getSize(new THREE.Vector3()).multiplyScalar(0.5);
-    return { c: b.getCenter(new THREE.Vector3()), half, r: half.length(), cyl: cylinders(m) };
+    // Surface sample: a triangle's midpoint and its outward normal. Probes only cast from faces that lead the
+    // travel; a face swept along its own plane (a bore wall sliding on its pin) is not in the way of anything.
+    // ponytail: sample by triangle stride — dense fillets get more probes than flat faces; a thin flange with
+    // two triangles may get none
+    const pos = m.geometry.getAttribute('position'), idx = m.geometry.index?.array, nTri = (idx ? idx.length : pos.count) / 3;
+    const step = Math.max(1, Math.floor(nTri / 64)), pts = [], tri = new THREE.Triangle();
+    for (let t = 0; t < nTri; t += step) {
+      const v = (k) => new THREE.Vector3().fromBufferAttribute(pos, idx ? idx[3 * t + k] : 3 * t + k);
+      tri.set(v(0), v(1), v(2));
+      const n = tri.getNormal(new THREE.Vector3()); if (!n.lengthSq()) continue;
+      pts.push({ p: tri.getMidpoint(new THREE.Vector3()), n });
+    }
+    return { c: b.getCenter(new THREE.Vector3()), half, r: half.length(), cyl: cylinders(m), pts };
   });
   // Rays test front faces only, whatever material the viewer draws the bodies with (double-sided
   // shading would make every wall hit from both sides): probe meshes over the same geometry.
   const probe = bodies.map((m) => new THREE.Mesh(m.geometry));
-  const hitFrom = (c, d, among) => {
-    ray.set(c, d.clone().normalize());
-    const h = ray.intersectObjects(among.map((b) => probe[bodies.indexOf(b)]), false)[0];
-    return h && { distance: h.distance, object: bodies[probe.indexOf(h.object)] };
+  const extOf = (half, v) => Math.abs(v.x) * half.x + Math.abs(v.y) * half.y + Math.abs(v.z) * half.z;   // half-extent along unit v
+  // Probe body i's travel along d: a ray from each of its sampled surface points, front faces only, the
+  // nearest hit as the gap to the first thing it would run into. One ray from the centre saw through
+  // every hole on the axis — a screw's threaded its own standoff and the shell's clearance hole and called
+  // "down" free where the head lands on the standoff. Origins start a hair behind the surface so a face
+  // resting on another registers as a touch, not a miss.
+  const hitFrom = (i, d, among) => {
+    d = d.clone().normalize();
+    const { c, r, pts } = info[i], eps = 1e-3 * r;
+    const meshes = among.map((b) => probe[bodies.indexOf(b)]);
+    let best = null;
+    for (const { p, n } of pts) {
+      if (n.dot(d) < 0.3) continue;   // not a leading face
+      // a hair behind the surface along the travel, and a hair inward: a point on a neighbour's edge must not
+      // graze its side face (a lid's rim ran along the box's side and read as "walled")
+      const o = p.clone().addScaledVector(d, -eps); if (o.distanceToSquared(c) > eps * eps) o.add(c.clone().sub(o).setLength(eps));
+      ray.set(o, d);
+      const h = ray.intersectObjects(meshes, false)[0];
+      if (h && (!best || h.distance < best.distance)) best = h;
+    }
+    return best && { gap: Math.max(0, best.distance - eps), object: bodies[probe.indexOf(best.object)] };
   };
   const plan = bodies.map((m, i) => {
     const { c, half, r } = info[i];
     const radial = c.clone().sub(centre);
     const bigger = bodies.filter((o, j) => j !== i && info[j].r >= r);
-    const hit = (d) => hitFrom(c, d, bigger);
-    const ext = (d) => Math.abs(d.x) * half.x + Math.abs(d.y) * half.y + Math.abs(d.z) * half.z;   // half-extent along d
-    const free = (d) => { const h = hit(d); return h ? h.distance : Infinity; };
+    const hit = (d) => hitFrom(i, d, bigger);
+    const ext = (d) => extOf(half, d);
+    const free = (d) => hit(d)?.gap ?? Infinity;
     const len = (d) => Math.max(Math.abs(radial.dot(d.clone().normalize())), 2 * ext(d));
     const rideOn = (o) => { const j = bodies.indexOf(o); return info[j].r > r || j < i ? o : null; };   // no cycles: bigger, ties by order
     const P = { m, i, radial, ext, len, free, hit, cands: [], dir: null, parent: null };
@@ -90,7 +119,7 @@ export function explodeOffsets(bodies, centre) {
         // which end is open: ask the body that owns the bore alone (a blind pocket's floor blocks one way;
         // whatever else sits in front of the opening is moving out of the way itself)
         const plus = a.axis.clone(), minus = a.axis.clone().negate();
-        const own = (d) => { const h = hitFrom(c, d, [bodies[j]]); return h ? h.distance : Infinity; };
+        const own = (d) => hitFrom(i, d, [bodies[j]])?.gap ?? Infinity;
         const fp = own(plus), fm = own(minus);
         const d = fp > fm ? plus : fm > fp ? minus : (radial.dot(plus) >= 0 ? plus : minus);
         P.cands.push(plus, minus);
@@ -100,13 +129,21 @@ export function explodeOffsets(bodies, centre) {
     P.cands.push(...DIRS);
     if (P.dir) return P;
     // ponytail: one ray per direction from the centre; sample the surface if thin parts slip through
-    const rays = DIRS.map((d) => { const h = hit(d); return { d, h, free: h ? h.distance : Infinity, touch: !!h && h.distance <= ext(d) + 0.1 * r }; });
+    const rays = DIRS.map((d) => { const h = hit(d); return { d, h, free: h ? h.gap : Infinity, touch: !!h && h.gap <= 0.1 * r }; });
     const touching = rays.filter((x) => x.touch);
-    const walled = [0, 1, 2].some((a) => touching.filter((x) => axisOf(x.d) === a).length === 2);
+    // walls on both sides of an axis, both of ONE body: a slot. Two different bodies either side is a stack
+    // (a standoff between the board and the lid), and a stack separates along its axis, not sideways.
+    const walled = [0, 1, 2].some((a) => { const w = touching.filter((x) => axisOf(x.d) === a); return w.length === 2 && w[0].h.object === w[1].h.object; });
     const open = [0, 1, 2].filter((a) => rays.filter((x) => axisOf(x.d) === a).every((x) => x.free > 2 * r));
     if (walled && open.length === 1) {
       const a = open[0];
       P.dir = new THREE.Vector3().setComponent(a, Math.sign(radial.getComponent(a)) || 1);
+      P.parent = rideOn(touching[0].h.object);
+      return P;
+    }
+    const exits = rays.filter((x) => x.free > 2 * r);
+    if (walled && exits.length === 1) {   // a blind channel, or a bore the cylinder fit did not pair: out its one open end
+      P.dir = exits[0].d;
       P.parent = rideOn(touching[0].h.object);
       return P;
     }
@@ -115,10 +152,11 @@ export function explodeOffsets(bodies, centre) {
       for (const x of touching) v.sub(x.d);
       if (v.lengthSq() === 0) { const a = axisOf(touching[0].d); v.setComponent(a, Math.sign(radial.getComponent(a)) || 1); }
       P.dir = v.normalize();
+      P.parent = rideOn(touching[0].h.object);   // a part rests on what it touches and moves with it: a screw head on a lid that slides away
       return P;
     }
     const block = radial.lengthSq() > 1e-12 && hit(radial);
-    if (block && block.distance <= 2 * r) {
+    if (block && block.gap <= 2 * r) {
       const best = rays.reduce((a, b) => (b.free > a.free ? b : a));
       if (best.free > 2 * r) { P.dir = best.d; P.parent = rideOn(block.object); P.radialLen = Math.max(radial.length(), 2 * r); return P; }
     }
@@ -138,11 +176,11 @@ export function explodeOffsets(bodies, centre) {
   const clearance = (P, abs) => {
     let worst = Infinity;
     for (const Q of plan) {
-      if (Q === P || Q.m === P.parent) continue;
-      const v = abs.clone().sub(Q.abs); if (v.lengthSq() < 1e-9) continue;
+      if (Q === P) continue;   // the parent too: a part leaving its pocket is judged on the relative path, which is its own offset
+      const v = abs.clone().sub(Q.abs); if (v.length() < 0.1 * abs.length()) continue;   // same way, a tenth of the drift: not a collision
       if (info[P.i].c.distanceTo(info[Q.i].c) > info[P.i].r + info[Q.i].r + 2 * v.length()) continue;
-      const h = hitFrom(info[P.i].c, v, [Q.m]); if (!h) continue;
-      worst = Math.min(worst, (h.distance - P.ext(v)) - 2 * v.length());   // negative: they meet before full explode
+      const h = hitFrom(P.i, v, [Q.m]); if (!h) continue;
+      worst = Math.min(worst, h.gap - 2 * v.length());   // negative: they meet before full explode
     }
     return worst;
   };
@@ -150,14 +188,19 @@ export function explodeOffsets(bodies, centre) {
     if (!P.dir) continue;
     const c0 = clearance(P, P.abs);
     if (c0 >= 0) continue;
-    let best = null;
-    for (const d of P.cands) {
-      const abs = d.clone().multiplyScalar(P.len(d)).add(parentAbs(P));
-      const score = clearance(P, abs) + 1e-3 * d.dot(P.radial);   // clearest; ties toward the radial
-      if (!best || score > best.score) best = { d, score };
+    let best = null, far = null;
+    for (const d of P.cands) for (const ride of P.parent ? [true, false] : [false]) {   // riding, or alone if the ride is what collides
+      const len = P.len(d), abs = d.clone().multiplyScalar(len); if (ride) abs.add(parentAbs(P));
+      const score = clearance(P, abs) + 1e-3 * d.dot(P.radial) + (ride ? 1e-6 : 0);   // clearest; ties toward the radial, then the ride
+      const c = { d, score, ride, len, gap: score + 2 * len };   // gap: how far it could go before hitting
+      if (!best || score > best.score) best = c;
+      if (!far || c.gap > far.gap) far = c;
     }
-    // strictly better only: parts modelled overlapping at rest get the least-bad way out, never a worse one
-    if (best && best.score > c0) { P.dir = best.d; P.offset = best.d.clone().multiplyScalar(P.len(best.d)); P.abs = P.offset.clone().add(parentAbs(P)); }
+    const take = (c, len) => { P.dir = c.d; if (!c.ride) P.parent = null; P.offset = c.d.clone().multiplyScalar(len); P.abs = P.offset.clone().add(parentAbs(P)); };
+    if (best && best.score >= 0) take(best, best.len);
+    // nothing is clear (a knob in its slot, a part boxed in): go the roomiest way and stop where it would hit,
+    // rather than the least-bad full travel through a wall
+    else if (far && far.gap > 0) take(far, Math.min(far.len, far.gap / 2));
   }
   for (const P of plan) { P.m.userData.offset = P.offset; P.m.userData.parent = P.parent; }
 }
