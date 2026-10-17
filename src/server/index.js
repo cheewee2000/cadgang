@@ -46,7 +46,8 @@ app.use('/api', (req, res, next) => {
   next();
 });
 /** This machine's first LAN IPv4: an iPad on the same Wi-Fi reaches the viewer at http://<lan>:PORT/view?follow. */
-const lan = () => Object.values(os.networkInterfaces()).flat().find((i) => i.family === 'IPv4' && !i.internal)?.address || null;
+const PRIVATE = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;   // a VPS's public address is no LAN
+const lan = () => Object.values(os.networkInterfaces()).flat().find((i) => i.family === 'IPv4' && !i.internal && PRIVATE.test(i.address))?.address || null;
 app.get('/api/health', (req, res) => res.json({ ok: true, version: VERSION, clients: wss.clients.size, lan: lan(), port: PORT }));
 app.use('/api/view', viewRouter({ dataDir: DATA, broadcast }));
 // Everything that goes wrong on the API answers in its own shape, never as HTML.
