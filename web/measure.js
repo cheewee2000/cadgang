@@ -21,6 +21,59 @@
  * ponytail: every hover scans all snaps and segments in screen space — fine to
  * ~50k; a grid or BVH is the upgrade for huge assemblies.
  */
+import * as THREE from 'three';
+
+/** A cylinder through a face's triangles: axis, centre, radius, the frame (u, v), whether it closes
+ *  (a full cylinder reads ⌀, a fillet R) and a point on it. Null when the triangles are not one. */
+export function cylinderFit(tris, centroid, scaleHint = 0) {
+  if (tris.length < 2) return null;
+  // cylinder axis: the direction every normal is perpendicular to — the largest cross product, refined by averaging
+  const normals = tris.map((t) => t.getNormal(new THREE.Vector3()));
+  let axis = new THREE.Vector3(), best = 0;
+  const step = Math.max(1, Math.floor(normals.length / 40));
+  for (let i = 0; i < normals.length; i += step) for (let j = i + 1; j < normals.length; j += step) {
+    const c = normals[i].clone().cross(normals[j]); if (c.lengthSq() > best) { best = c.lengthSq(); axis = c; }
+  }
+  if (best < 1e-6) return null;
+  axis.normalize();
+  const acc = new THREE.Vector3();
+  for (let i = 1; i < normals.length; i++) { const c = normals[0].clone().cross(normals[i]); if (c.dot(axis) < 0) c.negate(); acc.add(c); }
+  if (acc.lengthSq() > 0) axis = acc.normalize();
+  const verts = []; for (const t of tris) verts.push(t.a, t.b, t.c);
+  const u = Math.abs(axis.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  u.addScaledVector(axis, -u.dot(axis)).normalize(); const v = axis.clone().cross(u);
+  const cyl = fitCircle2D(verts.map((p) => [p.dot(u), p.dot(v)]));
+  if (!cyl || cyl.rms >= cyl.r * 0.01 + scaleHint * 1e-4) return null;
+  const mid = centroid.dot(axis);
+  const c = u.clone().multiplyScalar(cyl.cx).addScaledVector(v, cyl.cy).addScaledVector(axis, mid);
+  // angular span of the face around the axis
+  const angs = verts.map((p) => Math.atan2(p.dot(v) - cyl.cy, p.dot(u) - cyl.cx)).sort((a, b) => a - b);
+  let gap = angs[0] + Math.PI * 2 - angs[angs.length - 1]; for (let i = 1; i < angs.length; i++) gap = Math.max(gap, angs[i] - angs[i - 1]);
+  const span = Math.PI * 2 - gap;
+  const toSurf = centroid.clone().sub(c); toSurf.addScaledVector(axis, -toSurf.dot(axis)).normalize();
+  return { axis, c, r: cyl.r, u, v, span, closed: span > THREE.MathUtils.degToRad(300), p: c.clone().addScaledVector(toSurf, cyl.r) };
+}
+
+/** Algebraic (Kåsa) circle fit: x²+y²+Dx+Ey+F=0. */
+function fitCircle2D(P) {
+  const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b = [0, 0, 0];
+  for (const [x, y] of P) { const row = [x, y, 1], rhs = -(x * x + y * y); for (let i = 0; i < 3; i++) { b[i] += row[i] * rhs; for (let j = 0; j < 3; j++) A[i][j] += row[i] * row[j]; } }
+  const s = solve(A, b); if (!s) return null;
+  const cx = -s[0] / 2, cy = -s[1] / 2, r2 = cx * cx + cy * cy - s[2]; if (r2 <= 0) return null;
+  const r = Math.sqrt(r2); let e = 0; for (const [x, y] of P) e += (Math.hypot(x - cx, y - cy) - r) ** 2;
+  return { cx, cy, r, rms: Math.sqrt(e / P.length) };
+}
+function solve(A, b) {   // Gaussian elimination with partial pivoting, n ≤ 4
+  const n = b.length, M = A.map((row, i) => [...row, b[i]]);
+  for (let c = 0; c < n; c++) {
+    let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    if (Math.abs(M[p][c]) < 1e-12) return null;
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = 0; r < n; r++) if (r !== c) { const f = M[r][c] / M[c][c]; for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k]; }
+  }
+  return M.map((row, i) => row[n] / row[i]);
+}
+
 export function createMeasure({ THREE, scene, renderer, getCamera, model, layer, getOrbit, say, onChange }) {
   const RED = 0xd11d1d;
   const SNAP_PX = 12, CURVE_PX = 8;
@@ -247,42 +300,12 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
   /** What kind of surface a curved face is: a cylinder (axis, radius, span) or a sphere. */
   function surfaceOf(F) {
     if (F.n || F.tris.length < 2) return null;
-    // cylinder axis: the direction every normal is perpendicular to — the largest cross product, refined by averaging
-    const normals = F.tris.map((t) => t.getNormal(new THREE.Vector3()));
-    let axis = new THREE.Vector3(), best = 0;
-    for (let i = 0; i < normals.length; i += Math.max(1, Math.floor(normals.length / 40))) for (let j = i + 1; j < normals.length; j += Math.max(1, Math.floor(normals.length / 40))) {
-      const c = normals[i].clone().cross(normals[j]); if (c.lengthSq() > best) { best = c.lengthSq(); axis = c; }
-    }
-    if (best < 1e-6) return null;
-    axis.normalize();
-    const acc = new THREE.Vector3();
-    for (let i = 1; i < normals.length; i++) { const c = normals[0].clone().cross(normals[i]); if (c.dot(axis) < 0) c.negate(); acc.add(c); }
-    if (acc.lengthSq() > 0) axis = acc.normalize();
+    const cyl = cylinderFit(F.tris, F.centroid, scaleHint);
+    if (cyl) return { kind: 'cyl', ...cyl };
     const verts = []; for (const t of F.tris) verts.push(t.a, t.b, t.c);
-    const u = Math.abs(axis.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
-    u.addScaledVector(axis, -u.dot(axis)).normalize(); const v = axis.clone().cross(u);
-    const cyl = fitCircle2D(verts.map((p) => [p.dot(u), p.dot(v)]));
-    if (cyl && cyl.rms < cyl.r * 0.01 + scaleHint * 1e-4) {
-      const mid = F.centroid.dot(axis);
-      const c = u.clone().multiplyScalar(cyl.cx).addScaledVector(v, cyl.cy).addScaledVector(axis, mid);
-      // angular span of the face around the axis: a full cylinder reads ⌀, a fillet R
-      let span = 0; const angs = verts.map((p) => Math.atan2(p.dot(v) - cyl.cy, p.dot(u) - cyl.cx)).sort((a, b) => a - b);
-      let gap = angs[0] + Math.PI * 2 - angs[angs.length - 1]; for (let i = 1; i < angs.length; i++) gap = Math.max(gap, angs[i] - angs[i - 1]); span = Math.PI * 2 - gap;
-      const toSurf = F.centroid.clone().sub(c); toSurf.addScaledVector(axis, -toSurf.dot(axis)).normalize();
-      return { kind: 'cyl', c, r: cyl.r, u, v, closed: span > THREE.MathUtils.degToRad(300), p: c.clone().addScaledVector(toSurf, cyl.r) };
-    }
     const sph = fitSphere(verts);
     if (sph && sph.rms < sph.r * 0.01 + scaleHint * 1e-4) return { kind: 'sphere', c: sph.c, r: sph.r, p: sph.c.clone().add(F.centroid.clone().sub(sph.c).normalize().multiplyScalar(sph.r)) };
     return null;
-  }
-  /** Algebraic (Kåsa) circle fit: x²+y²+Dx+Ey+F=0. */
-  function fitCircle2D(P) {
-    const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b = [0, 0, 0];
-    for (const [x, y] of P) { const row = [x, y, 1], rhs = -(x * x + y * y); for (let i = 0; i < 3; i++) { b[i] += row[i] * rhs; for (let j = 0; j < 3; j++) A[i][j] += row[i] * row[j]; } }
-    const s = solve(A, b); if (!s) return null;
-    const cx = -s[0] / 2, cy = -s[1] / 2, r2 = cx * cx + cy * cy - s[2]; if (r2 <= 0) return null;
-    const r = Math.sqrt(r2); let e = 0; for (const [x, y] of P) e += (Math.hypot(x - cx, y - cy) - r) ** 2;
-    return { cx, cy, r, rms: Math.sqrt(e / P.length) };
   }
   function fitSphere(P) {
     const A = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], b = [0, 0, 0, 0];
@@ -291,16 +314,6 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     const c = new THREE.Vector3(-s[0] / 2, -s[1] / 2, -s[2] / 2), r2 = c.lengthSq() - s[3]; if (r2 <= 0) return null;
     const r = Math.sqrt(r2); let e = 0; for (const p of P) e += (p.distanceTo(c) - r) ** 2;
     return { c, r, rms: Math.sqrt(e / P.length) };
-  }
-  function solve(A, b) {   // Gaussian elimination with partial pivoting, n ≤ 4
-    const n = b.length, M = A.map((row, i) => [...row, b[i]]);
-    for (let c = 0; c < n; c++) {
-      let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
-      if (Math.abs(M[p][c]) < 1e-12) return null;
-      [M[c], M[p]] = [M[p], M[c]];
-      for (let r = 0; r < n; r++) if (r !== c) { const f = M[r][c] / M[c][c]; for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k]; }
-    }
-    return M.map((row, i) => row[n] / row[i]);
   }
   /** The two ends of the dimension between A and B (points or faces); quick: skip the slow search. */
   function between(A, B, bIsSnap, free, quick = false) {

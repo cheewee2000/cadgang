@@ -20,7 +20,7 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { attachOrbitInput } from './orbitinput.js';
 import { createMarkup } from './markup.js';
 import { parseDxf } from './dxf.js';
-import { explodeOffsets } from './explode.js';
+import { explodeOffsets, radialOffsets } from './explode.js';
 import { createMeasure } from './measure.js';
 import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
 
@@ -178,7 +178,12 @@ function listBodies() {
   const panel = $('#bodies');
   panel.replaceChildren();
   panel.hidden = model.children.length < 2;
-  explodeOffsets(model.children, bbox.getCenter(new THREE.Vector3()));
+  // Explode vectors: radial at once; the solver (cylinders, contacts, collisions) runs now for small
+  // files and behind the SOLVE button for big ones, where its rays and fits take seconds.
+  radialOffsets(model.children, bbox.getCenter(new THREE.Vector3()));
+  const tris = model.children.reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.getAttribute('position').count) / 3, 0);
+  $('#solveBtn').hidden = model.children.length < 2;
+  if (model.children.length > 1 && tris <= 300000) solveExplode();
   for (const m of model.children) {
     const row = document.createElement('label');
     const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = m.visible;
@@ -195,6 +200,15 @@ function listBodies() {
   }
   paintRows();
 }
+/** Solve the explode vectors from the bodies at rest, then put the explode back. */
+function solveExplode() {
+  const t0 = performance.now();
+  for (const m of model.children) { m.position.set(0, 0, 0); m.updateMatrixWorld(true); }
+  explodeOffsets(model.children, bbox.getCenter(new THREE.Vector3()));
+  applyExplode();
+  say(`explode vectors solved in ${Math.round(performance.now() - t0)} ms`);
+}
+$('#solveBtn').addEventListener('click', () => { say('solving explode vectors…'); setTimeout(solveExplode, 30); });
 /** The tick of each body row takes its colour when COLOR is on. */
 function paintRows() {
   [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.style.accentColor = ui.color ? `#${partColor(i).getHexString()}` : ''; });
