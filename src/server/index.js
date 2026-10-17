@@ -9,6 +9,7 @@
 
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 import express from 'express';
@@ -44,7 +45,9 @@ app.use('/api', (req, res, next) => {
   res.set('Expires', '0');
   next();
 });
-app.get('/api/health', (req, res) => res.json({ ok: true, version: VERSION, clients: wss.clients.size }));
+/** This machine's first LAN IPv4: an iPad on the same Wi-Fi reaches the viewer at http://<lan>:PORT/view?follow. */
+const lan = () => Object.values(os.networkInterfaces()).flat().find((i) => i.family === 'IPv4' && !i.internal)?.address || null;
+app.get('/api/health', (req, res) => res.json({ ok: true, version: VERSION, clients: wss.clients.size, lan: lan(), port: PORT }));
 app.use('/api/view', viewRouter({ dataDir: DATA, broadcast }));
 // Everything that goes wrong on the API answers in its own shape, never as HTML.
 app.use('/api', (err, req, res, next) => {

@@ -767,7 +767,13 @@ new ResizeObserver(resize).observe(viewport);
   requestAnimationFrame(loop);
 })();
 
-fetch('/api/health').then((r) => r.json()).then((h) => { $('#version').textContent = 'v' + h.version; }).catch(() => {});
+fetch('/api/health').then((r) => r.json()).then((h) => {
+  $('#version').textContent = 'v' + h.version;
+  if (!h.lan || follow) return;   // the VPS has no LAN; a follower is already the iPad
+  const link = `http://${h.lan}:${h.port}/view?follow`;
+  $('#ipadBtn').hidden = false;
+  $('#ipadBtn').addEventListener('click', () => navigator.clipboard.writeText(link).then(() => say(`copied ${link}`), () => say(link)));
+}).catch(() => {});
 // For headless drives: the scene objects behind the page.
 window.__view = { model, section, orbit, ui, measure, THREE, get camera() { return camera; },
   project: (x, y, z) => { const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3(x, y, z).project(camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; } };
