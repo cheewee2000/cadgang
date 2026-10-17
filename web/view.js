@@ -103,24 +103,32 @@ function clearModel() {
 }
 
 /** The triangles of one body as their own geometry (vertices compacted so its bounding box is its own). */
-function subGeometry(pos, idx, first, count) {
-  const map = new Map(); const outIdx = new Uint32Array(count * 3); const outPos = [];
+function subGeometry(pos, idx, first, count, nrm = null) {
+  const map = new Map(); const outIdx = new Uint32Array(count * 3); const outPos = [], outNrm = [];
   for (let i = 0; i < count * 3; i++) {
     const v = idx[first * 3 + i];
     let j = map.get(v);
-    if (j === undefined) { j = map.size; map.set(v, j); outPos.push(pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]); }
+    if (j === undefined) {
+      j = map.size; map.set(v, j); outPos.push(pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]);
+      if (nrm) outNrm.push(nrm[3 * v], nrm[3 * v + 1], nrm[3 * v + 2]);
+    }
     outIdx[i] = j;
   }
-  return { pos: Float32Array.from(outPos), idx: outIdx };
+  return { pos: Float32Array.from(outPos), idx: outIdx, nrm: nrm ? Float32Array.from(outNrm) : null };
 }
 
-/** Face-border edges from a tessellation that knows its B-rep faces. */
+/**
+ * Face-border edges from a tessellation that knows its B-rep faces: an edge two
+ * faces share, or an edge only one triangle uses (vertices are welded per
+ * surface normal, so a sharp border is an open edge on both sides).
+ */
 function faceBorderEdges(pos, idx, faces) {
   const faceOf = new Uint32Array(idx.length / 3);
   faces.forEach((f, fi) => faceOf.fill(fi, f.first, f.first + f.count));
-  const seen = new Map(); // edge key -> face id of the first triangle that used it
+  const seen = new Map(); // edge key -> face id of the first triangle that used it, -1 once a second triangle has
   const out = [];
   const n = pos.length / 3;
+  const push = (a, b) => out.push(pos[3 * a], pos[3 * a + 1], pos[3 * a + 2], pos[3 * b], pos[3 * b + 1], pos[3 * b + 2]);
   for (let t = 0; t < idx.length; t += 3) {
     const f = faceOf[t / 3];
     for (let e = 0; e < 3; e++) {
@@ -128,9 +136,10 @@ function faceBorderEdges(pos, idx, faces) {
       const k = a < b ? a * n + b : b * n + a;
       const prev = seen.get(k);
       if (prev === undefined) seen.set(k, f);
-      else if (prev !== f) { out.push(pos[3 * a], pos[3 * a + 1], pos[3 * a + 2], pos[3 * b], pos[3 * b + 1], pos[3 * b + 2]); seen.set(k, f); }
+      else { if (prev >= 0 && prev !== f) push(a, b); seen.set(k, -1); }
     }
   }
+  for (const [k, f] of seen) if (f >= 0) push(Math.floor(k / n), k % n);
   return new Float32Array(out);
 }
 
@@ -468,9 +477,10 @@ async function parseMesh(ext, buffer, name) {
 }
 
 function parseCad(buffer) {
-  const [nPos, nIdx, nFaces, nBodies, nNameBytes] = new Uint32Array(buffer, 0, 5);
-  let off = 20;
+  const [nPos, nIdx, nFaces, nBodies, nNameBytes, nNrm] = new Uint32Array(buffer, 0, 6);
+  let off = 24;
   const pos = new Float32Array(buffer, off, nPos); off += nPos * 4;
+  const nrm = nNrm ? new Float32Array(buffer, off, nNrm) : null; off += nNrm * 4;
   const idx = new Uint32Array(buffer, off, nIdx); off += nIdx * 4;
   const fr = new Uint32Array(buffer, off, nFaces * 2); off += nFaces * 8;
   const br = new Uint32Array(buffer, off, nBodies * 2); off += nBodies * 8;
@@ -479,10 +489,11 @@ function parseCad(buffer) {
   const parts = [];
   for (let b = 0; b < nBodies; b++) {
     const first = br[2 * b], count = br[2 * b + 1];
-    const sub = subGeometry(pos, idx, first, count);
+    const sub = subGeometry(pos, idx, first, count, nrm);
     const own = faces.filter((f) => f.first >= first && f.first < first + count).map((f) => ({ first: f.first - first, count: f.count }));
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(sub.pos, 3));
+    if (sub.nrm) geo.setAttribute('normal', new THREE.BufferAttribute(sub.nrm, 3));
     geo.setIndex(new THREE.BufferAttribute(sub.idx, 1));
     parts.push({ geo, edgeLines: faceBorderEdges(sub.pos, sub.idx, own), faces: own, name: names[b] });
   }

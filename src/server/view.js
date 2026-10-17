@@ -60,19 +60,21 @@ export function fileWatcher(broadcast) {
 
 /**
  * Pack a tessellation as
- *   [u32 nPos, nIdx, nFaces, nBodies, nNameBytes][f32 pos][u32 idx][u32 face first,count…][u32 body first,count…][utf8 JSON names]
+ *   [u32 nPos, nIdx, nFaces, nBodies, nNameBytes, nNrm][f32 pos][f32 nrm][u32 idx][u32 face first,count…][u32 body first,count…][utf8 JSON names]
+ * nNrm is 0 or nPos: the importer's exact surface normals, when it had them.
  * Bodies are triangle ranges, one per imported solid, so the viewer can show, hide and explode them one by one.
  */
 export function pack(m) {
   const pos = Float32Array.from(m.positions), idx = Uint32Array.from(m.indices);
+  const nrm = Float32Array.from(m.normals?.length === m.positions.length ? m.normals : []);
   const faces = new Uint32Array(m.faces.length * 2);
   m.faces.forEach((f, i) => { faces[2 * i] = f.first; faces[2 * i + 1] = f.count; });
   const bodyList = m.bodies?.length ? m.bodies : [{ first: 0, count: idx.length / 3, name: m.name || 'body' }];
   const bodies = new Uint32Array(bodyList.length * 2);
   bodyList.forEach((b, i) => { bodies[2 * i] = b.first; bodies[2 * i + 1] = b.count; });
   const names = Buffer.from(JSON.stringify(bodyList.map((b) => b.name)), 'utf8');
-  const head = Uint32Array.of(pos.length, idx.length, m.faces.length, bodyList.length, names.length);
-  return Buffer.concat([...[head, pos, idx, faces, bodies].map((a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength)), names]);
+  const head = Uint32Array.of(pos.length, idx.length, m.faces.length, bodyList.length, names.length, nrm.length);
+  return Buffer.concat([...[head, pos, nrm, idx, faces, bodies].map((a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength)), names]);
 }
 
 /**

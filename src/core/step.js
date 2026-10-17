@@ -52,7 +52,7 @@ function readerFor(occt, name = '') {
  * buffer: Buffer|Uint8Array of the CAD file.
  * Options: name (filename, picks the reader by extension), linearDeflection
  * (bounding-box ratio, smaller = finer), angularDeflection (radians).
- * Returns { name, positions, indices, faces:[{first,count}], bbox,
+ * Returns { name, positions, normals, indices, faces:[{first,count}], bbox,
  *           vertexCount, triangleCount, faceCount } with plain JSON arrays.
  */
 export async function importCadFile(buffer, { name = 'import.step', linearDeflection = 0.001, angularDeflection = 0.5 } = {}) {
@@ -79,12 +79,15 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
     iTotal += m.index.array.length;
   }
   const positions = new Float32Array(vTotal * 3);
+  // OCCT's exact surface normals; null if any mesh lacks them (the viewer then averages its own).
+  let normals = result.meshes.every((m) => m.attributes.normal?.array?.length === m.attributes.position.array.length) ? new Float32Array(vTotal * 3) : null;
   const indices = new Uint32Array(iTotal);
   const faces = [];
   const bodies = []; // one per imported solid: {first, count, name} in triangles
   let vOff = 0, iOff = 0;
   for (const m of result.meshes) {
     positions.set(m.attributes.position.array, vOff * 3);
+    normals?.set(m.attributes.normal.array, vOff * 3);
     const idx = m.index.array;
     for (let i = 0; i < idx.length; i++) indices[iOff + i] = idx[i] + vOff;
     const triOff = iOff / 3, triCount = idx.length / 3;
@@ -108,11 +111,12 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
   // preserved, so the face ranges stay valid).
   const bbox = positionsBBox(positions);
   const diag = bbox ? Math.hypot(bbox.max[0] - bbox.min[0], bbox.max[1] - bbox.min[1], bbox.max[2] - bbox.min[2]) : 1;
-  const welded = weldVertices(positions, indices, Math.max(diag * 1e-6, 1e-5));
+  const welded = weldVertices(positions, indices, Math.max(diag * 1e-6, 1e-5), normals);
 
   return {
     name,
     positions: Array.from(welded.positions),
+    normals: welded.normals ? Array.from(welded.normals) : null,
     indices: Array.from(welded.indices),
     faces,
     bodies,
