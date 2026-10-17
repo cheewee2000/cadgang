@@ -161,6 +161,7 @@ function lineArt(renderer, scene, model, cam, pw, ph, k) {
  * spec: { sheet, landscape, units, decimals, front, up, views[], scale, title, dwg|part, rev, material, finish, tolerances,
  *         notes[], parts[], dept, technicalRef, createdBy|drawnBy, approvedBy, doctype, status, sheetTitle, sheetNo, sheetCount, date }
  * ctx:  { renderer, scene, model, bbox, measure, hide: [objects to hide while rendering], restore() }
+ * A dim with a `text` field shows that text instead of its value (a tabulated length 'L' whose values sit in the notes).
  */
 export function renderDrawing(spec, ctx) {
   const { renderer, scene, model, bbox, measure } = ctx;
@@ -240,8 +241,8 @@ export function renderDrawing(spec, ctx) {
   // dimensions: each one goes in the first orthographic view that shows it fully (front, right, top; never the iso)
   const ortho = ['front', 'right', 'top'].filter((n) => wanted.includes(n)).map((n) => views[n]);
   const V3 = (a) => new THREE.Vector3(...a);
-  const linear = (v, A, B, value) => {
-    const horiz = Math.abs(B[0] - A[0]) >= Math.abs(B[1] - A[1]), label = fmt(value, decLin), lw = tw(label, 3.5) + 2;
+  const linear = (v, A, B, value, over) => {   // over: a dim's `text` replaces the value (tabulated 'L', 'A', …)
+    const horiz = Math.abs(B[0] - A[0]) >= Math.abs(B[1] - A[1]), label = over ?? fmt(value, decLin), lw = tw(label, 3.5) + 2;
     if (horiz) {   // dimension line below the part, stacked DIM apart
       const y = v.box.y1 + DIM * (1 + v.stack.below++), lo = Math.min(A[0], B[0]), hi = Math.max(A[0], B[0]);
       svg.push(line(A, [A[0], y + 2], 0.18), line(B, [B[0], y + 2], 0.18), line([lo, y], [hi, y], 0.18), arrow([lo, y], [hi, y]), arrow([hi, y], [lo, y]));
@@ -262,11 +263,11 @@ export function renderDrawing(spec, ctx) {
       for (const v of ortho) {
         const A = v.paper(dm.a), B = v.paper(dm.b);
         if (Math.hypot(B[0] - A[0], B[1] - A[1]) < Math.max(1, 0.9 * full)) continue;
-        linear(v, A, B, (Math.abs(B[0] - A[0]) >= Math.abs(B[1] - A[1]) ? Math.abs(B[0] - A[0]) : Math.abs(B[1] - A[1])) / scale);
+        linear(v, A, B, (Math.abs(B[0] - A[0]) >= Math.abs(B[1] - A[1]) ? Math.abs(B[0] - A[0]) : Math.abs(B[1] - A[1])) / scale, dm.text);
         break;
       }
     } else if (dm.kind === 'dia') {
-      const axis = V3(dm.u).cross(V3(dm.v)).normalize(), label = `⌀${fmt(dm.r * 2, decDia)}`;
+      const axis = V3(dm.u).cross(V3(dm.v)).normalize(), label = dm.text ?? `⌀${fmt(dm.r * 2, decDia)}`;
       const v = ortho.find((o) => Math.abs(axis.dot(o.dir)) > 0.9) ?? ortho[0];
       if (!v) continue;
       const C = v.paper(dm.c), rp = dm.r * scale;
@@ -278,7 +279,7 @@ export function renderDrawing(spec, ctx) {
         leader(v, tips.sort((p, q) => Math.hypot(q[0] - C[0], q[1] - C[1]) - Math.hypot(p[0] - C[0], p[1] - C[1]))[0], label);
       }
     } else if (dm.kind === 'rad') {
-      const label = `${dm.sph ? 'SR' : 'R'}${fmt(dm.r, decDia)}`;
+      const label = dm.text ?? `${dm.sph ? 'SR' : 'R'}${fmt(dm.r, decDia)}`;
       const v = ortho.find((o) => { const C = o.paper(dm.c), P = o.paper(dm.p); return Math.hypot(P[0] - C[0], P[1] - C[1]) >= 0.9 * dm.r * scale; }) ?? ortho[0];
       if (v) leader(v, v.paper(dm.p), label);
     }
