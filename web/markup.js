@@ -159,7 +159,9 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       if (finished) return;
       finished = true;
       if (commit && el.value.trim()) {
-        if (item) item.text = el.value.trim();
+        // By id: the server's change echo reloads `items` while the user types, so `item` may be stale.
+        const live = item && (items.find((i) => i.id === item.id) || item);
+        if (live) live.text = el.value.trim();
         else items.push({ id: uid(), kind: 'note', points: [p], text: el.value.trim(), at: new Date().toISOString() });
         changed();
       }
