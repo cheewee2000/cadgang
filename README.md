@@ -26,7 +26,7 @@ No build step; the page is plain ES modules. `CADGANG_PORT` picks the port, `CAD
 
 ## Tools
 
-- **Bodies** panel: one row per STEP body or DXF layer. Tick to hide, click a name to solo, shift-click for all. **Explode** slides bodies apart; a part sitting in a pocket (a magnet, a pin) leaves along the pocket's open axis and rides with the body it sits in. **Color** gives each a hue.
+- **Bodies** panel: one row per STEP body or DXF layer. Tick to hide, click a name to solo, shift-click for all. **Explode** slides bodies apart. Parts mated on a plane separate perpendicular to it, a part between walls slides along the channel, a part in a pocket (a magnet, a pin) leaves by the open axis and rides with the body it sits in, and anything loose goes out from the centre. **Color** gives each a hue.
 - **Section**: Off/X/Y/Z, drag the cut face or the slider, **Invert** the kept side. Cuts are capped, so hollow walls read as rings.
 - **Measure** snaps to endpoints, midpoints, centres and quadrants, defaults to axis-aligned distances (shift: free), reads a circle's ⌀ or an edge's length in one click, reads a cylinder's ⌀, a fillet's R or a sphere's SR from one click on the face, and measures face to face (parallel planes give the gap, anything else the closest approach). Dimensions stay on the page until clicked away or undone.
 - **Markup**: pen, arrow, note, erase. Anchored on the model, saved per file, and what `cadgang_screen` shows Claude.
@@ -84,7 +84,7 @@ web/dxf.js            DXF entities → line segments per layer
 web/markup.js         pen, arrow, note on the model; the screen snapshot
 web/orbitinput.js     trackpad: scroll rotates, pinch zooms, spin turns paper
 web/cwandt.css        CW&T design system; style.css is the page on top of it
-web/explode.js        explode offsets: radial, or along a pocket's open axis
+web/explode.js        explode offsets: perpendicular to a mating plane, along a channel, out of a pocket, else radial
 mac/main.swift        WKWebView shell, file associations, Sparkle; build.sh, release.sh, cadgang-open, the icon
 test/                 node --test: local-path rules, STEP bodies, DXF entities, the icon
 ```
