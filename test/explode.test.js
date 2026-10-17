@@ -46,6 +46,16 @@ test('a pin in a bore slides along the shared axis, out of the freer end, riding
   assert.equal(pin.userData.parent, housing);
 });
 
+test('a thread in its tap drill (pin wider than the through hole) still pairs with the bore and leaves by the open side, not toward a far wall', () => {
+  const tube = (r, h) => new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 48, 1, true));
+  const ring = (ri, ro, y) => { const g = new THREE.RingGeometry(ri, ro, 48); g.rotateX(-Math.PI / 2); g.translate(0, y, 0); return new THREE.Mesh(g); };
+  const housing = merged([tube(3, 20), tube(10, 20), ring(3, 10, 10), ring(3, 10, -10), box(40, 2, 40, 0, 30, 0)]);   // through hole r 3, a wall beyond the +Y end
+  const pin = merged([tube(3.3, 24), ring(0.5, 3.3, 12), ring(0.5, 3.3, -12)]);   // r 3.3: its teeth sit in the wall and meet the hole's lip (caps ringed: a fan from the centre is half degenerate triangles, which the stride sampler lands on)
+  pin.geometry.translate(0, 2, 0);
+  explodeOffsets([housing, pin], new THREE.Vector3(6, -40, 6));
+  assert.deepEqual(dir(pin), [0, -1, 0]);
+  assert.equal(pin.userData.parent, housing);
+});
 test('a radial path through another body is replaced by a clear one', () => {
   // a U-shaped frame whose far wall crosses the cube's radial
   const frame = merged([box(4, 80, 40, 0, 0, 0), box(4, 80, 40, 22, 0, 0)]);

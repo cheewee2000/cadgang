@@ -79,7 +79,8 @@ export function explodeOffsets(bodies, centre) {
   // every hole on the axis — a screw's threaded its own standoff and the shell's clearance hole and called
   // "down" free where the head lands on the standoff. Origins start a hair behind the surface so a face
   // resting on another registers as a touch, not a miss.
-  const hitFrom = (i, d, among) => {
+  // skip(h): hits to look past (the lip of a hole whose pin is bigger than it)
+  const hitFrom = (i, d, among, skip) => {
     d = d.clone().normalize();
     const { c, r, pts } = info[i], eps = 1e-3 * r;
     const meshes = among.map((b) => probe[bodies.indexOf(b)]);
@@ -90,7 +91,7 @@ export function explodeOffsets(bodies, centre) {
       // graze its side face (a lid's rim ran along the box's side and read as "walled")
       const o = p.clone().addScaledVector(d, -eps); if (o.distanceToSquared(c) > eps * eps) o.add(c.clone().sub(o).setLength(eps));
       ray.set(o, d);
-      const h = ray.intersectObjects(meshes, false)[0];
+      const h = ray.intersectObjects(meshes, false).find((h) => !skip || !skip(h));
       if (h && (!best || h.distance < best.distance)) best = h;
     }
     return best && { gap: Math.max(0, best.distance - eps), object: bodies[probe.indexOf(best.object)] };
@@ -109,7 +110,8 @@ export function explodeOffsets(bodies, centre) {
     for (const a of info[i].cyl) for (const j of bodies.keys()) {
       if (j === i || info[j].r < r) continue;
       for (const b of info[j].cyl) {
-        if (Math.abs(a.axis.dot(b.axis)) < 0.999 || b.r < 0.98 * a.r || b.r > 1.25 * a.r) continue;
+        // the hole may be smaller than the pin: a thread's major in its tap drill (M8 in 7.65), a press fit
+        if (Math.abs(a.axis.dot(b.axis)) < 0.999 || b.r < 0.75 * a.r || b.r > 1.25 * a.r) continue;
         const off = a.c.clone().sub(b.c); off.addScaledVector(b.axis, -off.dot(b.axis));
         if (off.length() > 0.02 * a.r + 1e-6) continue;   // not on the same line
         // on the line, but is it in THIS bore? the two must overlap along the axis (the facing pocket of
@@ -119,11 +121,13 @@ export function explodeOffsets(bodies, centre) {
         // which end is open: ask the body that owns the bore alone (a blind pocket's floor blocks one way;
         // whatever else sits in front of the opening is moving out of the way itself)
         const plus = a.axis.clone(), minus = a.axis.clone().negate();
-        const own = (d) => hitFrom(i, d, [bodies[j]])?.gap ?? Infinity;
+        // a pin bigger than its hole (a thread) is already past the lip; its teeth hitting the lip's ring is not a wall
+        const lip = (h) => { const q = h.point.clone().sub(b.c); q.addScaledVector(b.axis, -q.dot(b.axis)); const rr = q.length(); return rr > 0.98 * b.r && rr < 1.05 * a.r; };
+        const own = (d) => hitFrom(i, d, [bodies[j]], lip)?.gap ?? Infinity;
         const fp = own(plus), fm = own(minus);
         const d = fp > fm ? plus : fm > fp ? minus : (radial.dot(plus) >= 0 ? plus : minus);
         P.cands.push(plus, minus);
-        if (!P.dir) { P.dir = d; P.parent = rideOn(bodies[j]); }
+        if (!P.dir) { P.dir = d; P.parent = rideOn(bodies[j]); P.housing = bodies[j]; P.lip = lip; }
       }
     }
     P.cands.push(...DIRS);
@@ -172,14 +176,16 @@ export function explodeOffsets(bodies, centre) {
   const absOf = (P, seen = new Set()) => { if (!P.parent || seen.has(P)) return P.offset.clone(); seen.add(P); return P.offset.clone().add(absOf(plan[bodies.indexOf(P.parent)], seen)); };
   for (const P of plan) P.abs = absOf(P);
   const parentAbs = (P) => (P.parent ? plan[bodies.indexOf(P.parent)].abs : new THREE.Vector3());
+  // does Q ride on P (through any chain)? its position is then P's plus its own, and that own travel is Q's to clear
+  const ridesOn = (Q, P) => { const seen = new Set(); for (let x = Q; x && x.parent && !seen.has(x); x = plan[bodies.indexOf(x.parent)]) { seen.add(x); if (x.parent === P.m) return true; } return false; };
   // clearance of P moving by `abs`: the smallest gap left to any other body along the relative path (Infinity: none in the way)
   const clearance = (P, abs) => {
     let worst = Infinity;
     for (const Q of plan) {
-      if (Q === P) continue;   // the parent too: a part leaving its pocket is judged on the relative path, which is its own offset
+      if (Q === P || ridesOn(Q, P)) continue;   // the parent too: a part leaving its pocket is judged on the relative path, which is its own offset
       const v = abs.clone().sub(Q.abs); if (v.length() < 0.1 * abs.length()) continue;   // same way, a tenth of the drift: not a collision
       if (info[P.i].c.distanceTo(info[Q.i].c) > info[P.i].r + info[Q.i].r + 2 * v.length()) continue;
-      const h = hitFrom(P.i, v, [Q.m]); if (!h) continue;
+      const h = hitFrom(P.i, v, [Q.m], Q.m === P.housing ? P.lip : undefined); if (!h) continue;
       worst = Math.min(worst, h.gap - 2 * v.length());   // negative: they meet before full explode
     }
     return worst;

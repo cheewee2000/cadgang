@@ -375,7 +375,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   if (drag.pan || ui.flat) {
     pan(dx, dy);
   } else {
-    orbit.yaw += dx * 0.006;
+    orbit.yaw += (e.pointerType === 'touch' ? -dx : dx) * 0.006;   // a finger drags the model with it; a mouse drags the camera
     orbit.pitch += dy * 0.006;
   }
 });
