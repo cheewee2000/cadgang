@@ -149,8 +149,8 @@ function addMesh(geo, { edgeLines, faces, flat = false, name = '' } = {}) {
   m.userData.flat = flat;
   m.userData.name = name || `body ${model.children.length + 1}`;
   m.userData.faces = faces;   // B-rep face ranges, when the importer knew them: picked by measure
-  styleMesh(m);
   model.add(m);
+  styleMesh(m);               // after add: the part colour is its index in the model
   // Crease edges on an arbitrary mesh are a guess; over a million triangles the
   // guess costs seconds and reads as noise, so skip it there.
   // ponytail: no edge LOD — a budget cut-off, add decimation if assemblies need outlines.
@@ -173,6 +173,7 @@ function addLines(positions, name) {
   const l = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: inkColor() }));
   l.userData.name = name;
   model.add(l);
+  styleMesh(l);
 }
 const inkColor = () => (document.documentElement.dataset.theme === 'dark' ? 0xffffff : 0x000000);
 const addPart = (p, name) => (p.lines ? addLines(p.lines, p.name || name) : addMesh(p.geo, p.name ? p : { ...p, name }));

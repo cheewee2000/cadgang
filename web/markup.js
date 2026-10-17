@@ -73,7 +73,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     for (const l of layer.querySelectorAll('.note-label')) l.remove();
     for (const item of items) {
       build(item);
-      if (item.kind === 'note') {
+      if (item.text) {
         const el = document.createElement('div');
         el.className = 'note-label';
         el.textContent = item.text || '…';
@@ -134,12 +134,17 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     e.stopImmediatePropagation();
     if (!current) return;
     const ok = current.kind === 'pen' ? current.points.length > 1 : new THREE.Vector3(...current.points[0]).distanceTo(new THREE.Vector3(...current.points[1])) > 1e-6;
-    if (ok) { items.push({ ...current, at: new Date().toISOString() }); changed(); }
+    if (ok) {
+      const item = { ...current, at: new Date().toISOString() };
+      items.push(item); changed();
+      if (item.kind === 'arrow') startNote(item.points[0], e, item);   // an arrow says something: ask what, at its tail
+    }
     current = null;
     rebuild();
   }, { capture: true });
 
-  function startNote(p, e) {
+  /** Note input at p; with `item`, the text goes on that item (an arrow) instead of a new note. */
+  function startNote(p, e, item = null) {
     noteInput?.remove();
     const el = document.createElement('input');
     el.className = 'note-input';
@@ -153,7 +158,11 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     const done = (commit) => {
       if (finished) return;
       finished = true;
-      if (commit && el.value.trim()) { items.push({ id: uid(), kind: 'note', points: [p], text: el.value.trim(), at: new Date().toISOString() }); changed(); }
+      if (commit && el.value.trim()) {
+        if (item) item.text = el.value.trim();
+        else items.push({ id: uid(), kind: 'note', points: [p], text: el.value.trim(), at: new Date().toISOString() });
+        changed();
+      }
       el.remove(); noteInput = null; rebuild();
     };
     el.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') done(true); else if (ev.key === 'Escape') done(false); ev.stopPropagation(); });
@@ -203,7 +212,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     ctx.font = `${13 * k}px "Space Mono", monospace`;
     ctx.textBaseline = 'bottom';
     for (const item of items) {
-      if (item.kind !== 'note') continue;
+      if (!item.text) continue;
       const s = toScreen(item.points[0]);
       if (s.behind) continue;
       const text = item.text, w = ctx.measureText(text).width + 12 * k, h = 20 * k;
