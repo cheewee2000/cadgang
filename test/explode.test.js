@@ -47,10 +47,10 @@ test('a pin in a bore slides along the shared axis, out of the freer end, riding
 });
 
 test('a radial path through another body is replaced by a clear one', () => {
-  // a U-shaped frame whose far wall crosses the cube's radial; the frame moves out less than the cube would
+  // a U-shaped frame whose far wall crosses the cube's radial
   const frame = merged([box(4, 80, 40, 0, 0, 0), box(4, 80, 40, 22, 0, 0)]);
   const cube = box(2, 2, 2, 15, 0, 0);
-  explodeOffsets([frame, cube], new THREE.Vector3());
+  explodeOffsets([frame, cube], new THREE.Vector3(11, 0, 0));   // the frame is centred: it stays; the cube's radial runs into its far wall
   assert.deepEqual(dir(cube), [0, 1, 0]);
 });
 

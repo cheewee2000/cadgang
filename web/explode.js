@@ -127,26 +127,37 @@ export function explodeOffsets(bodies, centre) {
     return P;
   });
   for (const P of plan) P.offset = P.dir ? P.dir.clone().multiplyScalar(P.radialLen ?? P.len(P.dir)) : new THREE.Vector3();
-  // no collisions, judged on absolute motion (a part riding on its pocket's body moves with it): a body
-  // whose travel runs into another that is not moving out of its way takes the clearest candidate whose
-  // whole travel is clear; none clear, it keeps the direction the rules gave it
+  // no collisions, judged pair by pair on relative motion (a part riding on its pocket's body moves with
+  // it): seen from body Q, body P travels along P.abs - Q.abs; if that path runs into Q within the travel,
+  // P takes the clearest of its candidates whose whole travel is clear of everyone. None clear, it keeps
+  // the direction the rules gave it.
   const absOf = (P, seen = new Set()) => { if (!P.parent || seen.has(P)) return P.offset.clone(); seen.add(P); return P.offset.clone().add(absOf(plan[bodies.indexOf(P.parent)], seen)); };
   for (const P of plan) P.abs = absOf(P);
+  const parentAbs = (P) => (P.parent ? plan[bodies.indexOf(P.parent)].abs : new THREE.Vector3());
+  // clearance of P moving by `abs`: the smallest gap left to any other body along the relative path (Infinity: none in the way)
+  const clearance = (P, abs) => {
+    let worst = Infinity;
+    for (const Q of plan) {
+      if (Q === P || Q.m === P.parent) continue;
+      const v = abs.clone().sub(Q.abs); if (v.lengthSq() < 1e-9) continue;
+      if (info[P.i].c.distanceTo(info[Q.i].c) > info[P.i].r + info[Q.i].r + 2 * v.length()) continue;
+      const h = hitFrom(info[P.i].c, v, [Q.m]); if (!h) continue;
+      worst = Math.min(worst, (h.distance - P.ext(v)) - 2 * v.length());   // negative: they meet before full explode
+    }
+    return worst;
+  };
   for (const P of plan) {
-    if (!P.dir || !P.abs.lengthSq()) continue;
-    const others = bodies.filter((o) => o !== P.m && o !== P.parent);
-    const d0 = P.abs.clone().normalize(), travel = 2 * P.abs.length();
-    const h = hitFrom(info[P.i].c, d0, others);
-    if (!h || h.distance > P.ext(d0) + travel) continue;
-    const Q = plan[bodies.indexOf(h.object)];
-    if (Q.abs.dot(d0) >= P.abs.length()) continue;   // it moves my way at least as far as I do: the gap only grows
+    if (!P.dir) continue;
+    const c0 = clearance(P, P.abs);
+    if (c0 >= 0) continue;
     let best = null;
     for (const d of P.cands) {
-      const hh = hitFrom(info[P.i].c, d, others), f = hh ? hh.distance : Infinity;
-      const score = f + 1e-3 * d.dot(P.radial);   // clearest; ties toward the radial
-      if (!best || score > best.score) best = { d, score, f };
+      const abs = d.clone().multiplyScalar(P.len(d)).add(parentAbs(P));
+      const score = clearance(P, abs) + 1e-3 * d.dot(P.radial);   // clearest; ties toward the radial
+      if (!best || score > best.score) best = { d, score };
     }
-    if (best && best.f >= P.ext(best.d) + 2 * P.len(best.d)) { P.dir = best.d; P.offset = best.d.clone().multiplyScalar(P.len(best.d)); P.parent = null; }
+    // strictly better only: parts modelled overlapping at rest get the least-bad way out, never a worse one
+    if (best && best.score > c0) { P.dir = best.d; P.offset = best.d.clone().multiplyScalar(P.len(best.d)); P.abs = P.offset.clone().add(parentAbs(P)); }
   }
   for (const P of plan) { P.m.userData.offset = P.offset; P.m.userData.parent = P.parent; }
 }

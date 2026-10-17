@@ -24,7 +24,7 @@ for (const b of bodies) { const o = b.userData.offset, d = o.length() ? o.clone(
 // collisions: sample vertices of A inside B (ray parity along +X)
 const ray = new THREE.Raycaster();
 const inside = (p, B) => { ray.set(p, new THREE.Vector3(1, 0, 0)); return ray.intersectObject(B, false).length % 2 === 1; };
-for (const k of [0.5, 1]) {
+for (const k of [0, 0.5, 1]) {   // k=0 is the model as drawn: overlaps there are the model's, not the solver's
   place(k); const bad = [];
   for (const A of bodies) for (const B of bodies) {
     if (A === B) continue;
