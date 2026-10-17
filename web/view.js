@@ -20,6 +20,7 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { attachOrbitInput } from './orbitinput.js';
 import { createMarkup } from './markup.js';
 import { parseDxf } from './dxf.js';
+import { explodeOffsets } from './explode.js';
 import { createMeasure } from './measure.js';
 import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
 
@@ -170,16 +171,15 @@ const addPart = (p, name) => (p.lines ? addLines(p.lines, p.name || name) : addM
 //
 // One mesh per body (a STEP assembly, a multi-body compound). The panel lists
 // them with a checkbox each; EXPLODE slides every body out from the assembly
-// centre along its own offset. Hiding a body hides its edges and its section cap.
+// centre along its own offset (explode.js: a pocketed part leaves along the
+// pocket's axis). Hiding a body hides its edges and its section cap.
 
 function listBodies() {
   const panel = $('#bodies');
   panel.replaceChildren();
   panel.hidden = model.children.length < 2;
-  const centre = bbox.getCenter(new THREE.Vector3());
+  explodeOffsets(model.children, bbox.getCenter(new THREE.Vector3()));
   for (const m of model.children) {
-    m.geometry.computeBoundingBox();
-    m.userData.offset = m.geometry.boundingBox.getCenter(new THREE.Vector3()).sub(centre);
     const row = document.createElement('label');
     const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = m.visible;
     cb.addEventListener('change', () => setBodyVisible(m, cb.checked));
@@ -206,11 +206,16 @@ function setBodyVisible(m, on) {
 }
 function applyExplode() {
   const k = parseFloat($('#explode').value) / 100;
-  for (const m of model.children) {
-    const off = m.userData.offset ?? new THREE.Vector3();
-    m.position.copy(off).multiplyScalar(k * 2);
+  const done = new Set();
+  const place = (m) => {   // a pocketed part rides on the body its pocket is in
+    if (done.has(m)) return m.position;
+    done.add(m);
+    m.position.copy(m.userData.offset ?? new THREE.Vector3()).multiplyScalar(k * 2);
+    if (m.userData.parent) m.position.add(place(m.userData.parent));
     if (m.userData.edges) m.userData.edges.position.copy(m.position);
-  }
+    return m.position;
+  };
+  for (const m of model.children) place(m);
   measure.invalidate();
 }
 $('#explode').addEventListener('input', applyExplode);
@@ -549,7 +554,7 @@ $('#newBtn').addEventListener('click', () => window.open(location.pathname));
 // Only the Mac shell can register file associations; the button exists only inside it.
 $('#defaultBtn').hidden = !window.cadgangDesktop;
 $('#defaultBtn').addEventListener('click', () => window.webkit?.messageHandlers?.cadgang?.postMessage({ cmd: 'defaultApp' }));
-window.cadgangNotify = (text, bad) => say(text, bad);
+window.cadgangNotify = say;
 $('#fileInput').addEventListener('change', async (e) => { if (e.target.files.length) openBuffers(await filesToBuffers(e.target.files)); e.target.value = ''; });
 
 // ----------------------------------------------------------------- toggles
