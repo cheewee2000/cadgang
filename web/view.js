@@ -1113,6 +1113,7 @@ window.addEventListener('focus', focus);
 document.addEventListener('pointerdown', focus);
 document.addEventListener('visibilitychange', focus);
 (function connect() {
+  if (new URLSearchParams(location.search).has('share')) return;   // a shared link is on its own: the VPS proxy carries no WebSocket
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${location.pathname.replace(/[^/]*$/, '')}ws`);
   ws.onopen = () => { focus(); announce(); };
   ws.onmessage = (ev) => {
