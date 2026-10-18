@@ -1073,25 +1073,6 @@ function postSnapshot() {
   }, 150);
 }
 
-// SEND TO CLAUDE: hand the view to Claude. The frame, camera and markups queue on the server for the
-// cadgang_feedback MCP tool. The server types the review prompt into the Claude Code session's terminal
-// tab when it knows one (Knife Terminal); otherwise the prompt lands on the clipboard to paste, and a
-// UserPromptSubmit hook in this repo tells Claude a view is waiting on its next turn anyway.
-$('#feedbackBtn').addEventListener('click', async () => {
-  if (!subject) { say('open a file first', true); return; }
-  say('sending the view to Claude…');
-  try {
-    const body = { png: markup.snapshot(), subject, markups: markup.items,
-      camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() } };
-    const r = await fetch('/api/view/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.statusText);
-    if (j.delivered) { say(`sent to Claude in terminal tab ${j.delivered.tab}`); return; }
-    let copied = false; try { await navigator.clipboard.writeText(j.prompt); copied = true; } catch {}
-    say(copied ? 'queued · no Claude session reachable (run /mcp there) · prompt copied' : 'queued · no Claude session reachable · ask it to run cadgang_feedback', true);
-  } catch (e) { say(`feedback failed: ${e.message}`, true); }
-});
-
 // The server restarts under the app (a deploy); reconnect, and when
 // it comes back as a NEWER version reload so the page is never older than its server.
 let pageVersion = null;
@@ -1196,7 +1177,6 @@ const CMDS = [
   ...[['p', 'pen', 'Pen'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['r', 'erase', 'Erase']].map(([key, t, label]) => ({ key, label, btn: `[data-tool="${t}"]`, run: () => markup.setTool(t), on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
   { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
   { sep: true },
-  { key: 'k', label: 'Send to Claude', btn: '#feedbackBtn', run: () => $('#feedbackBtn').click() },
   { key: 'd', label: 'Background: light / dark / dusk / dawn / night', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.bg !== 'light' },
   { key: 'o', meta: true, label: 'Open…', btn: '#openBtn', run: () => $('#fileInput').click() },
   { key: 'z', meta: true, label: 'Undo', run: undo },
