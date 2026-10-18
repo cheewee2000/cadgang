@@ -88,6 +88,8 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         makeWindow(cfg)
     }
 
+    @objc func showCells(_ s: Any?) { web.load(URLRequest(url: BASE.appendingPathComponent("cells"))) }
+    @objc func showViewer(_ s: Any?) { web.load(URLRequest(url: BASE.appendingPathComponent("view"))) }
     @objc func newWindow(_ s: Any?) { makeWindow(web.configuration).load(URLRequest(url: BASE.appendingPathComponent("view"))) }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
@@ -109,6 +111,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
             env["CADGANG_DESKTOP"] = "1"
             env["CADGANG_PORT"] = String(PORT)
             env["CADGANG_DATA"] = support.path   // markups and the last screen
+            env["CADGANG_CELLS"] = support.appendingPathComponent("cells.json").path   // the cell stack until a project is set
             p.environment = env
             p.currentDirectoryURL = support
             p.standardOutput = FileHandle.standardOutput
@@ -258,6 +261,8 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
 
         let view = NSMenuItem(); main.addItem(view)
         let viewMenu = NSMenu(title: "View")
+        viewMenu.addItem(withTitle: "Viewer", action: #selector(showViewer(_:)), keyEquivalent: "1").keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(withTitle: "Cells", action: #selector(showCells(_:)), keyEquivalent: "2").keyEquivalentModifierMask = [.command, .shift]
         viewMenu.addItem(withTitle: "Reload", action: #selector(WKWebView.reload(_:)), keyEquivalent: "r")
         view.submenu = viewMenu
 

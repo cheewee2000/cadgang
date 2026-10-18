@@ -1,0 +1,351 @@
+/* cadgang v2 — the cell transcript.
+   Reads top to bottom like a document, because that is what a cell stack is.
+   Tokens come from cwandt.css; style.css supplies header/footer/button base. */
+
+main { display: flex; flex: 1 1 auto; min-height: 0; }
+
+#panel {
+  flex: 0 0 460px; min-width: 300px; max-width: 70vw;
+  display: flex; flex-direction: column;
+  border-right: var(--bw-hair) solid var(--rule);
+  background: var(--paper); min-height: 0;
+}
+
+#dragbar {
+  flex: 0 0 5px; cursor: col-resize; background: var(--paper-2);
+  border-right: var(--bw-hair) solid var(--rule);
+}
+#dragbar:hover { background: var(--rule); }
+
+#viewport { flex: 1 1 auto; position: relative; min-width: 0; }
+#viewport canvas { display: block; }
+
+#stackHead {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: var(--bw-hair) solid var(--rule);
+  flex: 0 0 auto;
+}
+.stack-label {
+  font-size: var(--fs-12); letter-spacing: var(--ls-label);
+  text-transform: uppercase; color: var(--ink-faint); font-weight: 700;
+}
+.stack-count { font-size: var(--fs-12); color: var(--ink-faint); }
+
+#stack { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+
+.stack-hint {
+  flex: 0 0 auto; padding: var(--sp-2) var(--sp-3);
+  border-top: var(--bw-hair) solid var(--rule);
+  font-size: var(--fs-12); color: var(--ink-faint); line-height: 1.5;
+}
+
+.empty { padding: var(--sp-4) var(--sp-3); color: var(--ink-faint); font-size: var(--fs-14); line-height: 1.6; }
+.empty code { color: var(--ink-soft); }
+
+/* ------------------------------------------------------------------ a cell */
+
+.cell {
+  border-bottom: var(--bw-hair) solid var(--rule);
+  padding: var(--sp-3);
+  transition: background var(--dur-fast) var(--ease);
+}
+.cell.selected { background: var(--paper-2); }
+.cell.failed { background: color-mix(in srgb, var(--signal-red) 7%, transparent); }
+
+.cell-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: 6px; }
+
+.cell-index {
+  font-size: var(--fs-12); color: var(--ink-faint);
+  min-width: 1.6em; font-variant-numeric: tabular-nums;
+}
+.cell-del {
+  margin-left: auto; padding: 0 6px; line-height: 1; font-size: var(--fs-14);
+  border: none; background: none; color: var(--ink-faint); cursor: pointer;
+}
+.cell-del:hover { color: var(--signal-red); }
+
+.cell-id {
+  font-weight: 700; font-size: var(--fs-14); letter-spacing: var(--ls-label);
+  color: var(--ink); cursor: pointer;
+}
+.cell-id:hover { opacity: 0.6; }
+.cell-refs { font-size: var(--fs-12); color: var(--ink-faint); }
+.cell-ms { margin-left: auto; font-size: var(--fs-12); color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+/* Status is the one thing on a cell that must be readable at a glance: it is
+   how you tell a part that matches its prompt from one that has drifted. */
+.badge {
+  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 2px 6px; border: var(--bw-hair) solid currentColor; font-weight: 700;
+}
+.badge.ok { color: var(--ink-faint); }
+.badge.stale { color: #c98a1e; }
+.badge.diverged { color: #4a7fb5; }
+.badge.awaiting_pick { color: #8a5cb8; }
+.badge.error { color: var(--signal-red); }
+
+.cell-prompt {
+  width: 100%; background: transparent; color: var(--ink);
+  border: var(--bw-hair) solid transparent; border-radius: 0;
+  font-family: var(--font-mono); font-size: var(--fs-14); line-height: 1.5;
+  padding: 4px 6px; margin: 0 0 2px -6px; resize: none; overflow: hidden;
+}
+.cell-prompt:hover { border-color: var(--rule); }
+.cell-prompt:focus { outline: none; border-color: var(--ink); background: var(--paper); }
+.cell-prompt::placeholder { color: var(--ink-faint); font-style: italic; }
+
+/* ------------------------------------------------------------------ params */
+
+.params { display: grid; grid-template-columns: auto 1fr; gap: 4px var(--sp-2); align-items: center; margin: 8px 0 0; }
+
+/* The label is a scrubber. Sliders would need a min and a max the program
+   never declares; dragging the name needs neither and stays exact. */
+.param-name {
+  font-size: var(--fs-12); color: var(--ink-soft); letter-spacing: var(--ls-label);
+  cursor: ew-resize; user-select: none; white-space: nowrap;
+}
+.param-name:hover { color: var(--ink); }
+.param-input {
+  background: var(--paper-2); color: var(--ink);
+  border: var(--bw-hair) solid var(--rule); border-radius: 0;
+  font-family: var(--font-mono); font-size: var(--fs-12);
+  padding: 3px 6px; width: 100%; font-variant-numeric: tabular-nums;
+}
+.param-input:focus { outline: none; border-color: var(--ink); }
+
+/* ------------------------------------------------------------------ code */
+
+.cell-toggle {
+  background: none; border: none; padding: 0; margin-top: 8px;
+  font-family: var(--font-mono); font-size: var(--fs-12);
+  color: var(--ink-faint); letter-spacing: var(--ls-label);
+  text-transform: uppercase; cursor: pointer;
+}
+.cell-toggle:hover { color: var(--ink); background: none; }
+
+.cell-code {
+  margin: 6px 0 0; padding: var(--sp-2);
+  background: var(--paper-2); border: var(--bw-hair) solid var(--rule);
+  font-size: var(--fs-12); line-height: 1.45; color: var(--ink-soft);
+  overflow-x: auto; white-space: pre; max-height: 340px;
+}
+.cell-meta { font-size: 10px; color: var(--ink-faint); margin-top: 6px; letter-spacing: 0.04em; }
+
+.cell-error, .cell-log {
+  margin-top: 8px; padding: 6px 8px; font-size: var(--fs-12); line-height: 1.45;
+  border-left: 2px solid var(--signal-red); background: var(--paper-2);
+  color: var(--ink); white-space: pre-wrap; word-break: break-word;
+}
+.cell-log { border-left-color: var(--rule); color: var(--ink-soft); }
+
+/* ------------------------------------------------------------------ footer */
+
+footer {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: 6px var(--sp-4); border-top: var(--bw-hair) solid var(--rule);
+  font-size: var(--fs-12); color: var(--ink-faint); flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.linkbtn {
+  display: inline-block; text-decoration: none;
+  background: var(--paper); color: var(--ink);
+  border: var(--bw-hair) solid var(--ink); padding: 10px 18px;
+}
+.linkbtn:hover { opacity: 0.7; }
+
+.status.err { color: var(--signal-red); }
+
+/* ---------------------------------------------------------------- pick mode */
+
+#pickBar {
+  position: absolute; top: var(--sp-2); left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: var(--sp-2); z-index: 5;
+  padding: 8px var(--sp-3);
+  background: var(--paper); border: var(--bw-hair) solid var(--ink);
+  font-size: var(--fs-12); white-space: nowrap; max-width: 92%; overflow-x: auto;
+}
+/* `display: flex` beats the user-agent rule for [hidden], so say it explicitly
+   or an empty bar floats over the viewport whenever nothing is pending. */
+#pickBar[hidden] { display: none; }
+#pickBar b { font-weight: 700; }
+#pickBar button { padding: 4px 10px; font-size: var(--fs-12); }
+#pickBar button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Picking is a mode, and a mode you cannot see is a mode you forget you are in. */
+#viewport.picking { cursor: crosshair; }
+#viewport.picking canvas { outline: 2px solid var(--ink); outline-offset: -2px; }
+
+/* --- sketch canvas -------------------------------------------------------
+   A sketch cell shows its profile under its own prompt. It sits in the
+   transcript rather than in the viewport because the thing being edited is
+   the CELL's 2D input, not the document's 3D output — and because the point
+   you are dragging has to stay next to the parameters it is dimensioned by. */
+.sketch-wrap {
+  margin: var(--sp-2) 0;
+  border: var(--bw-hair) solid var(--rule);
+  background: var(--paper);
+}
+.sketch-canvas {
+  display: block; width: 100%; height: 190px;
+  cursor: default; touch-action: none;
+}
+.sketch-canvas:focus { outline: none; }
+.sketch-canvas:focus-visible { outline: var(--bw-hair) solid var(--ink-soft); outline-offset: -1px; }
+
+/* The drawing tools. A strip of five words rather than icons: this is a
+   transcript, everything else on the card is language, and "Rect" needs no
+   legend. The active one is the only thing that changes weight, because at
+   this size a filled button would read as an alert. */
+.sketch-tools {
+  display: flex; gap: 2px;
+  padding: 3px var(--sp-2);
+  border-bottom: var(--bw-hair) solid var(--rule);
+}
+.sketch-tool {
+  padding: 1px 6px;
+  border: var(--bw-hair) solid transparent; border-radius: 2px;
+  background: none; color: var(--ink-soft);
+  font: inherit; font-size: var(--fs-12); letter-spacing: 0.02em;
+  cursor: pointer;
+}
+.sketch-tool:hover { color: var(--ink); border-color: var(--rule); }
+.sketch-tool.active { color: var(--ink); border-color: var(--ink-soft); font-weight: 600; }
+/* Fit is a view control, not a tool: pushed to the far end and never active. */
+.sketch-fit { margin-left: auto; }
+.sketch-note {
+  padding: 4px var(--sp-2);
+  border-top: var(--bw-hair) solid var(--rule);
+  font-size: var(--fs-12); color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.sketch-note.err { color: var(--signal-red); }
+
+/* Typing a dimension happens in the note bar rather than in a dialog: the
+   value belongs next to the degrees-of-freedom count it is about to change. */
+.sketch-dim-input {
+  width: 7ch;
+  padding: 0 3px;
+  border: var(--bw-hair) solid var(--ink-soft); border-radius: 2px;
+  background: var(--paper); color: var(--ink);
+  font: inherit; font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+}
+.sketch-dim-hint { color: var(--ink-faint); }
+
+/* --- assertion cells -----------------------------------------------------
+   A check reads differently from a modelling step, so it looks different: no
+   step number, a rule down the left, and the measurements laid out as a small
+   table. What it is NOT is an error state — a passing assertion is the normal
+   case and should look calm. */
+.badge.failed { color: var(--signal-red); }
+
+.cell.assert { border-left: 2px solid var(--rule); padding-left: var(--sp-2); }
+.cell.assert.missed { border-left-color: var(--signal-red); }
+.cell.assert .cell-index { color: var(--ink-faint); }
+
+.checks:empty { display: none; }
+.checks {
+  margin: var(--sp-2) 0;
+  font-size: var(--fs-12); font-variant-numeric: tabular-nums;
+}
+.check {
+  display: grid; grid-template-columns: 14px 1fr auto auto; gap: 8px;
+  align-items: baseline; padding: 2px 0;
+  border-bottom: var(--bw-hair) solid var(--rule-soft);
+}
+.check:last-child { border-bottom: 0; }
+.check-mark { color: var(--ink-faint); }
+.check-label { color: var(--ink-soft); }
+.check-value { font-weight: 700; }
+.check-limit { color: var(--ink-faint); }
+.check.bad .check-mark, .check.bad .check-value { color: var(--signal-red); }
+
+/* The document's verdict, said once at the top rather than only in the cell
+   that noticed — a refused export is a fact about the whole file. */
+#docWarn {
+  flex: 0 0 auto;
+  margin: 0 0 var(--sp-2);
+  padding: 6px var(--sp-2);
+  border-left: 2px solid var(--signal-red);
+  background: var(--paper-2);
+  font-size: var(--fs-12); color: var(--ink);
+}
+#docWarn[hidden] { display: none; }
+
+/* --- derived dependency graph --------------------------------------------
+   Read-only on purpose. In v1 this graph WAS the document and every edge was
+   hand-wired; here the stack already says what depends on what, so this only
+   draws it — which is what lets it be a glance instead of a mode. */
+#graphPanel {
+  /* The panel is a flex column, so without this the graph is the thing that
+     gets squeezed when the stack is long — it would silently show its first
+     four cells and look like the whole document. It scrolls itself instead. */
+  flex: 0 0 auto; max-height: 40vh;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: var(--bw-hair) solid var(--rule);
+  overflow: auto;
+}
+#graphPanel[hidden] { display: none; }
+.graph-empty { font-size: var(--fs-12); color: var(--ink-faint); }
+
+.depgraph { display: block; font-family: var(--font-mono); }
+.depgraph .edge { fill: none; stroke: var(--rule); stroke-width: 1.5; }
+.depgraph .edge.trunk { stroke: var(--ink-soft); }
+/* An explicit ref is a decision someone made; the default "previous cell" is
+   not. Dashing the explicit one makes the reaching-back visible at a glance. */
+.depgraph .edge.explicit { stroke-dasharray: 3 3; }
+
+.depgraph .node { cursor: pointer; }
+.depgraph .node .dot { fill: var(--paper); stroke: var(--ink-faint); stroke-width: 1.5; }
+.depgraph .node.trunk .dot { stroke: var(--ink); }
+.depgraph .node .hit { fill: transparent; stroke: none; }
+.depgraph .node text { font-size: 11px; fill: var(--ink-soft); }
+.depgraph .node.trunk text { fill: var(--ink); }
+.depgraph .node:hover text { text-decoration: underline; }
+.depgraph .node.error .dot, .depgraph .node.failed .dot {
+  stroke: var(--signal-red); fill: var(--signal-red);
+}
+.depgraph .node.error text, .depgraph .node.failed text { fill: var(--signal-red); }
+.depgraph .node.stale .dot { stroke: #c98a1e; }
+.depgraph .node.awaiting_pick .dot { stroke: #8a5cb8; }
+
+/* The header is a space-between flex row, so a third child would push the
+   count into the middle. The button carries its own gap instead. */
+#graphToggle { padding: 2px 8px; font-size: 10px; margin-left: var(--sp-2); }
+#graphToggle.on { background: var(--ink); color: var(--paper); }
+
+/* Clicking a node in the graph should land you somewhere you can see. */
+.cell.flash { background: var(--paper-2); }
+.stack-head-right { display: flex; align-items: baseline; gap: var(--sp-2); }
+
+/* ------------------------------------------------------------ history */
+#historyPanel { border-bottom: var(--bw-hair) solid var(--rule); max-height: 40vh; overflow-y: auto; }
+#historyPanel[hidden] { display: none; }
+.hist-head { display: flex; align-items: center; justify-content: space-between; padding: var(--sp-2) var(--sp-3); font-size: var(--fs-12); color: var(--ink-faint); letter-spacing: var(--ls-label); }
+.hist-head button { font-size: var(--fs-12); padding: 2px 8px; }
+.hver { display: grid; grid-template-columns: 96px 1fr; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-top: var(--bw-hair) solid var(--rule-soft); cursor: pointer; }
+.hver:hover, .hver.viewing { background: var(--paper-2); }
+.hver img { width: 96px; height: 72px; object-fit: contain; background: var(--paper); border: var(--bw-hair) solid var(--rule); display: block; }
+.hver .v-meta { display: flex; gap: var(--sp-2); font-size: var(--fs-12); color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.hver .v-kind { text-transform: uppercase; letter-spacing: var(--ls-label); }
+.hver .v-note { font-size: var(--fs-14); color: var(--ink); margin: 2px 0; }
+.hver .v-auto { font-size: var(--fs-12); color: var(--ink-soft); line-height: 1.4; }
+#versionBar { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); background: var(--paper); border-bottom: var(--bw-hair) solid var(--ink); font-size: var(--fs-12); letter-spacing: var(--ls-label); z-index: 2; }
+#versionBar[hidden] { display: none; }
+#versionBar button { font-size: var(--fs-12); padding: 2px 8px; }
+
+/* ------------------------------------------------------------ options */
+#optionsBar { position: absolute; left: 0; right: 0; bottom: 0; background: var(--paper); border-top: var(--bw-hair) solid var(--ink); z-index: 2; padding: var(--sp-2) var(--sp-3); }
+#optionsBar[hidden] { display: none; }
+.opt-head { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-12); letter-spacing: var(--ls-label); color: var(--ink-faint); margin-bottom: var(--sp-2); }
+.opt-head button { font-size: var(--fs-12); padding: 2px 8px; }
+.opt-row { display: flex; gap: var(--sp-2); overflow-x: auto; }
+.opt { flex: 0 0 180px; border: var(--bw-hair) solid var(--rule); padding: var(--sp-2); cursor: pointer; background: var(--paper); }
+.opt:hover, .opt.viewing { border-color: var(--ink); }
+.opt img { width: 100%; height: 120px; object-fit: contain; display: block; background: var(--paper); }
+.opt .opt-label { font-size: var(--fs-14); color: var(--ink); margin: var(--sp-1) 0; }
+.opt .opt-meas { font-size: var(--fs-12); color: var(--ink-faint); min-height: 1.4em; }
+.opt .opt-err { font-size: var(--fs-12); color: var(--signal-red); }
+.opt button { margin-top: var(--sp-1); width: 100%; font-size: var(--fs-12); padding: 4px; }

@@ -15,6 +15,12 @@ import url from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { viewRouter } from './view.js';
+import { CellDocument } from '../core/cells.js';
+import { cellsRouter } from './cells.js';
+import { historyRouter } from './history.js';
+import { optionsRouter } from './options.js';
+import { initBrep, brepHeapBytes } from '../core/brep.js';
+import { setImportRoot } from '../core/ops.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -22,6 +28,9 @@ const PORT = parseInt(process.env.CADGANG_PORT || '4477', 10);
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 // Markups (one file per opened subject) and the last screen live here; the Mac app points it at Application Support.
 const DATA = process.env.CADGANG_DATA || path.join(ROOT, 'data');
+// The cell stack (prompt -> code -> B-rep) is its own document: <project>/cadgang/cells.json once a project is set.
+const CELLS_PATH = process.env.CADGANG_CELLS || path.join(DATA, 'cells.json');
+const cells = new CellDocument(CELLS_PATH);
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -48,8 +57,46 @@ app.use('/api', (req, res, next) => {
 /** This machine's first LAN IPv4: an iPad on the same Wi-Fi reaches the viewer at http://<lan>:PORT/view?follow. */
 // Only the desktop app lets a LAN client open local paths (mayReadLocal), so only it offers the link.
 const lan = () => process.env.CADGANG_DESKTOP === '1' && Object.values(os.networkInterfaces()).flat().find((i) => i.family === 'IPv4' && !i.internal)?.address || null;
-app.get('/api/health', (req, res) => res.json({ ok: true, version: VERSION, clients: wss.clients.size, lan: lan(), port: PORT }));
+app.get('/api/health', (req, res) => res.json({ ok: true, version: VERSION, clients: wss.clients.size, lan: lan(), port: PORT, cells: cells.filePath }));
 app.use('/api/view', viewRouter({ dataDir: DATA, broadcast }));
+// The OCCT WASM heap only ever grows; near its 2 GB cap every operation fails with malloc errors and
+// nothing crashes, so the supervisor never restarts it. Leave on purpose between requests instead.
+let inflight = 0;
+app.use('/api/cells', (req, res, next) => { inflight++; res.once('close', () => { inflight--; }); next(); });
+const HEAP_LIMIT = parseInt(process.env.CADGANG_HEAP_LIMIT || String(1.5 * 2 ** 30), 10);
+setInterval(() => {
+  const heap = brepHeapBytes();
+  if (heap > HEAP_LIMIT && inflight === 0) {
+    console.error(`cadgang: kernel heap ${(heap / 2 ** 20).toFixed(0)} MB over the ${(HEAP_LIMIT / 2 ** 20).toFixed(0)} MB limit — restarting for a fresh kernel`);
+    process.exit(75);
+  }
+}, 5000).unref();
+// The project folder: where cell exports land and where the cell document lives (<project>/cadgang/cells.json).
+// The MCP server sets it to Claude Code's cwd when it starts. Until one is set, CELLS_PATH applies.
+const project = { dir: process.env.CADGANG_PROJECT || null };
+function setProject(dir) {
+  dir = path.resolve(dir);
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw Object.assign(new Error(`Not a folder: ${dir}`), { status: 400 });
+  if (project.dir === dir) return;
+  project.dir = dir;
+  setImportRoot(dir);
+  cells.openAt(path.join(dir, 'cadgang', 'cells.json'));
+}
+if (project.dir) setProject(project.dir);
+app.get('/api/project', (req, res) => res.json({ dir: project.dir, cells: cells.filePath }));
+app.post('/api/project', (req, res, next) => {
+  try {
+    // ifUnset (the MCP server on connect): never swap a document someone is working in for a folder that merely came up.
+    if (req.body?.ifUnset && cells.cells.length) return res.json({ dir: project.dir, cells: cells.filePath, kept: true });
+    setProject(String(req.body?.dir || '')); res.json({ dir: project.dir, cells: cells.filePath });
+  } catch (e) { next(e); }
+});
+const cellsApi = cellsRouter(cells, ROOT, { project });
+app.use('/api/cells/history', historyRouter(cells, { dirOf: () => path.join(path.dirname(cells.filePath || CELLS_PATH), 'history'), modelOf: cellsApi.modelOf, broadcast }));
+app.use('/api/cells/options', optionsRouter(cells, { modelOf: cellsApi.modelOf, broadcast }));
+app.use('/api/cells', cellsApi);
+// Load the kernel now so the first evaluate does not pay the WASM load.
+initBrep().catch((e) => console.error('B-rep kernel failed to load:', e.message));
 // Everything that goes wrong on the API answers in its own shape, never as HTML.
 app.use('/api', (err, req, res, next) => {
   if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) return res.status(400).json({ error: `Request body is not valid JSON: ${err.message}` });
@@ -68,13 +115,16 @@ process.on('uncaughtException', (e) => console.error('uncaught exception:', e?.s
 
 // The viewer is the whole site. /view stays as an alias for the Mac shell and old links.
 app.get(['/', '/view'], (req, res) => res.sendFile(path.join(ROOT, 'web', 'view.html')));
+// The cell stack is its own page; it shares the server and the kernel with the viewer, nothing else.
+app.get('/cells', (req, res) => res.sendFile(path.join(ROOT, 'web', 'cells.html')));
 // Static assets revalidate rather than sit in the cache for days, so a deploy takes effect
 // on the next load instead of whenever the proxy's default lifetime happens to expire.
 app.use(express.static(path.join(ROOT, 'web'), { setHeaders: (res) => res.set('Cache-Control', 'no-cache') }));
 
 // Pages compare this with what they loaded and reload themselves when the server came back newer.
+cells.onChange(() => broadcast({ type: 'cells_changed', revision: cells.revision }));
 wss.on('connection', (ws) => {
-  ws.send(JSON.stringify({ type: 'hello', version: VERSION }));
+  ws.send(JSON.stringify({ type: 'hello', version: VERSION, cellsRevision: cells.revision }));
   active ??= ws;
   ws.on('message', (m) => { try { if (JSON.parse(m).type === 'focus') active = ws; } catch {} });
 });

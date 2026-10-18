@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>cadgang · cells</title>
+  <link rel="icon" href="favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+  <link rel="stylesheet" href="cwandt.css" />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="cells.css" />
+  <link rel="stylesheet" href="view.css" />
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.js" } }
+  </script>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="logo">CW&amp;T&nbsp;·&nbsp;CADGANG</div>
+      <span class="proj-sep">/</span>
+      <span class="project-name" title="The v2 cell stack">cells</span>
+    </div>
+    <div class="toolbar">
+      <a href="/view" class="ghost linkbtn" title="The viewer">Viewer</a>
+      <span class="sep"></span>
+      <button id="undoBtn" class="ghost" title="Undo (⌘Z)">Undo</button>
+      <button id="redoBtn" class="ghost" title="Redo (⇧⌘Z)">Redo</button>
+      <span class="sep"></span>
+      <button id="stepBtn" class="ghost" title="Download the model as STEP (refused while an assertion fails)">STEP</button>
+      <span class="sep"></span>
+      <button id="themeToggle" class="ghost" title="Toggle light / dark">DARK</button>
+      <span id="status" class="status"></span>
+      <span class="version"><span class="idcode">CWT_SW_CADGANG_CELLS</span> <span class="idver" id="version"></span></span>
+    </div>
+  </header>
+
+  <main>
+    <aside id="panel">
+      <div id="stackHead">
+        <span class="stack-label">CELL STACK</span>
+        <span class="stack-head-right">
+          <span id="stackCount" class="stack-count"></span>
+          <button id="historyToggle" class="ghost" title="Versions: every meaningful change, with a look and a note">HISTORY</button>
+          <button id="graphToggle" class="ghost" title="Show the derived dependency graph">DEPS</button>
+        </span>
+      </div>
+      <div id="historyPanel" hidden></div>
+      <div id="graphPanel" hidden></div>
+      <div id="docWarn" hidden></div>
+      <div id="stack"></div>
+      <div class="stack-hint">
+        Cells are authored by Claude Code over MCP. Here you read the prompts,
+        turn the knobs, and watch the assertions.
+      </div>
+    </aside>
+    <div id="dragbar" title="Drag to resize"></div>
+    <div id="viewport">
+      <div id="pickBar" hidden></div>
+      <div id="versionBar" hidden></div>
+      <div id="optionsBar" hidden></div>
+      <div id="markupLayer" class="measure-layer"></div>
+      <div id="markupTools" class="markup-tools" title="Markup: anchored on the model; Claude sees it through cadgang_screen">
+        <button class="ghost" data-tool="pen">PEN</button>
+        <button class="ghost" data-tool="arrow">ARROW</button>
+        <button class="ghost" data-tool="note">NOTE</button>
+        <button class="ghost" data-tool="erase">ERASE</button>
+        <button class="ghost" data-clear="1">CLEAR</button>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div id="measures"></div>
+    <div id="stats"></div>
+  </footer>
+
+  <script type="module" src="cells.js"></script>
+</body>
+</html>
