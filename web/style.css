@@ -167,6 +167,7 @@ select.ghost:hover { opacity: 0.55; }
 #ctx[hidden] { display: none; }
 #ctx button { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-4); border: 0; border-left: 2px solid transparent; padding: 5px 8px; font-size: var(--fs-12); text-align: left; }
 #ctx button.on { border-left-color: var(--ink); }
+#ctx .hd { padding: 5px 8px; font-size: var(--fs-12); color: var(--ink-faint); text-transform: uppercase; letter-spacing: var(--ls-label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
 #ctx hr { border: 0; border-top: var(--bw-hair) solid var(--rule); margin: 2px 0; }
 #ctx kbd, #tip kbd { font: inherit; color: var(--ink-faint); }
 #tip { position: fixed; z-index: 21; background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--ink); padding: 3px 7px; font-size: var(--fs-12); letter-spacing: var(--ls-label); pointer-events: none; white-space: nowrap; }

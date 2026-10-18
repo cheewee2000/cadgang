@@ -240,7 +240,7 @@ function solveExplode() {
 }
 $('#solveBtn').addEventListener('click', () => { say('solving explode vectors…'); setTimeout(solveExplode, 30); });
 // For a headless drive or a console: what the solver decided.
-window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null }));
+window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, axis: m.userData.axis ?? null, nudge: +(m.userData.nudge ?? 0).toFixed(2) }));
 /** The tick of each body row takes its colour when COLOR is on. */
 function paintRows() {
   [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.style.accentColor = ui.color ? `#${partColor(i).getHexString()}` : ''; });
@@ -250,13 +250,27 @@ function setBodyVisible(m, on) {
   if (m.userData.edges) m.userData.edges.visible = on;
   measure.invalidate();
 }
+// A body's explode vector at full slider: the solver's offset, or along the axis the
+// user chose for it (`${sign}${axis}`, right-click menu), at least a body-length
+// long so a part the solver left put still moves. A drag adds a nudge along that
+// axis in world units, slider or not.
+const AXES = ['+x', '-x', '+y', '-y', '+z', '-z'];
+function explodeVec(m) {
+  const o = m.userData.offset ?? new THREE.Vector3();
+  if (!m.userData.axis) return o.clone();
+  const len = Math.max(o.length(), m.geometry.boundingBox?.getSize(new THREE.Vector3()).length() ?? 0);
+  return new THREE.Vector3().setComponent('xyz'.indexOf(m.userData.axis[1]), m.userData.axis[0] === '-' ? -len : len);
+}
+// Does the vector move the body at all? The base part's radial offset is a rounding away from zero.
+const moves = (m, v) => v.length() > 0.01 * (m.geometry.boundingBox?.getSize(new THREE.Vector3()).length() ?? 1);
 function applyExplode() {
   const k = parseFloat($('#explode').value) / 100;
   const done = new Set();
   const place = (m) => {   // a pocketed part rides on the body its pocket is in
     if (done.has(m)) return m.position;
     done.add(m);
-    m.position.copy(m.userData.offset ?? new THREE.Vector3()).multiplyScalar(k * 2);
+    const v = explodeVec(m), len = v.length();
+    m.position.copy(v).multiplyScalar(len ? k * 2 + (m.userData.nudge ?? 0) / len : 0);
     if (m.userData.parent) m.position.add(place(m.userData.parent));
     if (m.userData.edges) m.userData.edges.position.copy(m.position);
     return m.position;
@@ -366,6 +380,10 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   }
   drag = { id: e.pointerId, x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey, downX: e.clientX, downY: e.clientY, click: e.button === 0 };
   if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
+  else if (e.button === 0 && !e.shiftKey && !measure.on && e.pointerType !== 'touch') {
+    const hit = partAt(e);   // a part under the mouse slides along its explode axis; empty space orbits
+    if (hit) { const v = explodeVec(hit.body); if (moves(hit.body, v)) drag.part = { m: hit.body, ...screenAxis(hit.point, v.normalize()) }; }
+  }
   renderer.domElement.setPointerCapture(e.pointerId);
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
@@ -378,7 +396,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     pan(now.x - before.x, now.y - before.y);
     return;
   }
-  if (!drag) { if (measure.on) measure.hover(e); else renderer.domElement.classList.toggle('oncap', onCap(e)); return; }
+  if (!drag) { if (measure.on) measure.hover(e); else renderer.domElement.classList.toggle('oncap', onCap(e) || (e.pointerType !== 'touch' && !!partAt(e))); return; }
   if (drag.id !== e.pointerId) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.x = e.clientX; drag.y = e.clientY;
@@ -392,6 +410,11 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     updateSection();
     return;
   }
+  if (drag.part) {
+    drag.part.m.userData.nudge = (drag.part.m.userData.nudge ?? 0) + dx * drag.part.sx + dy * drag.part.sy;
+    applyExplode();
+    return;
+  }
   if (drag.pan || ui.flat) {
     pan(dx, dy);
   } else {
@@ -402,8 +425,8 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 renderer.domElement.addEventListener('pointerup', (e) => {
   const still = drag && Math.hypot(e.clientX - drag.downX, e.clientY - drag.downY) < 4;
   if (drag?.click && measure.on && still) measure.click(e);
-  if (e.button === 2 && still) showMenu(e.clientX, e.clientY);
-  if (drag?.sect) commit();
+  if (e.button === 2 && still) showMenu(e.clientX, e.clientY, partAt(e)?.body);
+  if (drag?.sect || drag?.part) commit();
   drag = null;
   touches.delete(e.pointerId);
 });
@@ -430,15 +453,28 @@ function onCap(e) {
   const i = 'xyz'.indexOf(section.axis), tol = 2e-3 * (bbox.max.getComponent(i) - bbox.min.getComponent(i));
   return hit.object.material === capMaterial || Math.abs(section.plane.distanceToPoint(hit.point)) < tol;
 }
+// The body under the pointer (a hit on its cap counts, a clipped-away face does not), with the point.
+function partAt(e) {
+  if ($('#bodies').hidden) return null;   // one body is not an assembly
+  const r = renderer.domElement.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const h = raycaster.intersectObjects(model.children, true).find((h) => h.object.isMesh && h.object.visible && h.object.parent.visible && (!section.axis || section.plane.distanceToPoint(h.point) > -1e-6));
+  if (!h) return null;
+  const body = model.children.includes(h.object) ? h.object : h.object.parent;
+  return body.isMesh ? { body, point: h.point } : null;
+}
 // World units the plane moves per pixel of pointer travel in x and y: one unit
 // along the axis, projected to screen at the grabbed cap point, then inverted.
-// ponytail: onCap raycasts every hover; a BVH is the upgrade if huge models drag.
+// ponytail: onCap and partAt raycast every hover; a BVH is the upgrade if huge models drag.
 function sectionScreenAxis(e) {
-  const r = renderer.domElement.getBoundingClientRect();
   const i = 'xyz'.indexOf(section.axis);
   const p0 = raycaster.ray.intersectPlane(section.plane, new THREE.Vector3()) ?? orbit.target.clone(); // raycaster set by onCap
-  const p1 = p0.clone(); p1.setComponent(i, p1.getComponent(i) + 1);
-  const a = p0.project(camera), b = p1.project(camera);
+  return screenAxis(p0, new THREE.Vector3().setComponent(i, 1));
+}
+function screenAxis(p0, dir) {
+  const r = renderer.domElement.getBoundingClientRect();
+  const p1 = p0.clone().add(dir);
+  const a = p0.clone().project(camera), b = p1.project(camera);
   const sx = (b.x - a.x) * r.width / 2, sy = -(b.y - a.y) * r.height / 2;
   const len2 = sx * sx + sy * sy || 1;
   return { sx: sx / len2, sy: sy / len2 };
@@ -869,7 +905,8 @@ const history = { list: [], i: -1 };
 function snap() {
   return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value,
-    bodies: model.children.map((m) => m.visible), markup: markup.items, dims: measure.dims });
+    bodies: model.children.map((m) => m.visible), parts: model.children.map((m) => [m.userData.axis ?? null, +(m.userData.nudge ?? 0).toFixed(3)]),
+    markup: markup.items, dims: measure.dims });
 }
 function commit() {
   const s = snap();
@@ -892,6 +929,7 @@ function apply(s) {
   for (const k of ['edges', 'wire', 'grid', 'color']) if (ui[k] !== st[k]) toggle(k, `#${k}Btn`);
   if (ui.ortho !== st.ortho) setOrtho(st.ortho);
   $('#sectPos').value = st.section.pos; section.flip = st.section.flip; setSectionAxis(st.section.axis);
+  model.children.forEach((m, i) => { const [axis, nudge] = st.parts?.[i] ?? [null, 0]; m.userData.axis = axis || undefined; m.userData.nudge = nudge || 0; });
   $('#explode').value = st.explode; applyExplode();
   model.children.forEach((m, i) => setBodyVisible(m, st.bodies[i] ?? true));
   [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.checked = model.children[i]?.visible ?? true; });
@@ -906,12 +944,26 @@ document.addEventListener('change', commit);  // sliders on release, selects, bo
 // --- right-click menu
 const menu = Object.assign(document.createElement('div'), { id: 'ctx', hidden: true });
 document.body.appendChild(menu);
-function showMenu(x, y) {
-  menu.replaceChildren(...CMDS.map((c) => {
+// Right-clicked on a body: its explode axis first (Auto = the solver's, with the way it went).
+function partCmds(m) {
+  if (!m) return [];
+  const v = explodeVec(m), i = ['x', 'y', 'z'].reduce((b, _, j) => (Math.abs(v.getComponent(j)) > Math.abs(v.getComponent(b)) ? j : b), 0);
+  const auto = moves(m, v) ? ` (${v.getComponent(i) < 0 ? '−' : '+'}${'XYZ'[i]})` : '';
+  const set = (axis) => { m.userData.axis = axis; if (!axis) m.userData.nudge = 0; applyExplode(); commit(); };
+  return [
+    { head: m.userData.name },
+    { label: `Explode auto${auto}`, run: () => set(undefined), on: () => !m.userData.axis },
+    ...AXES.map((a) => ({ label: `Explode ${a.replace('-', '−').toUpperCase()}`, run: () => set(a), on: () => m.userData.axis === a })),
+    { sep: true },
+  ];
+}
+function showMenu(x, y, part) {
+  menu.replaceChildren(...[...partCmds(part), ...CMDS].map((c) => {
     if (c.sep) return document.createElement('hr');
+    if (c.head) return Object.assign(document.createElement('div'), { className: 'hd', textContent: c.head });
     const b = document.createElement('button');
     b.className = 'ghost' + (c.on?.() ? ' on' : '');
-    b.append(Object.assign(document.createElement('span'), { textContent: c.label }), Object.assign(document.createElement('kbd'), { textContent: keyLabel(c) }));
+    b.append(Object.assign(document.createElement('span'), { textContent: c.label }), Object.assign(document.createElement('kbd'), { textContent: c.key ? keyLabel(c) : '' }));
     b.addEventListener('click', () => { hideMenu(); c.run(); });
     return b;
   }));
