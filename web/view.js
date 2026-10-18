@@ -278,6 +278,7 @@ function listBodies() {
       });
       row.addEventListener('pointerenter', () => highlightBody(m));
       row.addEventListener('pointerleave', () => highlightBody(null));
+      if (root.kids.size) row.append(Object.assign(document.createElement('span'), { className: 'fold-gap' }));   // aligns with the groups' +/−
       row.append(cb, nm);
       into.appendChild(row);
     }
