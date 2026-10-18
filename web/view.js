@@ -115,6 +115,7 @@ const edges = new THREE.Group();     // their edge overlays
 scene.add(model, edges);
 let grid = null;
 let bbox = null;
+let sources = [];   // what each open file loaded as: [{name, cad, buffer}] (CAD tessellated), for Share to web
 
 function clearModel() {
   for (const g of [model, edges]) {
@@ -122,6 +123,7 @@ function clearModel() {
     g.clear();
   }
   bbox = null;
+  sources = [];
   setRender(false);
   ui.flat = false; $('#sideBtn').hidden = true;
   $('#bodies').replaceChildren(); $('#bodies').hidden = true;
@@ -840,7 +842,7 @@ function parseCad(buffer) {
 }
 
 async function api(path, { method = 'GET', body } = {}) {
-  const res = await fetch('/api/view' + path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch('api/view' + path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
@@ -872,9 +874,10 @@ async function openBuffers(files) {
     const ext = name.toLowerCase().split('.').pop();
     say(`loading ${name}…`); progressStart(name); const tf = performance.now();
     try {
-      const parts = CAD_EXT.test(name)
-        ? parseCad(await fetchBuffer(`/api/view/tessellate?name=${encodeURIComponent(name)}`, { method: 'POST', body: buffer }))
-        : await parseMesh(ext, buffer, name);
+      const cad = CAD_EXT.test(name);
+      const buf = cad ? await fetchBuffer(`api/view/tessellate?name=${encodeURIComponent(name)}`, { method: 'POST', body: buffer }) : buffer;
+      const parts = cad ? parseCad(buf) : await parseMesh(ext, buf, name);
+      sources.push({ name, cad, buffer: buf });
       for (const p of parts) addPart(p, name);
       shown++; label = name; progressEnd(name, performance.now() - tf);
     } catch (e) { progressEnd(); loadFailed(name, e); return; }
@@ -903,9 +906,10 @@ window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
     say(`loading ${name}…`); progressStart(name); const tf = performance.now();
     try {
       const q = `path=${encodeURIComponent(p)}`;
-      const parts = CAD_EXT.test(name)
-        ? parseCad(await fetchBuffer(`/api/view/tessellate?${q}`, { method: 'POST' }))
-        : await parseMesh(name.toLowerCase().split('.').pop(), await fetchBuffer(`/api/view/file?${q}`), name);
+      const cad = CAD_EXT.test(name);
+      const buf = await fetchBuffer(cad ? `api/view/tessellate?${q}` : `api/view/file?${q}`, cad ? { method: 'POST' } : undefined);
+      const parts = cad ? parseCad(buf) : await parseMesh(name.toLowerCase().split('.').pop(), buf, name);
+      sources.push({ name, cad, buffer: buf });
       for (const part of parts) addPart(part, name);
       shown++; label = name; progressEnd(name, performance.now() - tf);
     } catch (e) { progressEnd(); loadFailed(name, e); return; }
@@ -940,7 +944,7 @@ async function makeDrawing(spec) {
     const html = renderDrawing(spec, { renderer, scene, model, bbox, measure, hide: [grid, markup.group].filter(Boolean), restore: () => { resize(); renderer.setSize(viewport.clientWidth, viewport.clientHeight); } });
     const r = await api('/drawing/result', { method: 'POST', body: { html, subject } });
     say(`drawing saved: ${r.path}`);
-    window.open('/api/view/drawing');
+    window.open('api/view/drawing');
   } catch (e) { say(`drawing failed: ${e.message}`, true); api('/drawing/result', { method: 'POST', body: { error: e.message } }).catch(() => {}); }
 }
 // Only the Mac shell can register file associations; the button exists only inside it.
@@ -1093,7 +1097,7 @@ function postSnapshot() {
   snapshotTimer = setTimeout(() => {
     try {
       const png = markup.snapshot();
-      fetch('/api/view/snapshot', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      fetch('api/view/snapshot', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ png, subject, camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() } }) }).catch(() => {});
     } catch {}
   }, 150);
@@ -1109,7 +1113,7 @@ window.addEventListener('focus', focus);
 document.addEventListener('pointerdown', focus);
 document.addEventListener('visibilitychange', focus);
 (function connect() {
-  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${location.pathname.replace(/[^/]*$/, '')}ws`);
   ws.onopen = () => { focus(); announce(); };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
@@ -1265,16 +1269,67 @@ let roomEnv = null;
   requestAnimationFrame(loop);
 })();
 
-fetch('/api/health').then((r) => r.json()).then((h) => {
+fetch('api/health').then((r) => r.json()).then((h) => {
   $('#version').textContent = 'v' + h.version;
   if (!h.lan || follow) return;   // the VPS has no LAN; a follower is already the iPad
   const link = `http://${h.lan}:${h.port}/view?follow`;
-  $('#ipadBtn').hidden = false;
+  $('#shareIpad').hidden = false;
   // In the Mac app the button AirDrops the link: pick the iPad, Safari opens it. Elsewhere it copies.
-  $('#ipadBtn').addEventListener('click', () => window.webkit?.messageHandlers?.cadgang
+  $('#shareIpad').addEventListener('click', () => window.webkit?.messageHandlers?.cadgang
     ? window.webkit.messageHandlers.cadgang.postMessage({ cmd: 'airdrop', url: link })
     : navigator.clipboard.writeText(link).then(() => say(`copied ${link}`), () => say(link)));
 }).catch(() => {});
+// ------------------------------------------------------------------- share
+// The share icon opens a menu: SHARE TO WEB uploads a frozen copy of this view (meshes + view state)
+// and copies its link; SHARE TO IPAD is the old iPad button. A shared link (?share=<id>) opens the
+// whole viewer from that view; its visitors orbit, cut, explode and mark up (markup is shared by
+// everyone with the link), but cannot open, save or share files.
+const shareMenu = $('#shareMenu');
+$('#shareBtn').addEventListener('click', (e) => { e.stopPropagation(); shareMenu.hidden = !shareMenu.hidden; });
+document.addEventListener('click', () => { shareMenu.hidden = true; });
+$('#shareWeb').addEventListener('click', shareWeb);
+async function shareWeb() {
+  if (!sources.length) return say('open a file first', true);
+  say('sharing…');
+  const head = new TextEncoder().encode(JSON.stringify({
+    name: $('#fileName').textContent, files: sources.map((f) => ({ name: f.name, cad: f.cad, bytes: f.buffer.byteLength })),
+    state: snap(), camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() },
+    theme: document.documentElement.dataset.bg, materials: model.children.map(materialOf),
+  }));
+  const len = new Uint8Array(new Uint32Array([head.length]).buffer);
+  try {
+    const res = await fetch('api/view/share', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: new Blob([len, head, ...sources.map((f) => f.buffer)]) });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+    try { await navigator.clipboard.writeText(d.url); say(`link copied: ${d.url}`); } catch { say(d.url); }
+  } catch (e) { say(`share failed: ${e.message}`, true); }
+}
+async function openShare(id) {
+  document.documentElement.classList.add('shared');
+  say('loading shared view…'); progressStart('share');
+  try {
+    const buf = await fetchBuffer(`api/view/share/${encodeURIComponent(id)}`);
+    const n = new DataView(buf).getUint32(0, true), head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+    clearModel();
+    subject = `share:${id}`;   // markups attach to the link: everyone who opens it sees the same ones
+    let off = 4 + n;
+    for (const f of head.files) {
+      const part = buf.slice(off, off + f.bytes); off += f.bytes;
+      const parts = f.cad ? parseCad(part) : await parseMesh(f.name.toLowerCase().split('.').pop(), part, f.name);
+      for (const p of parts) addPart(p, f.name);
+    }
+    progressEnd();
+    finishLoad(head.name, 0);
+    model.children.forEach((m, i) => head.materials?.[i] && pickMaterial(m, head.materials[i]));
+    const st = JSON.parse(head.state);
+    const marks = await api(`/markup?subject=${encodeURIComponent(subject)}`).then((d) => d.markups).catch(() => []);
+    if (marks.length) st.markup = marks;   // later visitors' marks, not just the ones it was shared with
+    apply(JSON.stringify(st)); commit();
+    applyTheme(head.theme);
+    window.cadgangCamera(head.camera);
+    document.title = `${head.name} · CADgang`;
+  } catch (e) { progressEnd(); loadFailed('shared view', e); }
+}
 // For headless drives: the scene objects behind the page.
 window.__view = { model, section, orbit, ui, measure, rt, THREE, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
   project: (x, y, z) => { const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3(x, y, z).project(camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; } };
@@ -1283,8 +1338,9 @@ if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
 // ?open=/abs/a.step|/abs/b.stl — the same local-path door, for the shell and for headless tests.
 // ?section=z:0.3, ?explode=0.4, ?look=materials and ?render set the tools once the file is in (a pushed view, a test harness).
 const params = new URLSearchParams(location.search);
+if (params.get('share')) openShare(params.get('share'));
 const openArg = params.get('open');
-if (follow) fetch('/api/view/tabs').then((r) => r.json()).then((d) => { setTabs(d.tabs || []); if (!d.tabs?.length) return fetch('/api/view/screen').then((r) => r.json()).then((s) => followTo(s.screen?.subject)); }).catch(() => {});
+if (follow) fetch('api/view/tabs').then((r) => r.json()).then((d) => { setTabs(d.tabs || []); if (!d.tabs?.length) return fetch('api/view/screen').then((r) => r.json()).then((s) => followTo(s.screen?.subject)); }).catch(() => {});
 if (openArg) window.cadgangOpen(openArg.split('|')).then(() => {
   const sec = params.get('section')?.match(/^([xyz]):([\d.]+)$/);
   if (sec) { $('#sectPos').value = Math.round(parseFloat(sec[2]) * 1000); setSectionAxis(sec[1]); }

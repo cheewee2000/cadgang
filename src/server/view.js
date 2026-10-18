@@ -90,12 +90,17 @@ export function pack(m) {
  *   POST    /api/view/open {paths}      tell every open page to open these files (the MCP tool)
  *   GET|PUT /api/view/parts?subject=    per-file explode axes and maxima, by body name
  */
+const SHARE_HOST = process.env.CADGANG_SHARE_HOST || 'https://www.experiments.cwandt.com/cadgang';
+const SHARE_KEY_FILE = path.join(os.homedir(), '.cadgang', 'share_key');
+const shareKey = () => { try { return fsSync.readFileSync(SHARE_KEY_FILE, 'utf8').trim(); } catch { return process.env.CADGANG_SHARE_KEY || ''; } };
+
 export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   const watch = fileWatcher(broadcast);
   const local = async (req) => { const f = await localFile(req); watch(f.path); return f; };
   const r = express.Router();
   const slug = (subject) => crypto.createHash('sha1').update(String(subject)).digest('hex').slice(0, 16);
   const markupPath = (subject) => path.join(dataDir, 'markups', `${slug(subject)}.json`);
+  const sharePath = (id) => path.join(dataDir, 'shares', `${id}.bin`);
   const readMarkup = (subject) => { if (!subject) return []; try { return JSON.parse(fsSync.readFileSync(markupPath(subject), 'utf8')); } catch { return []; } };
   let latest = null;      // { png: Buffer, camera, subject, at }
   let waiters = [];
@@ -263,6 +268,38 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       const { name, buffer } = await local(req);
       res.set('Content-Type', 'application/octet-stream').set('X-Name', encodeURIComponent(name)).send(buffer);
     } catch (e) { next(e); }
+  });
+
+  // Share to web: a frozen copy of the view (the page's bundle: u32 header length, header JSON, then
+  // each file's bytes) stored on the VPS under an unguessable id; anyone with the link opens it in a
+  // browser and gets the whole viewer, starting from the shared view. The Mac app's server forwards
+  // the bundle with the share key (~/.cadgang/share_key on both machines); the page never sees it.
+  r.post('/share', express.raw({ type: () => true, limit: '1gb' }), async (req, res, next) => {
+    try {
+      if (!mayReadLocal(req)) throw Object.assign(new Error('Sharing starts from the Mac app'), { status: 403 });
+      const key = shareKey();
+      if (!key) throw Object.assign(new Error(`No share key: put it in ${SHARE_KEY_FILE}`), { status: 500 });
+      const up = await fetch(`${SHARE_HOST}/api/view/share/store`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/octet-stream' }, body: req.body });
+      const d = await up.json().catch(() => ({}));
+      if (!up.ok) throw Object.assign(new Error(d.error || `share host: HTTP ${up.status}`), { status: 502 });
+      res.json({ id: d.id, url: `${SHARE_HOST}/view?share=${d.id}` });
+    } catch (e) { next(e); }
+  });
+  r.post('/share/store', express.raw({ type: () => true, limit: '1gb' }), async (req, res, next) => {
+    try {
+      const key = shareKey(), got = String(req.headers.authorization || '').replace(/^Bearer /, '');
+      if (!key || got.length !== key.length || !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(key))) throw Object.assign(new Error('Bad share key'), { status: 401 });
+      const buf = req.body;
+      const head = JSON.parse(buf.subarray(4, 4 + buf.readUInt32LE(0)).toString('utf8'));   // a bundle that does not parse is refused
+      const id = crypto.randomBytes(12).toString('base64url');
+      await fs.mkdir(path.join(dataDir, 'shares'), { recursive: true });
+      await fs.writeFile(sharePath(id), buf);
+      res.json({ id, files: head.files?.length ?? 0 });
+    } catch (e) { next(e); }
+  });
+  r.get('/share/:id', (req, res) => {
+    if (!/^[\w-]{16}$/.test(req.params.id)) return res.status(404).json({ error: 'No such share' });
+    res.sendFile(sharePath(req.params.id), { headers: { 'Content-Type': 'application/octet-stream' } }, (e) => e && !res.headersSent && res.status(404).json({ error: 'No such share — the link may be mistyped' }));
   });
 
   r.post('/tessellate', express.raw({ type: () => true, limit: '500mb' }), async (req, res, next) => {

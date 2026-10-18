@@ -35,7 +35,13 @@
         <button id="resetBtn" class="ghost" title="Forget dragged positions and chosen axes: back to the solved explode">Reset</button>
       </label>
       <span class="sep"></span>
-      <button id="ipadBtn" class="ghost" hidden title="AirDrop this view to a nearby iPad to mark it up with a pencil (copies the link outside the app)">iPad</button>
+      <span class="share">
+        <button id="shareBtn" class="ghost icon" title="Share this view" aria-label="Share"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1.5v9M4.5 5 8 1.5 11.5 5M3 8v6.5h10V8"/></svg></button>
+        <div id="shareMenu" class="share-menu" hidden>
+          <button id="shareWeb" class="ghost" title="Upload a frozen copy of this view and copy its link: clients open it in any browser">Share to web</button>
+          <button id="shareIpad" class="ghost" hidden title="AirDrop this view to a nearby iPad to mark it up with a pencil (copies the link outside the app)">Share to iPad</button>
+        </div>
+      </span>
     </div>
   </header>
   <div id="tabs" class="tabs" hidden></div>

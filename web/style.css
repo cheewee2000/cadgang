@@ -34,6 +34,11 @@ html, body {
 body { display: flex; flex-direction: column; }
 /* RENDER in the Mac app: the native render view sits under the page; the viewport lets it through. */
 :root.native-render, :root.native-render body { background: transparent; }
+.share { position: relative; }
+.share-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; gap: 2px; background: var(--paper); border: var(--bw-hair) solid var(--rule); padding: 4px; white-space: nowrap; }
+.share-menu button { text-align: left; }
+/* A shared link: the viewer, without the file and share controls. */
+:root.shared #openBtn, :root.shared #newBtn, :root.shared #drawBtn, :root.shared .share, :root.shared #defaultBtn { display: none; }
 :root.native-render #viewport canvas { opacity: 0; }
 
 /* ------------------------------------------------------------ header */
