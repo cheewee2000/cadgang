@@ -821,10 +821,12 @@ $('#measureBtn').addEventListener('click', () => setMeasure(!measure.on));
 const THEME_KEY = 'cwt-theme';
 const THEMES = ['light', 'dark', 'dusk', 'dawn', 'night'];
 const NIGHT = 0x12172e;
-// Sky stops from straight down (-Z) through the horizon (middle) to straight up (+Z), sRGB.
+// Sky stops: straight down, 25° below the horizon, the horizon, 25° above, straight up (sRGB).
+// Most of the change sits within ±25° of the horizon so a 40° view always has the gradient
+// running across it (v0.14.11 — spread evenly over 180° it read as one flat colour per view).
 const SKIES = {
-  dusk: ['#1a1420', '#8a4a5a', '#d9754a', '#3f2f58', '#12172e'],
-  dawn: ['#fbe9d2', '#f3c9b4', '#eaa6a0', '#8a7fa6', '#2f4272'],
+  dusk: ['#1a1420', '#6b3a4a', '#e8864f', '#5a3f7a', '#12172e'],
+  dawn: ['#e6d2bf', '#f5c9b0', '#f6a9a0', '#9a8fc0', '#2f4272'],
 };
 const srgb = (hex) => { const n = parseInt(hex.slice(1), 16); return new THREE.Vector3((n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255); };
 // A unit sphere, scaled each frame to 50 orbit distances: inside the far plane (100, set on fit)
@@ -835,7 +837,10 @@ const sky = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 32), new THREE.Shader
   vertexShader: 'varying vec3 vW; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }',
   fragmentShader: `uniform vec3 stops[5]; uniform vec3 center; varying vec3 vW;
     void main() {
-      float t = clamp(normalize(vW - center).z * 0.5 + 0.5, 0.0, 1.0) * 4.0;
+      float e = asin(clamp(normalize(vW - center).z, -1.0, 1.0));   // elevation, radians
+      const float B = 0.4363;   // 25°: the band either side of the horizon that carries the colour
+      const float H = 1.5708;
+      float t = e < -B ? (e + H) / (H - B) : e < 0.0 ? 1.0 + (e + B) / B : e < B ? 2.0 + e / B : 3.0 + (e - B) / (H - B);
       vec3 c = t < 1.0 ? mix(stops[0], stops[1], t) : t < 2.0 ? mix(stops[1], stops[2], t - 1.0) : t < 3.0 ? mix(stops[2], stops[3], t - 2.0) : mix(stops[3], stops[4], t - 3.0);
       gl_FragColor = vec4(c, 1.0);   // stops are sRGB already: written straight to the sRGB canvas
     }`,
