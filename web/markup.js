@@ -55,6 +55,28 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     const p = new THREE.Vector3();
     return raycaster.ray.intersectPlane(plane, p) ? [p.x, p.y, p.z] : null;
   }
+  // The face under the pointer: its world normal, turned to face the camera, and the camera's up laid
+  // into that plane (an arrow's text lies on the face it points at, upright as seen when it was made).
+  function faceFrame(e) {
+    const cam = getCamera();
+    raycaster.setFromCamera(ndc(e), cam);
+    const hit = raycaster.intersectObjects(getTargets(), false)[0];
+    if (!hit?.face) return null;
+    const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
+    const look = new THREE.Vector3(); cam.getWorldDirection(look);
+    if (n.dot(look) > 0) n.negate();
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
+    up.addScaledVector(n, -up.dot(n));
+    if (up.length() < 1e-3) return null;
+    return { normal: n.toArray().map((v) => +v.toFixed(4)), up: up.normalize().toArray().map((v) => +v.toFixed(4)) };
+  }
+  // Where the pointer meets the plane through `origin` with normal `n` (null when that plane is edge-on).
+  function onPlane(e, origin, n) {
+    raycaster.setFromCamera(ndc(e), getCamera());
+    if (Math.abs(raycaster.ray.direction.dot(n)) < 0.15) return null;
+    const p = new THREE.Vector3();
+    return raycaster.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(n, origin), p) ? p.toArray() : null;
+  }
 
   // ------------------------------------------------------------ geometry
 
@@ -66,29 +88,57 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (item.kind === 'pen' && pts.length > 1) {
       objs.push(fatLine(pts, lineMat));
     } else if (item.kind === 'arrow' && pts.length === 2) {
-      objs.push(fatLine(pts, lineMat));
+      // points: [tail, head]. The head is where the press landed; the tail, where the drag ended, holds
+      // the text. A click with no drag is a dot.
       const dir = pts[1].clone().sub(pts[0]);
-      if (dir.length() > 1e-6) {
+      if (dir.length() > scale * 0.3) {
+        objs.push(fatLine(pts, lineMat));
         const cone = new THREE.Mesh(new THREE.ConeGeometry(scale * 0.35, scale, 12), solidMat);
         cone.position.copy(pts[1]);
         cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
         objs.push(cone);
+      } else {
+        const dot = new THREE.Mesh(new THREE.SphereGeometry(scale * 0.3, 12, 8), solidMat);
+        dot.position.copy(pts[1]);
+        objs.push(dot);
       }
+      if (item.text && item.normal) objs.push(planeText(item, pts[0], scale, dir.length() <= scale * 0.3));
     } else if (item.kind === 'note') {
       const dot = new THREE.Mesh(new THREE.SphereGeometry(scale * 0.25, 12, 8), solidMat);
       dot.position.copy(pts[0]);
       objs.push(dot);
     }
-    for (const o of objs) { o.renderOrder = 5; o.userData.item = item; group.add(o); }
+    for (const o of objs) { o.renderOrder = Math.max(o.renderOrder, 5); o.userData.item = item; group.add(o); }
     return objs;
   }
 
+  // An arrow's text drawn flat on the plane of the face it points at: a label texture on a quad in
+  // that plane, upright along the up the arrow was made with. Over a dot it sits above the dot.
+  function planeText(item, at, scale, overDot) {
+    const c = document.createElement('canvas'), ctx = c.getContext('2d'), px = 48;
+    ctx.font = `${px}px "Space Mono", monospace`;
+    c.width = Math.ceil(ctx.measureText(item.text).width + px); c.height = Math.ceil(px * 1.6);
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.strokeStyle = item.color || COLOR; ctx.lineWidth = 4; ctx.strokeRect(2, 2, c.width - 4, c.height - 4);
+    ctx.font = `${px}px "Space Mono", monospace`; ctx.fillStyle = '#000000'; ctx.textBaseline = 'middle';
+    ctx.fillText(item.text, px / 2, c.height / 2);
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+    const h = scale * 2.6, w = h * c.width / c.height;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, depthTest: false, transparent: true, side: THREE.DoubleSide }));
+    const n = new THREE.Vector3(...item.normal), u = new THREE.Vector3(...item.up), r = u.clone().cross(n);
+    mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(r, u, n));
+    mesh.position.copy(at);
+    if (overDot) mesh.position.addScaledVector(u, h * 0.9);
+    mesh.renderOrder = 6; mesh.userData.own = true;
+    return mesh;
+  }
+
   function rebuild() {
-    for (const o of [...group.children]) { group.remove(o); o.geometry?.dispose(); }
+    for (const o of [...group.children]) { group.remove(o); o.geometry?.dispose(); if (o.userData.own) { o.material.map?.dispose(); o.material.dispose(); } }
     for (const l of layer.querySelectorAll('.note-label')) l.remove();
     for (const item of items) {
       build(item);
-      if (item.text) {
+      if (item.text && !item.normal) {   // planar text is in the scene already
         const el = document.createElement('div');
         el.className = 'note-label';
         el.textContent = item.text || '…';
@@ -135,7 +185,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     canvas.setPointerCapture(e.pointerId);
     last = { x: e.clientX, y: e.clientY, id: e.pointerId };
     if (using === 'pen') current = { id: uid(), kind: 'pen', points: [p], ...pen };
-    else if (using === 'arrow') current = { id: uid(), kind: 'arrow', points: [p, p], ...pen };
+    else if (using === 'arrow') current = { id: uid(), kind: 'arrow', points: [p, p], ...pen, ...faceFrame(e) };
     else if (using === 'note') { startNote(p, e); }   // startNote reads pen for its colour
     else if (using === 'erase') { eraseAt(e); }
     rebuild();
@@ -150,8 +200,17 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       const p = pointAt(e); if (!p) return;
       current.points.push(p); last = { x: e.clientX, y: e.clientY };
     } else if (current.kind === 'arrow') {
-      const p = pointAt(e); if (!p) return;
-      current.points[1] = p;
+      // the tail (text end) slides on the plane of the face the head is on; edge-on or off a face, on
+      // the plane through the head that faces the camera, and the text then faces the screen
+      const head = new THREE.Vector3(...current.points[1]);
+      let p = current.normal && onPlane(e, head, new THREE.Vector3(...current.normal));
+      if (!p) {
+        delete current.normal; delete current.up;
+        const n = new THREE.Vector3(); getCamera().getWorldDirection(n);
+        p = onPlane(e, head, n);
+      }
+      if (!p) return;
+      current.points[0] = p;
     }
     rebuild();
   }, { capture: true });
@@ -160,11 +219,11 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (!mine(e)) return;
     e.stopImmediatePropagation();
     if (!current) return;
-    const ok = current.kind === 'pen' ? current.points.length > 1 : new THREE.Vector3(...current.points[0]).distanceTo(new THREE.Vector3(...current.points[1])) > 1e-6;
+    const ok = current.kind === 'pen' ? current.points.length > 1 : true;   // an arrow with no drag is a dot
     if (ok) {
       const item = { ...current, at: new Date().toISOString() };
       items.push(item); changed();
-      if (item.kind === 'arrow') startNote(item.points[0], e, item);   // an arrow says something: ask what, at its tail
+      if (item.kind === 'arrow') startNote(item.points[0], e, item);   // an arrow says something: ask what, where the drag ended
     }
     current = null;
     rebuild();
@@ -250,7 +309,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     ctx.font = `${13 * k}px "Space Mono", monospace`;
     ctx.textBaseline = 'bottom';
     for (const item of items) {
-      if (!item.text) continue;
+      if (!item.text || item.normal) continue;   // planar text is in the render already
       const s = toScreen(item.points[0]);
       if (s.behind) continue;
       const text = item.text, w = ctx.measureText(text).width + 12 * k, h = 20 * k;

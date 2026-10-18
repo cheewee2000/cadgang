@@ -147,12 +147,22 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   });
   r.post('/claude', express.json(), (req, res) => {
     const tab = String(req.body?.tab ?? '').trim();
-    if (tab) { claude.set(tab, { cwd: req.body.cwd ?? null, at: new Date().toISOString() }); saveClaude(); }
+    // `at` = when the session first registered; the 30 s heartbeat must not make every session "newest"
+    if (tab) { claude.set(tab, { cwd: req.body.cwd ?? null, at: claude.get(tab)?.cwd === (req.body.cwd ?? null) ? claude.get(tab).at : new Date().toISOString() }); saveClaude(); }
     res.json({ ok: true, tab: tab || null, sessions: [...claude.keys()] });
   });
   const PROMPT = 'Review the view I just sent from CADgang: call cadgang_feedback and give me feedback on what you see, anchored to my markups.';
-  async function sendToClaude() {
-    for (const tab of [...claude.keys()].reverse()) {   // newest registration first
+  // Which session gets it: the one working in the folder that holds the viewed file (deepest folder
+  // wins), then the most recently started. (v0.14.16: before, always the newest registration — and
+  // only sessions started in the cadgang repo registered, so every press went to the cadgang session.)
+  const inside = (file, dir) => !!dir && (file + '/').startsWith(dir.replace(/\/+$/, '') + '/');
+  function order(subject) {
+    const files = String(subject || '').split('|').filter((f) => f.startsWith('/'));
+    const depth = (v) => (files.some((f) => inside(f, v.cwd)) ? v.cwd.length : -1);
+    return [...claude.entries()].sort(([, a], [, b]) => depth(b) - depth(a) || String(b.at).localeCompare(String(a.at))).map(([tab]) => tab);
+  }
+  async function sendToClaude(subject) {
+    for (const tab of order(subject)) {
       const status = ((await knife(`tab status ${tab}`)) || '').trim();
       if (!status || status === 'gone') { claude.delete(tab); saveClaude(); continue; }
       const reply = ((await knife(`tab type ${tab} ${PROMPT}`)) || '').trim();
@@ -166,7 +176,7 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       if (!m) throw Object.assign(new Error('png must be a data:image/png;base64 URL'), { status: 400 });
       feedback.push({ png: m[1], camera: req.body.camera ?? null, subject: req.body.subject ?? null, markups: Array.isArray(req.body.markups) ? req.body.markups : [], at: new Date().toISOString() });
       feedback = feedback.slice(-5);
-      const delivered = req.body.deliver === false ? null : await sendToClaude();
+      const delivered = req.body.deliver === false ? null : await sendToClaude(req.body.subject);
       res.json({ ok: true, pending: feedback.length, delivered, prompt: PROMPT });
     } catch (e) { next(e); }
   });
