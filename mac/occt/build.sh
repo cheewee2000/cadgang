@@ -3,8 +3,8 @@
 # non-system dylib it needs copied into $1/lib and rewired to @rpath, so the folder runs anywhere.
 # Needs `brew install opencascade` on the build machine only.
 set -euo pipefail
+OUT=$(mkdir -p "${1:-$(dirname "$0")/../../bin}" && cd "${1:-$(dirname "$0")/../../bin}" && pwd)
 cd "$(dirname "$0")"
-OUT=$(mkdir -p "${1:-../../bin}" && cd "${1:-../../bin}" && pwd)
 OC=$(brew --prefix opencascade)
 LIBS=$(cd "$OC/lib" && ls libTK*.dylib | grep -E '^libTK[A-Za-z]+\.dylib$' | sed -E 's/^lib(.*)\.dylib$/-l\1/')
 clang++ -std=c++17 -O2 -I"$OC/include/opencascade" *.cpp -L"$OC/lib" $LIBS -Wl,-dead_strip_dylibs \
