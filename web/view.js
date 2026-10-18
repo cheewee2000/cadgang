@@ -256,7 +256,7 @@ function solveExplode() {
 }
 $('#solveBtn').addEventListener('click', () => { say('solving explode vectors…'); setTimeout(solveExplode, 30); });
 // For a headless drive or a console: what the solver decided.
-window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, axis: m.userData.axis ?? null, travel: m.userData.travel == null ? null : +m.userData.travel.toFixed(2) }));
+window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, axis: m.userData.axis ?? null, pull: m.userData.pull == null ? null : +m.userData.pull.toFixed(2) }));
 /** The tick of each body row takes its colour when COLOR is on. */
 function paintRows() {
   [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.style.accentColor = ui.color ? `#${partColor(i).getHexString()}` : ''; });
@@ -268,9 +268,11 @@ function setBodyVisible(m, on) {
 }
 // A body's explode vector at full slider: the solver's offset, or along the axis the
 // user chose for it (`${sign}${axis}`, right-click menu), at least a body-length
-// long so a part the solver left put still moves. A drag sets how far the part goes at
-// full slider (userData.travel, world units): the slider scales every part from rest (0)
-// to where it was dropped (100). RESET forgets travels and axes.
+// long so a part the solver left put still moves. A drag pulls that one part out along its
+// vector and it stays where it was dropped (userData.pull, world units) at any slider
+// position; the slider scales only the parts nobody dragged, from rest (0) to twice the
+// solver's offset (100). RESET forgets pulls and axes. (v0.14.9: before, a drag set the
+// part's spot at FULL explode and a drag at slider 0 flung the whole model open.)
 const AXES = ['+x', '-x', '+y', '-y', '+z', '-z'];
 function explodeVec(m) {
   const o = m.userData.offset ?? new THREE.Vector3();
@@ -287,8 +289,8 @@ function applyExplode() {
     if (done.has(m)) return m.position;
     done.add(m);
     const v = explodeVec(m), len = v.length();
-    const full = m.userData.travel ?? len * 2;   // the solver's travel is twice its offset
-    m.position.copy(v).multiplyScalar(len ? (full * k) / len : 0);
+    const dist = m.userData.pull ?? len * 2 * k;   // the solver's full travel is twice its offset
+    m.position.copy(v).multiplyScalar(len ? dist / len : 0);
     if (m.userData.parent) m.position.add(place(m.userData.parent));
     if (m.userData.edges) m.userData.edges.position.copy(m.position);
     return m.position;
@@ -298,7 +300,7 @@ function applyExplode() {
 }
 $('#explode').addEventListener('input', applyExplode);
 function setExplode(v) { $('#explode').value = Math.max(0, Math.min(100, v)); applyExplode(); }
-$('#resetBtn').addEventListener('click', () => { for (const m of model.children) { m.userData.axis = undefined; m.userData.travel = undefined; } applyExplode(); say('explode positions reset'); });
+$('#resetBtn').addEventListener('click', () => { for (const m of model.children) { m.userData.axis = undefined; m.userData.pull = undefined; } applyExplode(); say('explode positions reset'); });
 
 function finishLoad(name, ms, keep = false) {
   const box = new THREE.Box3().setFromObject(model);
@@ -401,7 +403,6 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
   else if (e.button === 0 && !e.shiftKey && !measure.on && e.pointerType !== 'touch') {
     const hit = partAt(e);   // a part under the mouse slides along its explode axis; empty space orbits
-    if (hit && +$('#explode').value === 0) setExplode(100);   // a drag places the part at full explode: show that
     if (hit) { const v = explodeVec(hit.body); if (moves(hit.body, v)) drag.part = { m: hit.body, ...screenAxis(hit.point, v.normalize()) }; }
   }
   renderer.domElement.setPointerCapture(e.pointerId);
@@ -431,8 +432,8 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     return;
   }
   if (drag.part) {
-    const k = +$('#explode').value / 100 || 1, u = drag.part.m.userData;
-    u.travel = Math.max(0, (u.travel ?? explodeVec(drag.part.m).length() * 2) + (dx * drag.part.sx + dy * drag.part.sy) / k);
+    const u = drag.part.m.userData, len = explodeVec(drag.part.m).length();
+    u.pull = Math.max(0, (u.pull ?? len * 2 * (+$('#explode').value / 100)) + dx * drag.part.sx + dy * drag.part.sy);
     applyExplode();
     return;
   }
@@ -510,6 +511,9 @@ function screenAxis(p0, dir) {
 // STEP in WebKit.
 // The cut is flat dark grey on every body (user call, v0.14.8): far darker than the shaded grey
 // bodies and than any part colour, so cut material reads as cut without borrowing the palette.
+// The cap draws AFTER the bodies and a hair nearer (polygon offset): where a mating part's face
+// lies on the cut body's inner surface (a lid on a box, a chassis in a shell) the two were
+// z-fighting and the cap lost in patches — "some caps render, others don't" (v0.14.9).
 const capColor = () => new THREE.Color(0x3a3a3a);
 function buildCaps() {
   model.children.forEach((m, i) => {
@@ -518,8 +522,9 @@ function buildCaps() {
     const on = !!section.axis && !!bbox;
     m.material.side = on ? THREE.FrontSide : THREE.DoubleSide;
     if (!on) return;
-    const cap = new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ color: capColor(i), side: THREE.BackSide, clippingPlanes: [section.plane] }));
-    cap.renderOrder = -1;
+    const cap = new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ color: capColor(i), side: THREE.BackSide, clippingPlanes: [section.plane],
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+    cap.renderOrder = 1;
     m.add(cap);
     m.userData.cap = cap;
   });
@@ -757,15 +762,31 @@ $('#measureBtn').addEventListener('click', () => setMeasure(!measure.on));
 
 // ------------------------------------------------------------------- theme
 
+// Four backgrounds (v0.14.9): light and dark are flat paper; dusk and dawn are sky gradients,
+// drawn into a texture the scene wears as its background so a snapshot carries them too.
+// Dusk takes the dark UI chrome, dawn the light one (data-theme); data-bg names the mode.
 const THEME_KEY = 'cwt-theme';
+const THEMES = ['light', 'dark', 'dusk', 'dawn'];
+const SKIES = { dusk: ['#12172e', '#3f2f58', '#8a4a5a', '#d9754a'], dawn: ['#2f4272', '#8a7fa6', '#eaa6a0', '#fbe9d2'] };
+function skyTexture(stops) {
+  const c = document.createElement('canvas'); c.width = 2; c.height = 256;
+  const g = c.getContext('2d'), grad = g.createLinearGradient(0, 0, 0, 256);
+  stops.forEach((col, i) => grad.addColorStop(i / (stops.length - 1), col));
+  g.fillStyle = grad; g.fillRect(0, 0, 2, 256);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const isDarkTheme = (t) => t === 'dark' || t === 'dusk';
 function applyTheme(t) {
-  document.documentElement.dataset.theme = t;
-  $('#themeToggle').textContent = t === 'dark' ? 'LIGHT' : 'DARK';
-  scene.background = new THREE.Color(t === 'dark' ? 0x1a1a18 : 0xffffff);
+  if (!THEMES.includes(t)) t = 'light';
+  document.documentElement.dataset.theme = isDarkTheme(t) ? 'dark' : 'light';
+  document.documentElement.dataset.bg = t;
+  $('#themeToggle').textContent = t.toUpperCase();
+  if (scene.background?.isTexture) scene.background.dispose();
+  scene.background = SKIES[t] ? skyTexture(SKIES[t]) : new THREE.Color(t === 'dark' ? 0x1a1a18 : 0xffffff);
   for (const m of model.children) if (m.isLine) styleMesh(m);
   try { localStorage.setItem(THEME_KEY, t); } catch {}
 }
-$('#themeToggle').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+$('#themeToggle').addEventListener('click', () => applyTheme(THEMES[(THEMES.indexOf(document.documentElement.dataset.bg) + 1) % THEMES.length]));
 let theme = 'light';
 try { theme = localStorage.getItem(THEME_KEY) || theme; } catch {}
 applyTheme(theme);
@@ -885,7 +906,7 @@ fetch('/api/health').then((r) => r.json()).then((h) => {
     : navigator.clipboard.writeText(link).then(() => say(`copied ${link}`), () => say(link)));
 }).catch(() => {});
 // For headless drives: the scene objects behind the page.
-window.__view = { model, section, orbit, ui, measure, THREE, get camera() { return camera; },
+window.__view = { model, section, orbit, ui, measure, THREE, partAt, applyExplode, get camera() { return camera; },
   project: (x, y, z) => { const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3(x, y, z).project(camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; } };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
@@ -932,7 +953,7 @@ const CMDS = [
   { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
   { sep: true },
   { key: 'k', label: 'Send to Claude', btn: '#feedbackBtn', run: () => $('#feedbackBtn').click() },
-  { key: 'd', label: 'Dark / light', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.theme === 'dark' },
+  { key: 'd', label: 'Background: light / dark / dusk / dawn', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.bg !== 'light' },
   { key: 'o', meta: true, label: 'Open…', btn: '#openBtn', run: () => $('#fileInput').click() },
   { key: 'z', meta: true, label: 'Undo', run: undo },
   { key: 'z', meta: true, shift: true, label: 'Redo', run: redo },
@@ -953,7 +974,7 @@ const history = { list: [], i: -1 };
 function snap() {
   return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value,
-    bodies: model.children.map((m) => m.visible), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.travel == null ? null : +m.userData.travel.toFixed(3)]),
+    bodies: model.children.map((m) => m.visible), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3)]),
     markup: markup.items, dims: measure.dims });
 }
 function commit() {
@@ -977,7 +998,7 @@ function apply(s) {
   for (const k of ['edges', 'wire', 'grid', 'color']) if (ui[k] !== st[k]) toggle(k, `#${k}Btn`);
   if (ui.ortho !== st.ortho) setOrtho(st.ortho);
   $('#sectPos').value = st.section.pos; section.flip = st.section.flip; setSectionAxis(st.section.axis);
-  model.children.forEach((m, i) => { const [axis, travel] = st.parts?.[i] ?? [null, null]; m.userData.axis = axis || undefined; m.userData.travel = travel ?? undefined; });
+  model.children.forEach((m, i) => { const [axis, pull] = st.parts?.[i] ?? [null, null]; m.userData.axis = axis || undefined; m.userData.pull = pull ?? undefined; });
   $('#explode').value = st.explode; applyExplode();
   model.children.forEach((m, i) => setBodyVisible(m, st.bodies[i] ?? true));
   [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.checked = model.children[i]?.visible ?? true; });
@@ -997,7 +1018,7 @@ function partCmds(m) {
   if (!m) return [];
   const v = explodeVec(m), i = ['x', 'y', 'z'].reduce((b, _, j) => (Math.abs(v.getComponent(j)) > Math.abs(v.getComponent(b)) ? j : b), 0);
   const auto = moves(m, v) ? ` (${v.getComponent(i) < 0 ? '−' : '+'}${'XYZ'[i]})` : '';
-  const set = (axis) => { m.userData.axis = axis; if (!axis) m.userData.travel = undefined; applyExplode(); commit(); };
+  const set = (axis) => { m.userData.axis = axis; if (!axis) m.userData.pull = undefined; applyExplode(); commit(); };
   return [
     { head: m.userData.name },
     { label: `Explode auto${auto}`, run: () => set(undefined), on: () => !m.userData.axis },
