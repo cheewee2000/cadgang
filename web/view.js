@@ -1259,6 +1259,7 @@ function nativeScene() {
   for (const m of meshes) { nv += m.geometry.attributes.position.count; nt += (m.geometry.index?.count ?? m.geometry.attributes.position.count) / 3; }
   const verts = new Float32Array(nv * 6), idx = new Uint32Array(nt * 3), tri = new Uint32Array(nt), mats = [];
   const v = new THREE.Vector3(), nm = new THREE.Matrix3();
+  const inGlass = (bbox?.getSize(v).length() || 1) * 2e-4;   // 10× the tracer's ray offset
   let vo = 0, to = 0;
   meshes.forEach((m, mi) => {
     const g = m.geometry;
@@ -1269,6 +1270,7 @@ function nativeScene() {
       v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld); verts.set([v.x, v.y, v.z], (vo + i) * 6);
       v.fromBufferAttribute(nrm, i).applyMatrix3(nm).normalize(); verts.set([v.x, v.y, v.z], (vo + i) * 6 + 3);
     }
+    if ((m.material.transmission ?? 0) > 0.5) inset(verts, vo, pos.count, inGlass);
     const n = (g.index?.count ?? pos.count);
     for (let i = 0; i < n; i++) idx[to * 3 + i] = vo + (g.index ? g.index.getX(i) : i);
     tri.fill(mi, to, to + n / 3);
@@ -1278,6 +1280,21 @@ function nativeScene() {
   });
   const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff);
   post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b] });
+}
+// Glass pulled in by `d` along its welded normals (every copy of a corner moves the same way: no cracks), for
+// the tracer only. A pane lying on aluminium shares that face: the tracer took either surface per ray (speckle),
+// and a ray leaving the glass started a hair past the plane, inside the metal.
+function inset(verts, from, count, d) {
+  const keys = [], sum = new Map();
+  for (let i = from; i < from + count; i++) {
+    const k = `${verts[i * 6]},${verts[i * 6 + 1]},${verts[i * 6 + 2]}`, a = sum.get(k) ?? [0, 0, 0];
+    for (let j = 0; j < 3; j++) a[j] += verts[i * 6 + 3 + j];
+    keys.push(k); sum.set(k, a);
+  }
+  keys.forEach((k, n) => {
+    const a = sum.get(k), len = Math.hypot(...a) || 1;
+    for (let j = 0; j < 3; j++) verts[(from + n) * 6 + j] -= a[j] / len * d;
+  });
 }
 /** Camera, section plane and viewport rect, whenever any of them moved. */
 function nativeCam() {
