@@ -16,27 +16,33 @@
  * preserved, so external triangle-range references (B-rep faces) stay valid.
  * Degenerate triangles produced by welding are kept (they never win a
  * closest-point query against non-degenerate neighbors at these tolerances).
+ * With `normals`, vertices weld only within one surface and the normals come back welded too.
  */
-export function weldVertices(positions, indices, tol = 1e-4) {
+export function weldVertices(positions, indices, tol = 1e-4, normals = null) {
   const inv = 1 / tol;
   const map = new Map();
   const remap = new Uint32Array(positions.length / 3);
-  const outPos = [];
+  const outPos = [], outNrm = [];
   let next = 0;
   for (let v = 0; v < positions.length / 3; v++) {
     const x = positions[v * 3], y = positions[v * 3 + 1], z = positions[v * 3 + 2];
-    const key = `${Math.round(x * inv)},${Math.round(y * inv)},${Math.round(z * inv)}`;
+    let key = `${Math.round(x * inv)},${Math.round(y * inv)},${Math.round(z * inv)}`;
+    // With normals, a corner where a plane meets a cylinder wall keeps one vertex per
+    // surface (~1° bins), so shading never bleeds from the wall onto the plane. (v0.11.1;
+    // the 0.14.0 cell-stack restore dropped this once and the streaks came back.)
+    if (normals) key += `|${Math.round(normals[v * 3] * 64)},${Math.round(normals[v * 3 + 1] * 64)},${Math.round(normals[v * 3 + 2] * 64)}`;
     let idx = map.get(key);
     if (idx === undefined) {
       idx = next++;
       map.set(key, idx);
       outPos.push(x, y, z);
+      if (normals) outNrm.push(normals[v * 3], normals[v * 3 + 1], normals[v * 3 + 2]);
     }
     remap[v] = idx;
   }
   const outIdx = new Uint32Array(indices.length);
   for (let i = 0; i < indices.length; i++) outIdx[i] = remap[indices[i]];
-  return { positions: Float32Array.from(outPos), indices: outIdx };
+  return { positions: Float32Array.from(outPos), indices: outIdx, normals: normals ? Float32Array.from(outNrm) : null };
 }
 
 /** Axis-aligned bounds of a position array: {min:[..], max:[..]} (null if empty). */
