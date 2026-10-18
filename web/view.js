@@ -85,6 +85,7 @@ const PRESETS = {
   xray: () => new THREE.MeshBasicMaterial({ color: 0x2f5d8a, transparent: true, opacity: 0.18, depthWrite: false }),
   normals: () => new THREE.MeshNormalMaterial(),
 };
+const SOLID_LOOKS = new Set(['shaded', 'metal', 'plastic']);
 // One hue per body or layer when COLOR is on; golden-ratio spacing keeps any count apart.
 const partColor = (i) => new THREE.Color().setHSL((i * 0.618034) % 1, 0.6, 0.5);
 function styleMesh(m) {
@@ -96,6 +97,8 @@ function styleMesh(m) {
   }
   const mat = PRESETS[ui.look]();
   if (ui.color && mat.color) mat.color.copy(partColor(i));
+  // the file's own colour (a STEP part's material) on the solid looks; COLOR still overrides it
+  else if (m.userData.color && SOLID_LOOKS.has(ui.look)) mat.color.setRGB(...m.userData.color, THREE.SRGBColorSpace);
   mat.side = section.axis && bbox ? THREE.FrontSide : THREE.DoubleSide;
   mat.flatShading = !!m.userData.flat;
   mat.wireframe = ui.wire;
@@ -162,12 +165,14 @@ function faceBorderEdges(pos, idx, faces) {
   return new Float32Array(out);
 }
 
-function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '' } = {}) {
+function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', path = [], color = null } = {}) {
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
   const m = new THREE.Mesh(geo);
   m.userData.flat = flat;
   m.userData.file = file;
   m.userData.name = name || `body ${model.children.length + 1}`;
+  m.userData.path = path;     // the STEP assembly groups above it, outermost first
+  m.userData.color = color;   // the file's colour for it [r, g, b] 0..1, or null
   m.userData.faces = faces;   // B-rep face ranges, when the importer knew them: picked by measure
   model.add(m);
   styleMesh(m);               // after add: the part colour is its index in the model
@@ -229,23 +234,56 @@ function listBodies() {
   $('#solveBtn').hidden = model.children.length < 2;
   $('#resetBtn').hidden = model.children.length < 2;
   if (model.children.length > 1 && tris <= 300000) solveExplode();
+  // Rows nest under the file's assembly groups (STEP): a group row folds, ticks all it holds, and solos on a click.
+  const root = { kids: new Map(), bodies: [] };
   for (const m of model.children) {
-    const row = document.createElement('label');
-    if (m.userData.dup) row.title = m.userData.dup;
-    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = m.visible;
-    cb.addEventListener('change', () => setBodyVisible(m, cb.checked));
-    const nm = document.createElement('span'); nm.textContent = m.userData.name;
-    nm.title = 'Click: only this body · Shift-click: all bodies';
-    nm.addEventListener('click', (e) => {
-      e.preventDefault();
-      for (const o of model.children) setBodyVisible(o, e.shiftKey || o === m);
-      panel.querySelectorAll('input').forEach((r, i) => { r.checked = model.children[i].visible; });
-    });
-    row.addEventListener('pointerenter', () => highlightBody(m));
-    row.addEventListener('pointerleave', () => highlightBody(null));
-    row.append(cb, nm);
-    panel.appendChild(row);
+    let node = root;
+    for (const g of m.userData.path ?? []) { if (!node.kids.has(g)) node.kids.set(g, { kids: new Map(), bodies: [] }); node = node.kids.get(g); }
+    node.bodies.push(m);
   }
+  const under = (node) => [...node.bodies, ...[...node.kids.values()].flatMap(under)];
+  const render = (node, into, depth) => {
+    for (const [g, kid] of node.kids) {
+      const box = document.createElement('div'); box.className = 'group';
+      const row = document.createElement('label'); row.className = 'group-row';
+      const fold = document.createElement('button'); fold.className = 'ghost fold';
+      const inner = document.createElement('div'); inner.className = 'group-body'; inner.hidden = depth > 0;
+      const paint = () => { fold.textContent = inner.hidden ? '+' : '−'; fold.title = inner.hidden ? 'Unfold' : 'Fold'; };
+      fold.addEventListener('click', (e) => { e.preventDefault(); inner.hidden = !inner.hidden; paint(); });
+      paint();
+      const members = under(kid);
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'group-cb';
+      cb.addEventListener('change', () => { for (const m of members) setBodyVisible(m, cb.checked); syncRows(); });
+      cb._members = members;
+      const nm = document.createElement('span'); nm.textContent = `${g} (${members.length})`;
+      nm.title = 'Click: only this group · Shift-click: all bodies';
+      nm.addEventListener('click', (e) => { e.preventDefault(); for (const o of model.children) setBodyVisible(o, e.shiftKey || members.includes(o)); syncRows(); });
+      row.append(fold, cb, nm);
+      box.append(row, inner);
+      into.appendChild(box);
+      render(kid, inner, depth + 1);
+    }
+    for (const m of node.bodies) {
+      const row = document.createElement('label');
+      if (m.userData.dup) row.title = m.userData.dup;
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'body-cb'; cb.checked = m.visible;
+      cb._body = m;
+      cb.addEventListener('change', () => { setBodyVisible(m, cb.checked); syncRows(); });
+      const nm = document.createElement('span'); nm.textContent = m.userData.name.replace(/_part$/, '');   // cadquery's leaf suffix
+      nm.title = 'Click: only this body · Shift-click: all bodies';
+      nm.addEventListener('click', (e) => {
+        e.preventDefault();
+        for (const o of model.children) setBodyVisible(o, e.shiftKey || o === m);
+        syncRows();
+      });
+      row.addEventListener('pointerenter', () => highlightBody(m));
+      row.addEventListener('pointerleave', () => highlightBody(null));
+      row.append(cb, nm);
+      into.appendChild(row);
+    }
+  };
+  render(root, panel, 0);
+  syncRows();
   paintRows();
   return dups.join(' · ');
 }
@@ -265,7 +303,13 @@ function bodiesHead() {
   const paint = () => { const min = panel.classList.contains('min'); btn.textContent = min ? '+' : '−'; btn.title = min ? 'Show the bodies' : 'Fold the list'; };
   btn.addEventListener('click', () => { panel.classList.toggle('min'); paint(); saveBodies(); });
   paint();
-  head.append(Object.assign(document.createElement('span'), { textContent: 'BODIES' }), btn);
+  const all = document.createElement('button'); all.className = 'ghost'; all.textContent = 'ALL'; all.title = 'Show every body';
+  all.addEventListener('click', () => {
+    for (const m of model.children) setBodyVisible(m, true);
+    panel.querySelectorAll('input').forEach((r) => { r.checked = true; });
+  });
+  const tools = document.createElement('span'); tools.className = 'bodies-tools'; tools.append(all, btn);
+  head.append(Object.assign(document.createElement('span'), { textContent: 'BODIES' }), tools);
   return head;
 }
 function saveBodies() {
@@ -286,9 +330,19 @@ function solveExplode() {
 $('#solveBtn').addEventListener('click', () => { say('solving explode vectors…'); setTimeout(solveExplode, 30); });
 // For a headless drive or a console: what the solver decided.
 window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, axis: m.userData.axis ?? null, pull: m.userData.pull == null ? null : +m.userData.pull.toFixed(2) }));
+/** Body ticks in model order (a group tree renders them out of order). */
+const bodyBoxes = () => { const by = new Map([...$('#bodies').querySelectorAll('input.body-cb')].map((cb) => [cb._body, cb])); return model.children.map((m) => by.get(m)).filter(Boolean); };
+/** Ticks follow the bodies: a group is ticked when all of it shows, half when some does. */
+function syncRows() {
+  for (const cb of $('#bodies').querySelectorAll('input.body-cb')) cb.checked = cb._body.visible;
+  for (const cb of $('#bodies').querySelectorAll('input.group-cb')) {
+    const on = cb._members.filter((m) => m.visible).length;
+    cb.checked = on === cb._members.length; cb.indeterminate = on > 0 && on < cb._members.length;
+  }
+}
 /** The tick of each body row takes its colour when COLOR is on. */
 function paintRows() {
-  [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.style.accentColor = ui.color ? `#${partColor(i).getHexString()}` : ''; });
+  bodyBoxes().forEach((cb, i) => { cb.style.accentColor = ui.color ? `#${partColor(i).getHexString()}` : ''; });
 }
 /**
  * Hovering a body row lays a see-through overlay on that body, drawn over everything, so the
@@ -739,7 +793,8 @@ function parseCad(buffer) {
     geo.setAttribute('position', new THREE.BufferAttribute(sub.pos, 3));
     if (sub.nrm) geo.setAttribute('normal', new THREE.BufferAttribute(sub.nrm, 3));
     geo.setIndex(new THREE.BufferAttribute(sub.idx, 1));
-    parts.push({ geo, edgeLines: faceBorderEdges(sub.pos, sub.idx, own), faces: own, name: names[b] });
+    const n = typeof names[b] === 'string' ? { name: names[b] } : names[b];   // older servers send bare names
+    parts.push({ geo, edgeLines: faceBorderEdges(sub.pos, sub.idx, own), faces: own, name: n.name, path: n.path ?? [], color: n.color ?? null });
   }
   return parts;
 }
@@ -1176,7 +1231,7 @@ function apply(s) {
   model.children.forEach((m, i) => { const [axis, pull] = st.parts?.[i] ?? [null, null]; m.userData.axis = axis || undefined; m.userData.pull = pull ?? undefined; });
   $('#explode').value = st.explode; applyExplode();
   model.children.forEach((m, i) => setBodyVisible(m, st.bodies[i] ?? true));
-  [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.checked = model.children[i]?.visible ?? true; });
+  syncRows();
   if (JSON.stringify(markup.items) !== JSON.stringify(st.markup)) { markup.load(st.markup); markupChanged(st.markup); }
   if (JSON.stringify(measure.dims) !== JSON.stringify(st.dims ?? [])) measure.load(st.dims ?? []);
 }

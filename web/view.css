@@ -38,8 +38,13 @@ select.ghost:hover { opacity: 0.55; }
 .bodies[hidden] { display: none; }
 .bodies { resize: horizontal; min-width: 120px; max-width: 70vw; }
 .bodies label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.bodies .group-body { display: flex; flex-direction: column; gap: 2px; padding-left: var(--sp-3); }
+.bodies .group-body[hidden] { display: none; }
+.bodies .fold { padding: 0; width: 1.2em; line-height: 1; }
 .bodies-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
 .bodies-head button { padding: 0 var(--sp-1); line-height: 1; }
+.bodies-tools { display: flex; gap: var(--sp-1); }
+.bodies.min .bodies-tools button:first-child { display: none; }
 .bodies.min { resize: none; width: auto !important; min-width: 0; }
 .bodies.min label { display: none; }
 .bodies label { display: flex; align-items: center; gap: var(--sp-2); cursor: pointer; white-space: nowrap; }
