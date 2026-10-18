@@ -168,6 +168,8 @@ registerCellTools(server, { call, ok, fail, base: BASE });
 // Claude Code starts this server in the project folder: make it cadgang's project (unless a document is already open elsewhere).
 fetch(`${BASE}/api/project`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: process.cwd(), ifUnset: true }) })
   .then((r) => (r.ok ? r.json() : null)).then((p) => p && console.error(p.kept ? `cadgang project folder stays ${p.dir} (a document is open there)` : `cadgang project folder: ${p.dir}`)).catch(() => {});
+// Which terminal tab this Claude session lives in (Knife Terminal sets KNIFE_TAB): SEND TO CLAUDE types its prompt there.
+if (process.env.KNIFE_TAB) fetch(`${BASE}/api/view/claude`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tab: process.env.KNIFE_TAB, cwd: process.cwd() }) }).catch(() => {});
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error(`cadgang-mcp-server ${VERSION} connected (target: ${BASE})`);

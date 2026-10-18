@@ -804,8 +804,9 @@ function postSnapshot() {
   }, 150);
 }
 
-// FEEDBACK: hand the view to Claude. The frame, camera and markups queue on the server for the
-// cadgang_feedback MCP tool; a prompt lands on the clipboard to paste into Claude Code, and a
+// SEND TO CLAUDE: hand the view to Claude. The frame, camera and markups queue on the server for the
+// cadgang_feedback MCP tool. The server types the review prompt into the Claude Code session's terminal
+// tab when it knows one (Knife Terminal); otherwise the prompt lands on the clipboard to paste, and a
 // UserPromptSubmit hook in this repo tells Claude a view is waiting on its next turn anyway.
 $('#feedbackBtn').addEventListener('click', async () => {
   if (!subject) { say('open a file first', true); return; }
@@ -814,10 +815,11 @@ $('#feedbackBtn').addEventListener('click', async () => {
     const body = { png: markup.snapshot(), subject, markups: markup.items,
       camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() } };
     const r = await fetch('/api/view/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
-    const prompt = 'Look at the view I sent from CADgang (cadgang_feedback) and give me feedback on it.';
-    let copied = false; try { await navigator.clipboard.writeText(prompt); copied = true; } catch {}
-    say(copied ? 'sent to Claude · prompt copied, paste it in Claude Code' : 'sent to Claude · ask it to run cadgang_feedback');
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    if (j.delivered) { say(`sent to Claude in terminal tab ${j.delivered.tab}`); return; }
+    let copied = false; try { await navigator.clipboard.writeText(j.prompt); copied = true; } catch {}
+    say(copied ? 'queued for Claude · no session reachable, prompt copied — paste it in Claude Code' : 'queued for Claude · ask it to run cadgang_feedback', true);
   } catch (e) { say(`feedback failed: ${e.message}`, true); }
 });
 
@@ -923,7 +925,7 @@ const CMDS = [
   ...[['p', 'pen', 'Pen'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['r', 'erase', 'Erase']].map(([key, t, label]) => ({ key, label, btn: `[data-tool="${t}"]`, run: () => markup.setTool(t), on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
   { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
   { sep: true },
-  { key: 'k', label: 'Send view to Claude', btn: '#feedbackBtn', run: () => $('#feedbackBtn').click() },
+  { key: 'k', label: 'Send to Claude', btn: '#feedbackBtn', run: () => $('#feedbackBtn').click() },
   { key: 'd', label: 'Dark / light', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.theme === 'dark' },
   { key: 'o', meta: true, label: 'Open…', btn: '#openBtn', run: () => $('#fileInput').click() },
   { key: 'z', meta: true, label: 'Undo', run: undo },

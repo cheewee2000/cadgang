@@ -19,6 +19,8 @@ import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import fsSync from 'node:fs';
 import path from 'node:path';
+import net from 'node:net';
+import os from 'node:os';
 import express from 'express';
 import { importCadFileInWorker as importCadFile } from '../core/step.js';
 
@@ -124,15 +126,43 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     } catch (e) { next(e); }
   });
 
-  // FEEDBACK button: frames the user wants Claude to look at, until the cadgang_feedback tool takes them.
+  // SEND TO CLAUDE: frames the user wants Claude to look at, until the cadgang_feedback tool takes them.
   let feedback = [];
-  r.post('/feedback', express.json({ limit: '40mb' }), (req, res, next) => {
+  // Claude Code sessions that run the cadgang MCP server say which Knife Terminal tab they live in
+  // (KNIFE_TAB). The button then types the review prompt into the newest live one, which is the one
+  // thing that makes Claude act without the user typing. Other terminals: the prompt lands on the clipboard.
+  const claude = new Map();   // tab → { cwd, at }
+  const KNIFE = path.join(os.homedir(), '.knife-terminal.sock');
+  const knife = (msg) => new Promise((resolve) => {
+    if (!fsSync.existsSync(KNIFE)) return resolve(null);
+    let out = ''; const s = net.createConnection(KNIFE);
+    const done = (x) => { clearTimeout(t); s.destroy(); resolve(x); };
+    const t = setTimeout(() => done(out || null), 1500);
+    s.on('connect', () => s.end(msg)); s.on('data', (d) => { out += d; }); s.on('end', () => done(out)); s.on('error', () => done(null));
+  });
+  r.post('/claude', express.json(), (req, res) => {
+    const tab = String(req.body?.tab ?? '').trim();
+    if (tab) claude.set(tab, { cwd: req.body.cwd ?? null, at: new Date().toISOString() });
+    res.json({ ok: true, tab: tab || null, sessions: [...claude.keys()] });
+  });
+  const PROMPT = 'Review the view I just sent from CADgang: call cadgang_feedback and give me feedback on what you see, anchored to my markups.';
+  async function sendToClaude() {
+    for (const tab of [...claude.keys()].reverse()) {   // newest registration first
+      const status = ((await knife(`tab status ${tab}`)) || '').trim();
+      if (!status || status === 'gone') { claude.delete(tab); continue; }
+      const reply = ((await knife(`tab type ${tab} ${PROMPT}`)) || '').trim();
+      if (reply === 'ok') return { tab, status };
+    }
+    return null;
+  }
+  r.post('/feedback', express.json({ limit: '40mb' }), async (req, res, next) => {
     try {
       const m = /^data:image\/png;base64,(.+)$/.exec(String(req.body?.png || ''));
       if (!m) throw Object.assign(new Error('png must be a data:image/png;base64 URL'), { status: 400 });
       feedback.push({ png: m[1], camera: req.body.camera ?? null, subject: req.body.subject ?? null, markups: Array.isArray(req.body.markups) ? req.body.markups : [], at: new Date().toISOString() });
       feedback = feedback.slice(-5);
-      res.json({ ok: true, pending: feedback.length });
+      const delivered = req.body.deliver === false ? null : await sendToClaude();
+      res.json({ ok: true, pending: feedback.length, delivered, prompt: PROMPT });
     } catch (e) { next(e); }
   });
   r.get('/feedback', (req, res) => {   // ?keep=1 peeks (the Claude Code hook); a plain GET takes them
