@@ -162,10 +162,11 @@ function faceBorderEdges(pos, idx, faces) {
   return new Float32Array(out);
 }
 
-function addMesh(geo, { edgeLines, faces, flat = false, name = '' } = {}) {
+function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '' } = {}) {
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
   const m = new THREE.Mesh(geo);
   m.userData.flat = flat;
+  m.userData.file = file;
   m.userData.name = name || `body ${model.children.length + 1}`;
   m.userData.faces = faces;   // B-rep face ranges, when the importer knew them: picked by measure
   model.add(m);
@@ -195,7 +196,7 @@ function addLines(positions, name) {
   styleMesh(l);
 }
 const inkColor = () => (document.documentElement.dataset.theme === 'dark' ? 0xffffff : 0x000000);
-const addPart = (p, name) => (p.lines ? addLines(p.lines, p.name || name) : addMesh(p.geo, p.name ? p : { ...p, name }));
+const addPart = (p, name) => (p.lines ? addLines(p.lines, p.name || name) : addMesh(p.geo, { ...p, name: p.name || name, file: name }));
 
 // ------------------------------------------------------------------- bodies
 //
@@ -204,10 +205,22 @@ const addPart = (p, name) => (p.lines ? addLines(p.lines, p.name || name) : addM
 // centre along its own offset (explode.js: a pocketed part leaves along the
 // pocket's axis). Hiding a body hides its edges and its section cap.
 
+/** Fill the bodies panel; returns a note when a later file repeated a body and it was unticked. */
 function listBodies() {
   const panel = $('#bodies');
   panel.replaceChildren();
   panel.hidden = model.children.length < 2;
+  // A body a later file repeats (the leg file opened over the bench that already holds the leg) would
+  // draw twice in the same place and fight triangle by triangle: the same box to a micron → untick it.
+  // (Not the vertex count: the standalone leg tessellates to 4041 vertices, the one in the bench to 3629.)
+  const sig = (m) => { const b = m.geometry.boundingBox ?? (m.geometry.computeBoundingBox(), m.geometry.boundingBox); return [...b.min.toArray(), ...b.max.toArray()].map((v) => +v.toFixed(3)).join(); };
+  const first = new Map(), dups = [];
+  for (const m of model.children) {
+    if (!m.isMesh) continue;
+    const o = first.get(sig(m));
+    if (o && o.userData.file !== m.userData.file) { setBodyVisible(m, false); m.userData.dup = `repeats ${o.userData.name} of ${o.userData.file}`; dups.push(`${m.userData.file} repeats ${o.userData.name} of ${o.userData.file}: unticked`); }
+    else if (!o) first.set(sig(m), m);
+  }
   // Explode vectors: radial at once; the solver (cylinders, contacts, collisions) runs now for small
   // files and behind the SOLVE button for big ones, where its rays and fits take seconds.
   radialOffsets(model.children, bbox.getCenter(new THREE.Vector3()));
@@ -216,6 +229,7 @@ function listBodies() {
   if (model.children.length > 1 && tris <= 300000) solveExplode();
   for (const m of model.children) {
     const row = document.createElement('label');
+    if (m.userData.dup) row.title = m.userData.dup;
     const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = m.visible;
     cb.addEventListener('change', () => setBodyVisible(m, cb.checked));
     const nm = document.createElement('span'); nm.textContent = m.userData.name;
@@ -229,6 +243,7 @@ function listBodies() {
     panel.appendChild(row);
   }
   paintRows();
+  return dups.join(' · ');
 }
 /** Solve the explode vectors from the bodies at rest, then put the explode back. */
 function solveExplode() {
@@ -300,13 +315,13 @@ function finishLoad(name, ms, keep = false) {
   $('#stats').textContent = `${model.children.length} BOD${model.children.length === 1 ? 'Y' : 'IES'} · ${segs ? `${segs.toLocaleString()} SEGS · ` : ''}${tris ? `${tris.toLocaleString()} TRIS · ` : ''}${verts.toLocaleString()} VERTS · ${ms} MS`;
   $('#drop').hidden = true; $('#loadError').textContent = '';
   placeGrid();
-  listBodies();
+  const dups = listBodies();
   setupSection();
   // A flat drawing is read from above and handled like paper: pan, turn in quarters, flip over.
   ui.flat = size.z < 1e-9; $('#sideBtn').hidden = !ui.flat;
   if (!keep) { if (ui.flat) setView('3'); fit(); }   // a reload of a changed file keeps the camera
   edges.visible = ui.edges;
-  say(`${name} in ${ms} ms`);
+  say(dups ? `${name} in ${ms} ms · ${dups}` : `${name} in ${ms} ms`);
   loadMarkup();
   postSnapshot();
 }
@@ -688,6 +703,9 @@ async function makeDrawing(spec) {
 $('#defaultBtn').hidden = !window.cadgangDesktop;
 $('#defaultBtn').addEventListener('click', () => window.webkit?.messageHandlers?.cadgang?.postMessage({ cmd: 'defaultApp' }));
 window.cadgangNotify = say;
+window.cadgangBodies = () => model.children.filter((m) => m.isMesh).map((m) => ({ name: m.userData.name, file: m.userData.file, verts: m.geometry.getAttribute('position').count, box: [...m.geometry.boundingBox.min.toArray(), ...m.geometry.boundingBox.max.toArray()].map((v) => +v.toFixed(3)), visible: m.visible }));
+// For a headless drive: put the camera where a snapshot's {yaw, pitch, dist, target} had it.
+window.cadgangCamera = (c) => { Object.assign(orbit, { yaw: c.yaw ?? orbit.yaw, pitch: c.pitch ?? orbit.pitch, dist: c.dist ?? orbit.dist }); if (c.target) orbit.target.fromArray(c.target); };
 $('#fileInput').addEventListener('change', async (e) => { if (e.target.files.length) openBuffers(await filesToBuffers(e.target.files)); e.target.value = ''; });
 
 // ----------------------------------------------------------------- toggles
