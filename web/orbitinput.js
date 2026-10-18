@@ -37,6 +37,9 @@ export function attachOrbitInput(el, { orbit, camera, getCamera = () => camera, 
   });
   el.addEventListener('gestureend', (e) => { e.preventDefault(); gestureDist = 0; });
 
+  // The Mac app hands its trackpad pinch over directly (mac/main.swift magnify): + spreads = closer.
+  window.cadgangPinch = (m) => { orbit.dist *= Math.exp(-m); };
+
   el.addEventListener('dblclick', (e) => {
     const p = hitAt(e);
     if (!p) return;

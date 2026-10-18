@@ -33,12 +33,12 @@ const section = { plane: new THREE.Plane(new THREE.Vector3(0, 0, -1), 0), axis: 
 const CAD_EXT = /\.(step|stp|iges|igs|brep)$/i;
 
 let statusTimer = null;
-function say(text, isError = false) {
+function say(text, isError = false, keep = false) {
   const el = $('#status');
   el.textContent = text;
   el.classList.toggle('err', isError);
   clearTimeout(statusTimer);
-  if (text && !isError) statusTimer = setTimeout(() => { el.textContent = ''; }, 4000);
+  if (text && !isError && !keep) statusTimer = setTimeout(() => { el.textContent = ''; }, 4000);
 }
 
 // Loading bar. A CAD file tessellates on the server in one call with no progress signal, so the bar runs on
@@ -1306,7 +1306,10 @@ async function shareWeb() {
     const res = await fetch('api/view/share', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: new Blob([len, head, ...sources.map((f) => f.buffer)]) });
     const d = await res.json();
     if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
-    try { await navigator.clipboard.writeText(d.url); say(`link copied: ${d.url}`); } catch { say(d.url); }
+    const shell = window.webkit?.messageHandlers?.cadgang;
+    if (shell) shell.postMessage({ cmd: 'copy', text: d.url });
+    else await navigator.clipboard.writeText(d.url).catch(() => {});
+    say(`link copied: ${d.url}`, false, true);
   } catch (e) { say(`share failed: ${e.message}`, true); }
 }
 async function openShare(id) {

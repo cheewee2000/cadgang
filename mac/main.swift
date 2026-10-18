@@ -21,6 +21,9 @@ let EXTS = ["step", "stp", "iges", "igs", "brep", "stl", "obj", "ply", "3mf", "g
 final class DropWebView: WKWebView {
     var tracer: PathTracer?
     var onFiles: (([URL]) -> Void)?
+    /// Trackpad pinch goes to the page as a plain call: since the page sat in PageBox, WebKit's DOM
+    /// gesture events stopped arriving. super is not called, so WebKit cannot zoom a second time.
+    override func magnify(with e: NSEvent) { evaluateJavaScript("window.cadgangPinch?.(\(e.magnification))") }
     private func files(_ s: NSDraggingInfo) -> [URL] {
         (s.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
     }
@@ -36,7 +39,10 @@ final class DropWebView: WKWebView {
 
 /// The window's content: the page over the Metal render view (render.swift). Flipped, so the page's
 /// viewport rect (top-left origin) is the render view's frame as is.
-final class PageBox: NSView { override var isFlipped: Bool { true } }
+final class PageBox: NSView {
+    override var isFlipped: Bool { true }
+    override func magnify(with e: NSEvent) { webIn(window)?.magnify(with: e) }   // a pinch that landed on the box, not the page
+}
 func webIn(_ win: NSWindow?) -> DropWebView? { win?.contentView?.subviews.lazy.compactMap { $0 as? DropWebView }.first }
 
 final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
@@ -204,6 +210,8 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         if cmd.hasPrefix("render"), let w = m.webView as? DropWebView { render(cmd, body, in: w) }
         // AirDrop the ?follow link: the sheet lists nearby devices; the iPad opens it in Safari.
         if cmd == "airdrop", let s = body["url"] as? String, let u = URL(string: s) { NSSharingService(named: .sendViaAirDrop)?.perform(withItems: [u]) }
+        // The page's clipboard API refuses after an await (the click's activation is spent), so the shell copies.
+        if cmd == "copy", let s = body["text"] as? String { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string) }
     }
 
     /// RENDER: the page drives a PathTracer that sits under it (render.swift).
