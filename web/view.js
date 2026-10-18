@@ -209,7 +209,7 @@ const addPart = (p, name) => (p.lines ? addLines(p.lines, p.name || name) : addM
 function listBodies() {
   const panel = $('#bodies');
   highlightBody(null);
-  panel.replaceChildren();
+  panel.replaceChildren(bodiesHead());
   panel.hidden = model.children.length < 2;
   // A body a later file repeats (the leg file opened over the bench that already holds the leg) would
   // draw twice in the same place and fight triangle by triangle: the same box to a micron → untick it.
@@ -239,7 +239,7 @@ function listBodies() {
     nm.addEventListener('click', (e) => {
       e.preventDefault();
       for (const o of model.children) setBodyVisible(o, e.shiftKey || o === m);
-      for (const r of panel.querySelectorAll('input')) r.checked = model.children[[...panel.children].indexOf(r.parentElement)].visible;
+      panel.querySelectorAll('input').forEach((r, i) => { r.checked = model.children[i].visible; });
     });
     row.addEventListener('pointerenter', () => highlightBody(m));
     row.addEventListener('pointerleave', () => highlightBody(null));
@@ -249,6 +249,32 @@ function listBodies() {
   paintRows();
   return dups.join(' · ');
 }
+/**
+ * The panel's title row: − folds it to just the title, + brings it back. Width drags at the
+ * bottom-right corner (CSS resize). Both are remembered per browser.
+ */
+const BODIES_KEY = 'cadgang.bodies';
+function bodiesHead() {
+  const panel = $('#bodies');
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(BODIES_KEY) || '{}'); } catch {}
+  if (saved.width) panel.style.width = `${saved.width}px`;
+  panel.classList.toggle('min', !!saved.min);
+  const head = document.createElement('div'); head.className = 'bodies-head';
+  const btn = document.createElement('button'); btn.className = 'ghost';
+  const paint = () => { const min = panel.classList.contains('min'); btn.textContent = min ? '+' : '−'; btn.title = min ? 'Show the bodies' : 'Fold the list'; };
+  btn.addEventListener('click', () => { panel.classList.toggle('min'); paint(); saveBodies(); });
+  paint();
+  head.append(Object.assign(document.createElement('span'), { textContent: 'BODIES' }), btn);
+  return head;
+}
+function saveBodies() {
+  const panel = $('#bodies');
+  try { localStorage.setItem(BODIES_KEY, JSON.stringify({ min: panel.classList.contains('min'), width: panel.style.width ? panel.offsetWidth : null })); } catch {}
+}
+// A corner drag sets an inline width; remember it.
+new ResizeObserver(() => { const p = $('#bodies'); if (p.style.width && !p.hidden && !p.classList.contains('min')) saveBodies(); }).observe($('#bodies'));
+
 /** Solve the explode vectors from the bodies at rest, then put the explode back. */
 function solveExplode() {
   const t0 = performance.now();
