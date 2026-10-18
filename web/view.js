@@ -119,6 +119,7 @@ function clearModel() {
     g.clear();
   }
   bbox = null;
+  setRender(false);
   ui.flat = false; $('#sideBtn').hidden = true;
   $('#bodies').replaceChildren(); $('#bodies').hidden = true;
   $('#explode').value = 0;
@@ -1099,6 +1100,63 @@ document.addEventListener('visibilitychange', focus);
   ws.onclose = () => setTimeout(connect, 1500);
 })();
 
+// ------------------------------------------------------------------ render
+// RENDER (K): path-traced global illumination (three-gpu-pathtracer, vendored at 0.0.23, the
+// last one for three r165). The visible bodies, a matte floor under them and a studio-gradient
+// sky; samples pile up while the view holds still and any orbit starts them over. Lines, grid,
+// edges, sky, markup and section caps sit it out, and the path tracer ignores clipping, so a
+// section shows whole bodies.
+const rt = { on: false, pt: null, floor: null, env: null, hidden: [], cam: new THREE.Matrix4(), proj: new THREE.Matrix4() };
+async function setRender(on) {
+  if (on === rt.on) return;
+  rt.on = on;
+  $('#renderBtn').classList.toggle('on', on);
+  if (!on) {
+    for (const o of rt.hidden) o.visible = true;
+    rt.hidden = [];
+    if (rt.floor) scene.remove(rt.floor);
+    scene.environment = null;
+    renderer.toneMapping = THREE.NoToneMapping;
+    return;
+  }
+  if (!rt.pt) {
+    say('loading the path tracer…');
+    const { WebGLPathTracer, GradientEquirectTexture } = await import('./vendor/three-gpu-pathtracer.module.js');
+    rt.pt = new WebGLPathTracer(renderer);
+    rt.pt.dynamicLowRes = true;   // a quick low-res pass while orbiting
+    rt.pt.bounces = 6;
+    rt.env = new GradientEquirectTexture();
+    rt.env.topColor.set(0xffffff); rt.env.bottomColor.set(0x6f6a64); rt.env.update();
+    rt.floor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial({ color: 0xf2f0ec, roughness: 0.9 }));
+  }
+  if (rt.on) syncRender();
+}
+/** Hand the scene to the path tracer again: on entering and after every action that changed the view state. */
+function syncRender() {
+  for (const o of rt.hidden) o.visible = true;
+  rt.hidden = [...scene.children, ...model.children.map((m) => m.userData.cap)]
+    .filter((o) => o?.visible && o !== model && o !== rt.floor && !o.isLight);
+  for (const o of rt.hidden) o.visible = false;
+  const b = new THREE.Box3().setFromObject(model), r = b.getSize(new THREE.Vector3()).length() || 1;
+  rt.floor.scale.setScalar(r * 40);
+  rt.floor.position.set((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, b.min.z - r * 1e-4);
+  scene.add(rt.floor);
+  scene.environment = rt.env;
+  scene.environmentIntensity = 0.8;
+  renderer.toneMapping = THREE.NeutralToneMapping;   // the lights plus the sky overexpose a linear canvas; Neutral keeps white white
+  scene.environmentRotation.set(Math.PI / 2, 0, 0);   // the gradient is Y-up, the model is Z-up
+  rt.pt.setScene(scene, camera);
+}
+function renderSample() {
+  camera.updateMatrixWorld();
+  if (rt.pt.camera !== camera || !rt.cam.equals(camera.matrixWorld) || !rt.proj.equals(camera.projectionMatrix)) {
+    rt.cam.copy(camera.matrixWorld); rt.proj.copy(camera.projectionMatrix);
+    rt.pt.setCamera(camera);   // any move starts the samples over
+  }
+  rt.pt.renderSample();
+}
+$('#renderBtn').addEventListener('click', () => { setRender(!rt.on); commit(); });
+
 // -------------------------------------------------------------------- loop
 
 function resize() {
@@ -1114,7 +1172,7 @@ new ResizeObserver(resize).observe(viewport);
   resize();
   applyCamera();
   if (sky.visible) { sky.position.copy(orbit.target); sky.scale.setScalar(orbit.dist * 50); sky.material.uniforms.center.value.copy(orbit.target); }
-  renderer.render(scene, camera);
+  if (rt.pt && rt.on) renderSample(); else renderer.render(scene, camera);
   measure.projectLabels();
   markup.projectLabels();
   requestAnimationFrame(loop);
@@ -1131,7 +1189,7 @@ fetch('/api/health').then((r) => r.json()).then((h) => {
     : navigator.clipboard.writeText(link).then(() => say(`copied ${link}`), () => say(link)));
 }).catch(() => {});
 // For headless drives: the scene objects behind the page.
-window.__view = { model, section, orbit, ui, measure, THREE, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
+window.__view = { model, section, orbit, ui, measure, rt, THREE, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
   project: (x, y, z) => { const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3(x, y, z).project(camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; } };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
@@ -1156,6 +1214,7 @@ const CMDS = [
   { key: 'w', label: 'Wireframe', run: () => toggle('wire', '#wireBtn'), btn: '#wireBtn', on: () => ui.wire },
   { key: 'g', label: 'Grid', run: () => toggle('grid', '#gridBtn'), btn: '#gridBtn', on: () => ui.grid },
   { key: 'c', label: 'Color parts', run: () => toggle('color', '#colorBtn'), btn: '#colorBtn', on: () => ui.color },
+  { key: 'k', label: 'Render (global illumination)', run: () => setRender(!rt.on), btn: '#renderBtn', on: () => rt.on },
   { key: 'o', label: 'Orthographic', run: () => setOrtho(!ui.ortho), btn: '#orthoBtn', on: () => ui.ortho },
   { key: 'l', label: 'Next look', btn: '#look', run: () => { const s = $('#look'); s.selectedIndex = (s.selectedIndex + 1) % s.options.length; s.dispatchEvent(new Event('change', { bubbles: true })); } },
   { key: 'm', label: 'Measure', run: () => setMeasure(!measure.on), btn: '#measureBtn', on: () => measure.on },
@@ -1204,6 +1263,7 @@ function snap() {
 function commit() {
   const s = snap();
   if (s === history.list[history.i]) return;
+  if (rt.pt && rt.on) syncRender();
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
   try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho })); } catch {}
 }

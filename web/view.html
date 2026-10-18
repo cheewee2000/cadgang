@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="cwandt.css" />
   <link rel="stylesheet" href="style.css" />
   <script type="importmap">
-    { "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/jsm/" } }
+    { "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/jsm/", "three/examples/jsm/": "./vendor/jsm/", "three-mesh-bvh": "./vendor/three-mesh-bvh.module.js" } }
   </script>
 </head>
 <body>
@@ -57,6 +57,7 @@
         <button id="wireBtn" class="ghost" title="Wireframe (W)">Wire</button>
         <button id="colorBtn" class="ghost" title="A colour per body or layer">Color</button>
         <button id="orthoBtn" class="ghost" title="Orthographic (O)">Ortho</button>
+        <button id="renderBtn" class="ghost" title="Render: path-traced global illumination, sharpens while the view holds still (K)">Render</button>
         <select id="look" class="ghost" title="Render preset">
           <option value="shaded">Shaded</option><option value="metal">Metal</option><option value="plastic">Plastic</option>
           <option value="glass">Glass</option><option value="xray">X-ray</option><option value="normals">Normals</option>
