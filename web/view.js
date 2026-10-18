@@ -654,6 +654,9 @@ window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
   const t0 = performance.now();
   clearModel();
   subject = paths.join('|');   // markups attach to the file by path
+  // The address says what is open, from the first byte: a reload brings the file back, and the Mac app
+  // reads its windows' addresses to reopen the same files after a quit or a crash, even one mid-load.
+  if (!follow) window.history.replaceState(null, '', `${location.pathname}?open=${encodeURIComponent(subject)}`);   // window.history: `history` here is the undo stack
   let shown = 0, label = '';
   for (const p of paths) {
     const name = p.split('/').pop();
@@ -668,9 +671,6 @@ window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
     } catch (e) { progressEnd(); loadFailed(name, e); return; }
   }
   if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0), keep);
-  // The address says what is open: a reload brings the file back, and the Mac app reads its
-  // windows' addresses to reopen the same files after a quit or a crash.
-  if (shown && !follow) window.history.replaceState(null, '', `${location.pathname}?open=${encodeURIComponent(subject)}`);
 };
 
 async function filesToBuffers(fileList) {
