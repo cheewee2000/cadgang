@@ -78,7 +78,7 @@ export function pickMaterial(m, key) {
 export function materialFor(THREE, m) {
   const d = MATERIALS[materialOf(m)];
   const mat = new THREE.MeshPhysicalMaterial({ color: d.color, metalness: d.metal, roughness: d.rough });
-  if (d.trans) Object.assign(mat, { transmission: 1, ior: d.ior, thickness: 2 });
+  if (d.trans) Object.assign(mat, { transmission: 1, ior: d.ior, thickness: 0 });   // thin-walled in the live view: a thickness bent what is behind it per triangle (shattered look); the Metal render refracts for real
   // Plastic, anodizing, ceramic and epoxy are whatever colour the file says.
   if ((d.fileColor || d === MATERIALS.plastic || d === MATERIALS.gloss) && m.userData.color) mat.color.setRGB(...m.userData.color, THREE.SRGBColorSpace);
   return mat;
