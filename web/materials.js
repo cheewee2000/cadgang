@@ -22,7 +22,10 @@ export const MATERIALS = {
   acrylic: { label: 'Acrylic', color: 0xf7fbff, metal: 0, rough: 0.02, trans: 1, ior: 1.49 },
   rubber: { label: 'Rubber', color: 0x2a2a2a, metal: 0, rough: 0.95 },
   wood: { label: 'Wood', color: 0xb98a5a, metal: 0, rough: 0.75 },
-  pcb: { label: 'PCB', color: 0x1f5a2e, metal: 0, rough: 0.45 },
+  pcb: { label: 'PCB green', color: 0x1f5a2e, metal: 0, rough: 0.45 },
+  pcb_black: { label: 'PCB black', color: 0x141516, metal: 0, rough: 0.4 },
+  pcb_white: { label: 'PCB white', color: 0xf1f1ec, metal: 0, rough: 0.45 },
+  pcb_blue: { label: 'PCB blue', color: 0x1c3f8c, metal: 0, rough: 0.45 },
   ceramic: { label: 'Ceramic', color: 0xd9cfb4, metal: 0, rough: 0.55, fileColor: true },
   epoxy: { label: 'Epoxy (IC body)', color: 0x1c1c1e, metal: 0, rough: 0.6, fileColor: true },
 };
@@ -31,6 +34,10 @@ export const MATERIALS = {
 // "for the sub-board" is steel), and anodizing beats "clear".
 const GUESS = [
   // what it is made of, when the name says so
+  [/black (solder ?mask|pcb)/i, 'pcb_black'],
+  [/white (solder ?mask|pcb)/i, 'pcb_white'],
+  [/blue (solder ?mask|pcb)/i, 'pcb_blue'],
+  [/green (solder ?mask|pcb)|solder ?mask/i, 'pcb'],
   [/black.?anod|anod.*black/i, 'black_al'],
   [/anodi[sz]/i, 'anodized'],
   [/glass|sapphire|lens|window|mirror/i, 'glass'],

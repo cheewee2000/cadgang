@@ -18,5 +18,8 @@ test('material words in the name win', () => {
     ['U7 MCU STM32H743', ['carrier PCB v19', 'MCU'], 'plastic'],
     ['PCB carrier v19', ['carrier PCB v19'], 'pcb'],
     ['M3 nut', [], 'steel'],
+    ['PCB carrier v19 (1.0 mm, black soldermask)', ['carrier PCB v19'], 'pcb_black'],
+    ['PCB sensor sub-board (white soldermask)', [], 'pcb_white'],
+    ['blue PCB', [], 'pcb_blue'],
   ]) assert.equal(guessMaterial(name, path), want, name);
 });
