@@ -320,6 +320,33 @@ function setPartAxis(m, n) {
 // Does the vector move the body at all? The base part's radial offset is a rounding away from zero.
 const moves = (m, v) => v.length() > 0.01 * (m.geometry.boundingBox?.getSize(new THREE.Vector3()).length() ?? 1);
 const maxTravel = (m) => m.userData.pull ?? explodeVec(m).length() * 2;   // the solver's full travel is twice its offset
+// The user's explode edits (axis, maximum travel) are saved per file and come back on load and on a
+// re-export, by body name: `${name}#${n}` for the n-th body of that name.
+const partKey = (m) => { const all = model.children; return `${m.userData.name}#${all.filter((o, i) => o.userData.name === m.userData.name && i < all.indexOf(m)).length}`; };
+let partsReady = false, partsSaved = '{}', partsTimer = null;
+function partsState() {
+  const out = {};
+  for (const m of model.children) if (m.userData.axis || m.userData.pull != null) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null };
+  return out;
+}
+function saveParts() {
+  if (!partsReady || !subject) return;
+  const json = JSON.stringify(partsState());
+  if (json === partsSaved) return;
+  partsSaved = json;
+  clearTimeout(partsTimer);
+  partsTimer = setTimeout(() => api('/parts', { method: 'PUT', body: { subject, parts: JSON.parse(json) } }).catch((e) => say(e.message, true)), 300);
+}
+function loadParts() {
+  partsReady = false;
+  const s = subject;
+  api(`/parts?subject=${encodeURIComponent(s)}`).then((d) => {
+    if (s !== subject) return;
+    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; } }
+    partsSaved = JSON.stringify(partsState()); partsReady = true;
+    applyExplode();
+  }).catch(() => { partsReady = true; });
+}
 function applyExplode() {
   const k = parseFloat($('#explode').value) / 100;
   const done = new Set();
@@ -335,6 +362,7 @@ function applyExplode() {
   };
   for (const m of model.children) place(m);
   measure.invalidate();
+  saveParts();
 }
 $('#explode').addEventListener('input', applyExplode);
 function setExplode(v) { $('#explode').value = Math.max(0, Math.min(100, v)); applyExplode(); }
@@ -366,6 +394,7 @@ function finishLoad(name, ms, keep = false) {
   if (!keep) { if (ui.flat) setView('3'); fit(); }   // a reload of a changed file keeps the camera
   edges.visible = ui.edges;
   say(dups ? `${name} in ${ms} ms · ${dups}` : `${name} in ${ms} ms`);
+  loadParts();
   loadMarkup();
   postSnapshot();
 }

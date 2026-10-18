@@ -45,10 +45,22 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     const v = new THREE.Vector3(...p).project(getCamera());
     return { x: (v.x + 1) / 2 * r.width, y: (1 - v.y) / 2 * r.height, behind: v.z > 1 };
   };
+  // A mark rides the part its first point landed on: item.body = `${name}#${n}` (the n-th body of that
+  // name, so it survives a re-export), and its points are in that part's REST frame (exploded offset
+  // taken off). Each frame the mark is moved by the part's current offset, so leaders explode and
+  // collapse with their part. Marks off any part (body unset) stay in world space.
+  let hitBody = null;
+  const keyOf = (m) => { const all = getTargets(); const n = all.filter((o, i) => o.userData.name === m.userData.name && i < all.indexOf(m)).length; return `${m.userData.name}#${n}`; };
+  const byKey = (k) => { const i = k.lastIndexOf('#'), name = k.slice(0, i), n = +k.slice(i + 1); return getTargets().filter((o) => o.userData.name === name)[n] ?? null; };
+  const ZERO = new THREE.Vector3();
+  const shift = (item) => (item.body && byKey(item.body)?.position) || ZERO;
+  const toWorld = (item, p) => new THREE.Vector3(...p).add(shift(item)).toArray();
+  const toRest = (item, p) => new THREE.Vector3(...p).sub(shift(item)).toArray();
   function pointAt(e) {
     const cam = getCamera();
     raycaster.setFromCamera(ndc(e), cam);
     const hit = raycaster.intersectObjects(getTargets(), false)[0];
+    hitBody = hit?.object ?? null;
     if (hit) return [hit.point.x, hit.point.y, hit.point.z];
     const n = new THREE.Vector3(); cam.getWorldDirection(n);
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, orbit.target);
@@ -93,22 +105,20 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       const dir = pts[1].clone().sub(pts[0]);
       if (dir.length() > scale * 0.3) {
         objs.push(fatLine(pts, lineMat));
-        const cone = new THREE.Mesh(new THREE.ConeGeometry(scale * 0.35, scale, 12), solidMat);
-        cone.position.copy(pts[1]);
-        cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
-        objs.push(cone);
-      } else {
-        const dot = new THREE.Mesh(new THREE.SphereGeometry(scale * 0.3, 12, 8), solidMat);
-        dot.position.copy(pts[1]);
-        objs.push(dot);
       }
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(scale * 0.3, 12, 8), solidMat);   // a leader ends in a dot
+      dot.position.copy(pts[1]);
+      objs.push(dot);
       if (item.text && item.normal) objs.push(planeText(item, pts, scale));
     } else if (item.kind === 'note') {
       const dot = new THREE.Mesh(new THREE.SphereGeometry(scale * 0.25, 12, 8), solidMat);
       dot.position.copy(pts[0]);
       objs.push(dot);
     }
-    for (const o of objs) { o.renderOrder = Math.max(o.renderOrder, 5); o.userData.item = item; group.add(o); }
+    const holder = new THREE.Group();   // moved by the part's explode offset each frame
+    holder.userData.item = item; holder.position.copy(shift(item));
+    for (const o of objs) { o.renderOrder = Math.max(o.renderOrder, 5); o.userData.item = item; holder.add(o); }
+    group.add(holder);
     return objs;
   }
 
@@ -124,7 +134,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     ctx.font = `${px}px "Space Mono", monospace`; ctx.fillStyle = '#000000'; ctx.textBaseline = 'middle';
     ctx.fillText(item.text, px / 2, c.height / 2);
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-    const h = scale * 1.6, w = h * c.width / c.height;
+    const h = scale * 1.1, w = h * c.width / c.height;
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, depthTest: false, transparent: true, side: THREE.DoubleSide }));
     const n = new THREE.Vector3(...item.normal), camUp = new THREE.Vector3(...item.up), camRight = camUp.clone().cross(n);
     const away = tail.clone().sub(head); away.addScaledVector(n, -away.dot(n));   // head → tail, in the plane
@@ -144,7 +154,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   }
 
   function rebuild() {
-    for (const o of [...group.children]) { group.remove(o); o.geometry?.dispose(); if (o.userData.own) { o.material.map?.dispose(); o.material.dispose(); } }
+    for (const o of [...group.children]) { group.remove(o); o.traverse((x) => { x.geometry?.dispose(); if (x.userData.own) { x.material.map?.dispose(); x.material.dispose(); } }); }
     for (const l of layer.querySelectorAll('.note-label')) l.remove();
     for (const item of items) {
       build(item);
@@ -164,10 +174,11 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   function projectLabels() {
     const r = canvas.getBoundingClientRect();
     for (const m of mats.values()) m.line.resolution.set(r.width, r.height);
+    for (const h of group.children) h.position.copy(shift(h.userData.item));
     for (const el of layer.querySelectorAll('.note-label')) {
       const item = items.find((i) => i.id === el.dataset.id);
       if (!item) continue;
-      const s = toScreen(item.points[0]);
+      const s = toScreen(toWorld(item, item.points[0]));
       el.style.left = `${s.x}px`; el.style.top = `${s.y}px`;
       el.hidden = s.behind;
     }
@@ -194,9 +205,10 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (!p) return;
     canvas.setPointerCapture(e.pointerId);
     last = { x: e.clientX, y: e.clientY, id: e.pointerId };
-    if (using === 'pen') current = { id: uid(), kind: 'pen', points: [p], ...pen };
-    else if (using === 'arrow') current = { id: uid(), kind: 'arrow', points: [p, p], ...pen, ...faceFrame(e) };
-    else if (using === 'note') { startNote(p, e); }   // startNote reads pen for its colour
+    const body = hitBody ? { body: keyOf(hitBody) } : {};
+    if (using === 'pen') { current = { id: uid(), kind: 'pen', ...body, ...pen }; current.points = [toRest(current, p)]; }
+    else if (using === 'arrow') { current = { id: uid(), kind: 'arrow', ...body, ...pen, ...faceFrame(e) }; const q = toRest(current, p); current.points = [q, q]; }
+    else if (using === 'note') { startNote(p, e, null, body.body); }   // startNote reads pen for its colour
     else if (using === 'erase') { eraseAt(e); }
     rebuild();
   }, { capture: true });
@@ -208,11 +220,11 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (current.kind === 'pen') {
       if (Math.hypot(e.clientX - last.x, e.clientY - last.y) < 3) return;
       const p = pointAt(e); if (!p) return;
-      current.points.push(p); last = { x: e.clientX, y: e.clientY };
+      current.points.push(toRest(current, p)); last = { x: e.clientX, y: e.clientY };
     } else if (current.kind === 'arrow') {
       // the tail (text end) slides on the plane of the face the head is on; edge-on or off a face, on
       // the plane through the head that faces the camera, and the text then faces the screen
-      const head = new THREE.Vector3(...current.points[1]);
+      const head = new THREE.Vector3(...toWorld(current, current.points[1]));
       let p = current.normal && onPlane(e, head, new THREE.Vector3(...current.normal));
       if (!p) {
         delete current.normal; delete current.up;
@@ -220,7 +232,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
         p = onPlane(e, head, n);
       }
       if (!p) return;
-      current.points[0] = p;
+      current.points[0] = toRest(current, p);
     }
     rebuild();
   }, { capture: true });
@@ -233,14 +245,14 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (ok) {
       const item = { ...current, at: new Date().toISOString() };
       items.push(item); changed();
-      if (item.kind === 'arrow') startNote(item.points[0], e, item);   // an arrow says something: ask what, where the drag ended
+      if (item.kind === 'arrow') startNote(toWorld(item, item.points[0]), e, item);   // an arrow says something: ask what, where the drag ended
     }
     current = null;
     rebuild();
   }, { capture: true });
 
   /** Note input at p; with `item`, the text goes on that item (an arrow) instead of a new note. */
-  function startNote(p, e, item = null) {
+  function startNote(p, e, item = null, body = undefined) {   // p in world space
     noteInput?.remove();
     const el = document.createElement('input');
     el.className = 'note-input';
@@ -258,7 +270,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
         // By id: the server's change echo reloads `items` while the user types, so `item` may be stale.
         const live = item && (items.find((i) => i.id === item.id) || item);
         if (live) live.text = el.value.trim();
-        else items.push({ id: uid(), kind: 'note', points: [p], text: el.value.trim(), color: pen.color, at: new Date().toISOString() });
+        else { const n = { id: uid(), kind: 'note', body, text: el.value.trim(), color: pen.color, at: new Date().toISOString() }; n.points = [toRest(n, p)]; items.push(n); }
         changed();
       }
       el.remove(); noteInput = null; rebuild();
@@ -273,7 +285,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     let best = null, bestD = 12;
     for (const item of items) {
       for (const p of item.points) {
-        const s = toScreen(p);
+        const s = toScreen(toWorld(item, p));
         const d = Math.hypot(s.x - x, s.y - y);
         if (d < bestD) { bestD = d; best = item; }
       }
@@ -320,7 +332,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     ctx.textBaseline = 'bottom';
     for (const item of items) {
       if (!item.text || item.normal) continue;   // planar text is in the render already
-      const s = toScreen(item.points[0]);
+      const s = toScreen(toWorld(item, item.points[0]));
       if (s.behind) continue;
       const text = item.text, w = ctx.measureText(text).width + 12 * k, h = 20 * k;
       ctx.fillStyle = '#ffffff'; ctx.fillRect(s.x * k - w / 2, s.y * k - 12 * k - h, w, h);

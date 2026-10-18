@@ -87,6 +87,7 @@ export function pack(m) {
  *                                       a new one first and waits up to ?wait= seconds (default 3)
  *   GET     /api/view/screen.png        the image alone
  *   POST    /api/view/open {paths}      tell every open page to open these files (the MCP tool)
+ *   GET|PUT /api/view/parts?subject=    per-file explode axes and maxima, by body name
  */
 export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   const watch = fileWatcher(broadcast);
@@ -109,6 +110,21 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       fsSync.writeFileSync(markupPath(subject), JSON.stringify(markups));
       broadcast({ type: 'markup_changed', subject, count: markups.length });
       res.json({ subject, markups });
+    } catch (e) { next(e); }
+  });
+
+  // Per-file explode settings the user made (axis picked off a face, maximum travel set by a drag),
+  // keyed `${body name}#${n}` so a re-exported file gets them back without redoing them.
+  const partsPath = (subject) => path.join(dataDir, 'explode', `${slug(subject)}.json`);
+  r.get('/parts', (req, res) => { const subject = subjectOf(req); let parts = {}; try { parts = JSON.parse(fsSync.readFileSync(partsPath(subject), 'utf8')); } catch {} res.json({ subject, parts }); });
+  r.put('/parts', (req, res, next) => {
+    try {
+      const subject = subjectOf(req);
+      if (!subject) throw Object.assign(new Error('No file is open'), { status: 400 });
+      const parts = req.body?.parts && typeof req.body.parts === 'object' ? req.body.parts : {};
+      fsSync.mkdirSync(path.dirname(partsPath(subject)), { recursive: true });
+      fsSync.writeFileSync(partsPath(subject), JSON.stringify(parts));
+      res.json({ subject, parts });
     } catch (e) { next(e); }
   });
 

@@ -43,7 +43,7 @@ server.registerTool(
 
 The user never has to take a screenshot: the open CADgang window renders itself and posts the PNG here. Call this whenever they point at something — "this", "here", "the edge I circled", "the hole I noted" — or to check what is on their screen.
 
-Markups are anchored on the model in 3D (points are world coordinates in mm), so a stroke or an arrow tells you WHERE on the part; notes carry text. Kinds: 'pen' (points: a polyline), 'arrow' (points: [tail, head]; the head is what it points at, the tail holds its text; tail == head is a dot; with 'normal', the text lies on that face's plane), 'note' (points: [anchor], text). The subject is the file path (or dropped file name) on screen; the camera is yaw/pitch/dist/target.
+Markups are anchored on the model in 3D (points are world coordinates in mm), so a stroke or an arrow tells you WHERE on the part; notes carry text. Kinds: 'pen' (points: a polyline), 'arrow' (points: [tail, head]; the head is what it points at, the tail holds its text; the head is drawn as a dot, tail == head is a dot alone; with 'normal', the text lies on that face's plane). A mark with 'body' ("name#n") rides that part: its points are in the part's rest position (unexploded), 'note' (points: [anchor], text). The subject is the file path (or dropped file name) on screen; the camera is yaw/pitch/dist/target.
 
 If no window is open you get the last snapshot (if any) and fresh:false — say so.
 
