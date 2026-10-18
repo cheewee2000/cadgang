@@ -372,6 +372,17 @@ function paintRows() {
  * body, so it rides the explode; it shares the geometry and dies on leave.
  */
 let hoverOverlay = null;
+let hovered = null;
+/** The body under the mouse: its overlay, and its row in the bodies list (or the folded group row that holds it). */
+function hoverBody(m) {
+  if (m === hovered) return;
+  hovered = m;
+  highlightBody(m);
+  for (const r of $('#bodies').querySelectorAll('.hover')) r.classList.remove('hover');
+  let row = m && bodyBoxes().find((cb) => cb._body === m)?.closest('label');
+  while (row && !row.offsetParent) row = row.parentElement.closest('.group')?.querySelector(':scope > .group-row');
+  if (row) { row.classList.add('hover'); row.scrollIntoView({ block: 'nearest' }); }
+}
 function highlightBody(m) {
   if (hoverOverlay) { hoverOverlay.parent?.remove(hoverOverlay); hoverOverlay.material.dispose(); hoverOverlay = null; }
   if (!m) return;
@@ -622,7 +633,13 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     pan(now.x - before.x, now.y - before.y);
     return;
   }
-  if (!drag) { if (measure.on) measure.hover(e); else renderer.domElement.classList.toggle('oncap', onCap(e) || (e.pointerType !== 'touch' && !!partAt(e))); return; }
+  if (!drag) {
+    if (measure.on) { measure.hover(e); return; }
+    const p = e.pointerType !== 'touch' ? partAt(e) : null;
+    hoverBody($('[data-tool].on') ? null : p?.body ?? null);   // no tool chosen: the body under the mouse and its row light up
+    renderer.domElement.classList.toggle('oncap', onCap(e) || !!p);
+    return;
+  }
   if (drag.id !== e.pointerId) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.x = e.clientX; drag.y = e.clientY;
@@ -659,6 +676,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   drag = null;
   touches.delete(e.pointerId);
 });
+renderer.domElement.addEventListener('pointerleave', () => hoverBody(null));
 renderer.domElement.addEventListener('pointercancel', (e) => { drag = null; touches.delete(e.pointerId); });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 const raycaster = new THREE.Raycaster();
