@@ -102,7 +102,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
         dot.position.copy(pts[1]);
         objs.push(dot);
       }
-      if (item.text && item.normal) objs.push(planeText(item, pts[0], scale, dir.length() <= scale * 0.3));
+      if (item.text && item.normal) objs.push(planeText(item, pts, scale));
     } else if (item.kind === 'note') {
       const dot = new THREE.Mesh(new THREE.SphereGeometry(scale * 0.25, 12, 8), solidMat);
       dot.position.copy(pts[0]);
@@ -113,8 +113,9 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   }
 
   // An arrow's text drawn flat on the plane of the face it points at: a label texture on a quad in
-  // that plane, upright along the up the arrow was made with. Over a dot it sits above the dot.
-  function planeText(item, at, scale, overDot) {
+  // that plane, running along the arrow and starting at its tail (read left to right as seen when it
+  // was drawn: an arrow pointing right puts its text on its left end). A dot's text sits upright above it.
+  function planeText(item, [tail, head], scale) {
     const c = document.createElement('canvas'), ctx = c.getContext('2d'), px = 48;
     ctx.font = `${px}px "Space Mono", monospace`;
     c.width = Math.ceil(ctx.measureText(item.text).width + px); c.height = Math.ceil(px * 1.6);
@@ -123,12 +124,21 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     ctx.font = `${px}px "Space Mono", monospace`; ctx.fillStyle = '#000000'; ctx.textBaseline = 'middle';
     ctx.fillText(item.text, px / 2, c.height / 2);
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-    const h = scale * 2.6, w = h * c.width / c.height;
+    const h = scale * 1.6, w = h * c.width / c.height;
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, depthTest: false, transparent: true, side: THREE.DoubleSide }));
-    const n = new THREE.Vector3(...item.normal), u = new THREE.Vector3(...item.up), r = u.clone().cross(n);
+    const n = new THREE.Vector3(...item.normal), camUp = new THREE.Vector3(...item.up), camRight = camUp.clone().cross(n);
+    const away = tail.clone().sub(head); away.addScaledVector(n, -away.dot(n));   // head → tail, in the plane
+    let r = camRight, u = camUp;
+    const along = away.length() > scale * 0.3;   // an arrow, not a dot
+    if (along) {
+      away.normalize();
+      r = away.dot(camRight) < 0 ? away.clone().negate() : away.clone();   // never upside down
+      u = n.clone().cross(r);
+    }
     mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(r, u, n));
-    mesh.position.copy(at);
-    if (overDot) mesh.position.addScaledVector(u, h * 0.9);
+    mesh.position.copy(tail);
+    if (along) mesh.position.addScaledVector(away, w / 2 + scale * 0.2);   // starts at the tail, away from the head
+    else mesh.position.addScaledVector(u, h * 0.9);   // a dot: above it
     mesh.renderOrder = 6; mesh.userData.own = true;
     return mesh;
   }

@@ -45,9 +45,9 @@
     <div id="viewport">
       <div id="progress" class="progress" hidden><div></div></div>
       <div class="hud hud-tl">
-        <span class="sect" id="sectAxis" data-axis="" title="Section plane: pick an axis, slide it or drag the cut face, flip the kept side">Section
+        <span class="sect" id="sectAxis" data-axis="" title="Section plane: pick an axis, drag the cut face to move it, flip the kept side">Section
           <button class="ghost on" data-sect="">Off</button><button class="ghost" data-sect="x">X</button><button class="ghost" data-sect="y">Y</button><button class="ghost" data-sect="z">Z</button>
-          <input id="sectPos" type="range" min="0" max="1000" value="500" disabled />
+          <input id="sectPos" type="range" min="0" max="1000" value="500" disabled hidden />
           <button id="sectFlip" class="ghost" title="Invert which side is kept" disabled>Invert</button>
         </span>
         <div id="bodies" class="bodies" hidden title="Bodies: tick to show, click a name to see only it, shift-click for all"></div>
