@@ -58,6 +58,21 @@ app.use('/api', (req, res, next) => {
 // Only the desktop app lets a LAN client open local paths (mayReadLocal), so only it offers the link.
 const lan = () => process.env.CADGANG_DESKTOP === '1' && Object.values(os.networkInterfaces()).flat().find((i) => i.family === 'IPv4' && !i.internal)?.address || null;
 app.get('/api/health', (req, res) => res.json({ ok: true, version: VERSION, clients: wss.clients.size, lan: lan(), port: PORT, cells: cells.filePath }));
+/** The open files: one per page that announced its subject (a ?follow page never does), the focused
+ *  one flagged. An iPad follower shows them as tabs and trails the flagged one (v0.14.12: before it
+ *  only ever saw the window that last posted a snapshot). */
+function tabs() {
+  const seen = new Map();
+  for (const c of wss.clients) {
+    if (!c.subject || c.readyState !== 1) continue;
+    const t = seen.get(c.subject) ?? { subject: c.subject, active: false };
+    if (c === active) t.active = true;
+    seen.set(c.subject, t);
+  }
+  return [...seen.values()];
+}
+const broadcastTabs = () => broadcast({ type: 'tabs', tabs: tabs() });
+app.get('/api/view/tabs', (req, res) => res.json({ tabs: tabs() }));
 app.use('/api/view', viewRouter({ dataDir: DATA, broadcast }));
 // The OCCT WASM heap only ever grows; near its 2 GB cap every operation fails with malloc errors and
 // nothing crashes, so the supervisor never restarts it. Leave on purpose between requests instead.
@@ -126,7 +141,14 @@ cells.onChange(() => broadcast({ type: 'cells_changed', revision: cells.revision
 wss.on('connection', (ws) => {
   ws.send(JSON.stringify({ type: 'hello', version: VERSION, cellsRevision: cells.revision }));
   active ??= ws;
-  ws.on('message', (m) => { try { if (JSON.parse(m).type === 'focus') active = ws; } catch {} });
+  ws.on('message', (m) => {
+    try {
+      const msg = JSON.parse(m);
+      if (msg.type === 'focus' && active !== ws) { active = ws; broadcastTabs(); }
+      if (msg.type === 'open_subject') { ws.subject = String(msg.subject || ''); broadcastTabs(); }
+    } catch {}
+  });
+  ws.on('close', () => { if (ws.subject) broadcastTabs(); });
 });
 
 server.listen(PORT, () => console.log(`CADgang ${VERSION} at http://localhost:${PORT} (data: ${DATA})`));

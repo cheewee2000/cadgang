@@ -157,6 +157,9 @@ select.ghost:hover { opacity: 0.55; }
 /* body list */
 .bodies { position: absolute; left: var(--sp-3); top: var(--sp-3); z-index: 2; display: flex; flex-direction: column; gap: 2px; max-height: 60%; overflow: auto; background: var(--paper); border: var(--bw-hair) solid var(--rule); padding: var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); }
 .bodies[hidden] { display: none; }
+.tabs { display: flex; align-items: center; gap: var(--sp-1); padding: 4px var(--sp-4); border-bottom: var(--bw-hair) solid var(--rule); flex: 0 0 auto; overflow-x: auto; }
+.tabs[hidden] { display: none; }
+.tabs button { font-size: var(--fs-12); padding: 4px 8px; white-space: nowrap; }
 .bodies label { display: flex; align-items: center; gap: var(--sp-2); cursor: pointer; white-space: nowrap; }
 .bodies input { accent-color: var(--ink); margin: 0; }
 .bodies span:hover { text-decoration: underline; }

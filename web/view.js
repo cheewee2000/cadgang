@@ -690,6 +690,7 @@ async function openBuffers(files) {
   const t0 = performance.now();
   clearModel();
   subject = files.map((f) => f.name).join('|');   // bytes have no path: markups attach by name
+  announce(); renderTabs();
 
   let shown = 0, label = '';
   for (const { name, buffer } of files) {
@@ -713,9 +714,11 @@ window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
   // turns window.open into a window). A blocked popup falls back to opening in place.
   if (!keep && model.children.length && paths.join('|') !== subject
       && window.open(`${location.pathname}?open=${encodeURIComponent(paths.join('|'))}`)) return;
+  const sameFile = paths.join('|') === subject;   // the camera stays only for a reload of the file on screen
   const t0 = performance.now();
   clearModel();
   subject = paths.join('|');   // markups attach to the file by path
+  announce(); renderTabs();
   // The address says what is open, from the first byte: a reload brings the file back, and the Mac app
   // reads its windows' addresses to reopen the same files after a quit or a crash, even one mid-load.
   if (!follow) window.history.replaceState(null, '', `${location.pathname}?open=${encodeURIComponent(subject)}`);   // window.history: `history` here is the undo stack
@@ -732,7 +735,7 @@ window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
       shown++; label = name; progressEnd(name, performance.now() - tf);
     } catch (e) { progressEnd(); loadFailed(name, e); return; }
   }
-  if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0), keep);
+  if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0), keep && sameFile);
 };
 
 async function filesToBuffers(fileList) {
@@ -878,7 +881,24 @@ let subject = '';   // what is open: the file path(s) from the shell, or the dro
 // has open and follows when that changes. It is never Claude's eyes (no focus, no snapshots);
 // its markups reach the Mac's window through the markup_changed broadcast like any other page's.
 const follow = new URLSearchParams(location.search).has('follow');
-const followTo = (s) => { if (follow && s && s !== subject && s.startsWith('/')) window.cadgangOpen(s.split('|'), { keep: true }); };
+let following = follow;   // trailing the Mac's focused window; tapping a tab pins the iPad to that file until FOLLOW
+const followTo = (s) => { if (follow && following && s && s !== subject && s.startsWith('/')) window.cadgangOpen(s.split('|'), { keep: true }); };
+// Every page tells the server what it has open, so a follower can list the Mac's windows as tabs.
+function announce() { if (!follow && subject && ws?.readyState === 1) ws.send(JSON.stringify({ type: 'open_subject', subject })); }
+// The tab strip (follower only): the Mac's open files, ● on the one in front; FOLLOW trails that one.
+let tabList = [];
+function renderTabs() {
+  if (!follow) return;
+  const bar = $('#tabs');
+  bar.hidden = tabList.length === 0;
+  const btn = (text, on, title, onclick) => Object.assign(document.createElement('button'), { className: 'ghost' + (on ? ' on' : ''), textContent: text, title, onclick });
+  bar.replaceChildren(
+    btn('FOLLOW', following, 'Show whatever the Mac has in front', () => { following = true; renderTabs(); followTo(tabList.find((t) => t.active)?.subject); }),
+    ...tabList.map((t) => btn(t.subject.split('|').map((p) => p.split('/').pop()).join(' + ') + (t.active ? ' ●' : ''), t.subject === subject, t.subject,
+      () => { following = false; renderTabs(); if (t.subject !== subject) window.cadgangOpen(t.subject.split('|'), { keep: true }); })),
+  );
+}
+function setTabs(tabs) { tabList = tabs; renderTabs(); if (following) followTo(tabs.find((t) => t.active)?.subject); }
 function markupChanged(items) {
   clearTimeout(markupTimer);
   markupTimer = setTimeout(() => {
@@ -934,7 +954,7 @@ document.addEventListener('pointerdown', focus);
 document.addEventListener('visibilitychange', focus);
 (function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-  ws.onopen = focus;
+  ws.onopen = () => { focus(); announce(); };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'hello' && msg.version) { if (pageVersion && pageVersion !== msg.version) location.reload(); pageVersion = msg.version; }
@@ -943,6 +963,7 @@ document.addEventListener('visibilitychange', focus);
     if (msg.type === 'open' && msg.paths?.length) window.cadgangOpen(msg.paths);   // pushed from MCP
     if (msg.type === 'drawing' && msg.spec) makeDrawing(msg.spec);
     if (msg.type === 'subject') followTo(msg.subject);
+    if (msg.type === 'tabs') setTabs(msg.tabs || []);
     if (msg.type === 'file_changed' && subject.split('|').includes(msg.path)) { say('file changed, reloading…'); window.cadgangOpen(subject.split('|'), { keep: true }); }
   };
   ws.onclose = () => setTimeout(connect, 1500);
@@ -988,7 +1009,7 @@ if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
 // ?section=z:0.3 and ?explode=0.4 set the tools once the file is in (a pushed view, a test harness).
 const params = new URLSearchParams(location.search);
 const openArg = params.get('open');
-if (follow) fetch('/api/view/screen').then((r) => r.json()).then((d) => followTo(d.screen?.subject)).catch(() => {});
+if (follow) fetch('/api/view/tabs').then((r) => r.json()).then((d) => { setTabs(d.tabs || []); if (!d.tabs?.length) return fetch('/api/view/screen').then((r) => r.json()).then((s) => followTo(s.screen?.subject)); }).catch(() => {});
 if (openArg) window.cadgangOpen(openArg.split('|')).then(() => {
   const sec = params.get('section')?.match(/^([xyz]):([\d.]+)$/);
   if (sec) { $('#sectPos').value = Math.round(parseFloat(sec[2]) * 1000); setSectionAxis(sec[1]); }
