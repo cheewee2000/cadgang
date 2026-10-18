@@ -284,6 +284,12 @@ function listBodies() {
     }
   };
   render(root, panel, 0);
+  const all = document.createElement('button'); all.className = 'ghost bodies-all'; all.textContent = 'SHOW ALL'; all.title = 'Show every body';
+  all.addEventListener('click', () => {
+    for (const m of model.children) setBodyVisible(m, true);
+    syncRows();   // body ticks on, group ticks full (not half)
+  });
+  panel.append(all);
   syncRows();
   paintRows();
   return dups.join(' · ');
@@ -305,12 +311,7 @@ function bodiesHead() {
   const paint = () => { const min = panel.classList.contains('min'); btn.textContent = min ? '+' : '−'; btn.title = min ? 'Show the bodies' : 'Fold the list'; };
   btn.addEventListener('click', () => { panel.classList.toggle('min'); paint(); saveBodies(); });
   paint();
-  const all = document.createElement('button'); all.className = 'ghost'; all.textContent = 'ALL'; all.title = 'Show every body';
-  all.addEventListener('click', () => {
-    for (const m of model.children) setBodyVisible(m, true);
-    syncRows();   // body ticks on, group ticks full (not half)
-  });
-  const tools = document.createElement('span'); tools.className = 'bodies-tools'; tools.append(all, btn);
+  const tools = document.createElement('span'); tools.className = 'bodies-tools'; tools.append(btn);
   // Absolutely placed against the panel, so it spans the panel's full height from inside the head.
   const grip = document.createElement('div'); grip.className = 'bodies-grip'; grip.title = 'Drag to set the width';
   grip.addEventListener('pointerdown', (e) => {

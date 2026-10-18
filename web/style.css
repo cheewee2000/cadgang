@@ -184,7 +184,8 @@ select.ghost:hover { opacity: 0.55; }
 .bodies-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
 .bodies-head button { padding: 0 var(--sp-1); line-height: 1; }
 .bodies-tools { display: flex; gap: var(--sp-1); }
-.bodies.min .bodies-tools button:first-child { display: none; }
+.bodies-all { align-self: flex-start; margin-top: var(--sp-1); padding: 0 var(--sp-1); line-height: 1; font-size: var(--fs-12); }
+.bodies.min .bodies-all { display: none; }
 .bodies.min { width: auto !important; min-width: 0; }
 .bodies.min label, .bodies.min .group { display: none; }
 .load-error { color: var(--signal-red); max-width: 60ch; }
