@@ -220,7 +220,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (current.kind === 'pen') {
       if (Math.hypot(e.clientX - last.x, e.clientY - last.y) < 3) return;
       const p = pointAt(e); if (!p) return;
-      current.points.push(toRest(current, p)); last = { x: e.clientX, y: e.clientY };
+      current.points.push(toRest(current, p)); last.x = e.clientX; last.y = e.clientY;   // keep last.id: it is how the stroke knows its pointer
     } else if (current.kind === 'arrow') {
       // the tail (text end) slides on the plane of the face the head is on; edge-on or off a face, on
       // the plane through the head that faces the camera, and the text then faces the screen
