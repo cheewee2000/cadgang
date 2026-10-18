@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"fetch((process.env.CADGANG_URL||'http://localhost:4477')+'/api/view/feedback?keep=1',{signal:AbortSignal.timeout(800)}).then(r=>r.json()).then(j=>{const n=j.pending.length;if(n)console.log('CADgang: the user pressed FEEDBACK '+(n>1?n+' times, last ':'at ')+j.pending[n-1].at+' on '+(j.pending[n-1].subject||'the open file')+'. Call cadgang_feedback to see the view and give feedback on it.')}).catch(()=>{})\""
+          }
+        ]
+      }
+    ]
+  }
+}

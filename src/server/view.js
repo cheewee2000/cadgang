@@ -124,6 +124,23 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     } catch (e) { next(e); }
   });
 
+  // FEEDBACK button: frames the user wants Claude to look at, until the cadgang_feedback tool takes them.
+  let feedback = [];
+  r.post('/feedback', express.json({ limit: '40mb' }), (req, res, next) => {
+    try {
+      const m = /^data:image\/png;base64,(.+)$/.exec(String(req.body?.png || ''));
+      if (!m) throw Object.assign(new Error('png must be a data:image/png;base64 URL'), { status: 400 });
+      feedback.push({ png: m[1], camera: req.body.camera ?? null, subject: req.body.subject ?? null, markups: Array.isArray(req.body.markups) ? req.body.markups : [], at: new Date().toISOString() });
+      feedback = feedback.slice(-5);
+      res.json({ ok: true, pending: feedback.length });
+    } catch (e) { next(e); }
+  });
+  r.get('/feedback', (req, res) => {   // ?keep=1 peeks (the Claude Code hook); a plain GET takes them
+    const items = feedback;
+    if (req.query.keep !== '1') feedback = [];
+    res.json({ pending: req.query.keep === '1' ? items.map(({ png, ...f }) => f) : items });
+  });
+
   const screenJson = () => latest && { at: latest.at, subject: latest.subject, camera: latest.camera, png: latest.png.toString('base64') };
   r.get('/screen', async (req, res) => {
     if (req.query.fresh === '1') {
@@ -134,9 +151,9 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
         waiters.push(() => { clearTimeout(t); done(); });
         broadcast({ type: 'snapshot_request' });
       });
-      return res.json({ screen: screenJson(), fresh: !!latest && latest.at !== before, markups: readMarkup(latest?.subject) });
+      return res.json({ screen: screenJson(), fresh: !!latest && latest.at !== before, markups: readMarkup(latest?.subject), pendingFeedback: feedback.length });
     }
-    res.json({ screen: screenJson(), fresh: false, markups: readMarkup(latest?.subject) });
+    res.json({ screen: screenJson(), fresh: false, markups: readMarkup(latest?.subject), pendingFeedback: feedback.length });
   });
   r.get('/screen.png', (req, res) => latest ? res.type('png').send(latest.png) : res.status(404).json({ error: 'No snapshot yet — open the app' }));
 

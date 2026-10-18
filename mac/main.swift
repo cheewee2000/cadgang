@@ -43,6 +43,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     var ready = false
     var pending: [String] = []
+    var quitting = false             // a quit tears the windows down; that must not look like the user closing them
 
     func applicationDidFinishLaunching(_ n: Notification) {
         buildMenu()
@@ -70,6 +71,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         win.contentView = w
         w.onFiles = { [weak self, weak w] urls in if let w = w { self?.open(urls.map { $0.path }, in: w) } }
         titleWatch.append(w.observe(\.title, options: [.new]) { [weak win] w, _ in win?.title = (w.title?.isEmpty == false) ? w.title! : "CADgang" })
+        titleWatch.append(w.observe(\.url, options: [.new]) { [weak self] _, _ in self?.saveWindows() })
         if let key = NSApp.keyWindow {
             win.cascadeTopLeft(from: NSPoint(x: key.frame.minX + 24, y: key.frame.maxY - 24))
         } else {
@@ -78,6 +80,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         windows.append(win)
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: win, queue: .main) { [weak self] n in
             self?.windows.removeAll { $0 === (n.object as? NSWindow) }
+            self?.saveWindows()
         }
         win.makeKeyAndOrderFront(nil)
         return w
@@ -93,7 +96,22 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     @objc func newWindow(_ s: Any?) { makeWindow(web.configuration).load(URLRequest(url: BASE.appendingPathComponent("view"))) }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
+    func applicationShouldTerminate(_ s: NSApplication) -> NSApplication.TerminateReply { quitting = true; return .terminateNow }
     func applicationWillTerminate(_ n: Notification) { node?.terminate() }
+
+    // MARK: session
+
+    /// The open files, as the windows' addresses (the page keeps ?open= current), kept on every change
+    /// so a quit, a crash or a force quit all come back to the same windows.
+    static let SESSION = "cadgang.windows"
+    func saveWindows() {
+        if quitting { return }
+        let urls = windows.compactMap { ($0.contentView as? WKWebView)?.url }.filter { $0.query?.contains("open=") == true }
+        UserDefaults.standard.set(urls.map { $0.absoluteString }, forKey: Self.SESSION)
+    }
+    func savedWindows() -> [URL] {
+        (UserDefaults.standard.stringArray(forKey: Self.SESSION) ?? []).compactMap { URL(string: $0) }.filter { $0.port == BASE.port }
+    }
 
     // MARK: server
 
@@ -140,7 +158,11 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         }.resume()
     }
 
-    func load() { web.load(URLRequest(url: BASE.appendingPathComponent("view"))) }
+    func load() {
+        let saved = savedWindows()
+        web.load(URLRequest(url: saved.first ?? BASE.appendingPathComponent("view")))
+        for u in saved.dropFirst() { makeWindow(web.configuration).load(URLRequest(url: u)) }
+    }
 
     func fail(_ msg: String) {
         let a = NSAlert(); a.messageText = "CADgang"; a.informativeText = msg; a.runModal()

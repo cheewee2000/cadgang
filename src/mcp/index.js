@@ -54,11 +54,33 @@ Args:
   },
   async ({ fresh }) => {
     try {
-      const { screen, markups, fresh: got } = await call(`/view/screen${fresh ? '?fresh=1&wait=4' : ''}`);
-      const text = { fresh: got, at: screen?.at ?? null, subject: screen?.subject ?? null, camera: screen?.camera ?? null, markups };
+      const { screen, markups, fresh: got, pendingFeedback } = await call(`/view/screen${fresh ? '?fresh=1&wait=4' : ''}`);
+      const text = { fresh: got, at: screen?.at ?? null, subject: screen?.subject ?? null, camera: screen?.camera ?? null, markups, pendingFeedback: pendingFeedback || 0 };
       const content = [{ type: 'text', text: JSON.stringify(text, null, 2) }];
       if (screen?.png) content.push({ type: 'image', data: screen.png, mimeType: 'image/png' });
       else content[0].text += '\n\nNo window has posted a frame yet — open the CADgang app (or /view in a browser) with a file.';
+      return { content };
+    } catch (e) { return fail(e); }
+  }
+);
+
+server.registerTool(
+  'cadgang_feedback',
+  {
+    title: 'Views the user sent for feedback',
+    description: `The user pressed FEEDBACK in CADgang (or K): they want your eyes on what they were looking at. Returns each frame they sent since you last asked — the image, the file, the camera and their markups (same shapes as cadgang_screen) — oldest first, and clears the queue. Call it when they say they sent a view, when a hook says one is waiting, or when cadgang_screen reports pendingFeedback > 0. Then give design feedback on what you see, anchored to their markups.`,
+    inputSchema: {},
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  async () => {
+    try {
+      const { pending } = await call('/view/feedback');
+      if (!pending.length) return ok({ pending: 0, note: 'Nothing waiting — the user has not pressed FEEDBACK since you last looked. cadgang_screen shows the live view.' });
+      const content = [];
+      for (const f of pending) {
+        content.push({ type: 'text', text: JSON.stringify({ at: f.at, subject: f.subject, camera: f.camera, markups: f.markups }, null, 2) });
+        content.push({ type: 'image', data: f.png, mimeType: 'image/png' });
+      }
       return { content };
     } catch (e) { return fail(e); }
   }
@@ -109,7 +131,6 @@ server.registerTool(
           'Dimensions: the sheet draws the dimensions placed in the viewer with Measure (M) with extension lines and arrows (diameters and radii as leaders), each in the first view that shows it fully. Ask them to place the ones the drawing needs now, then confirm "done". Use cadgang_screen to check what they placed.',
           'Title block (the template\'s cells): title, DWG no. (part number), rev (default A), created by, approved by (default the date), document type (default Fabrication drawing) and sheet title, document status (default FOR FABRICATION), date of issue (default today), sheet n of N for a set.',
           'Notes: material, finish and general tolerances become the first numbered notes; then their own notes (a list); "DO NOT SCALE DRAWING" is always last. A parts list (item, qty, part number, material) goes top right if they want one.',
-        ],
         ],
       });
     } catch (e) { return fail(e); }

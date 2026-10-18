@@ -466,7 +466,7 @@ function onCap(e) {
   // A model face within two slider steps of the plane is the cut face as far as the eye can tell: the plane
   // dragged onto a face left the face in front of the cap, and the cap could not be grabbed again.
   const i = 'xyz'.indexOf(section.axis), tol = 2e-3 * (bbox.max.getComponent(i) - bbox.min.getComponent(i));
-  return hit.object.material === capMaterial || Math.abs(section.plane.distanceToPoint(hit.point)) < tol;
+  return hit.object === hit.object.parent?.userData.cap || Math.abs(section.plane.distanceToPoint(hit.point)) < tol;
 }
 // The body under the pointer (a hit on its cap counts, a clipped-away face does not), with the point.
 function partAt(e) {
@@ -502,20 +502,21 @@ function screenAxis(p0, dir) {
 // solid material, hollow walls read as rings, and nothing depends on stencil
 // parity — the stencil version held on a shelled box and failed on a merged
 // STEP in WebKit.
-const capMaterial = new THREE.MeshBasicMaterial({ color: 0x8e8c86, side: THREE.BackSide });
+// Each body's cut gets its own colour: the part palette hue, darker and flat, so cut material
+// reads as cut whether the bodies are grey or coloured (a grey cap on grey bodies read as a hole).
+const capColor = (i) => new THREE.Color().setHSL((i * 0.618034) % 1, 0.65, 0.34);
 function buildCaps() {
-  for (const m of model.children) {
-    if (m.userData.cap) { m.remove(m.userData.cap); m.userData.cap = null; }
-    if (m.isLine) continue;
+  model.children.forEach((m, i) => {
+    if (m.userData.cap) { m.remove(m.userData.cap); m.userData.cap.material.dispose(); m.userData.cap = null; }
+    if (m.isLine) return;
     const on = !!section.axis && !!bbox;
     m.material.side = on ? THREE.FrontSide : THREE.DoubleSide;
-    if (!on) continue;
-    const cap = new THREE.Mesh(m.geometry, capMaterial);
+    if (!on) return;
+    const cap = new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ color: capColor(i), side: THREE.BackSide, clippingPlanes: [section.plane] }));
     cap.renderOrder = -1;
     m.add(cap);
     m.userData.cap = cap;
-  }
-  capMaterial.clippingPlanes = section.axis && bbox ? [section.plane] : [];
+  });
 }
 
 function setSectionAxis(axis) {
@@ -667,6 +668,9 @@ window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
     } catch (e) { progressEnd(); loadFailed(name, e); return; }
   }
   if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0), keep);
+  // The address says what is open: a reload brings the file back, and the Mac app reads its
+  // windows' addresses to reopen the same files after a quit or a crash.
+  if (shown && !follow) window.history.replaceState(null, '', `${location.pathname}?open=${encodeURIComponent(subject)}`);
 };
 
 async function filesToBuffers(fileList) {
@@ -800,6 +804,23 @@ function postSnapshot() {
   }, 150);
 }
 
+// FEEDBACK: hand the view to Claude. The frame, camera and markups queue on the server for the
+// cadgang_feedback MCP tool; a prompt lands on the clipboard to paste into Claude Code, and a
+// UserPromptSubmit hook in this repo tells Claude a view is waiting on its next turn anyway.
+$('#feedbackBtn').addEventListener('click', async () => {
+  if (!subject) { say('open a file first', true); return; }
+  say('sending the view to Claude…');
+  try {
+    const body = { png: markup.snapshot(), subject, markups: markup.items,
+      camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() } };
+    const r = await fetch('/api/view/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+    const prompt = 'Look at the view I sent from CADgang (cadgang_feedback) and give me feedback on it.';
+    let copied = false; try { await navigator.clipboard.writeText(prompt); copied = true; } catch {}
+    say(copied ? 'sent to Claude · prompt copied, paste it in Claude Code' : 'sent to Claude · ask it to run cadgang_feedback');
+  } catch (e) { say(`feedback failed: ${e.message}`, true); }
+});
+
 // The server restarts under the app (a deploy); reconnect, and when
 // it comes back as a NEWER version reload so the page is never older than its server.
 let pageVersion = null;
@@ -902,6 +923,7 @@ const CMDS = [
   ...[['p', 'pen', 'Pen'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['r', 'erase', 'Erase']].map(([key, t, label]) => ({ key, label, btn: `[data-tool="${t}"]`, run: () => markup.setTool(t), on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
   { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
   { sep: true },
+  { key: 'k', label: 'Send view to Claude', btn: '#feedbackBtn', run: () => $('#feedbackBtn').click() },
   { key: 'd', label: 'Dark / light', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.theme === 'dark' },
   { key: 'o', meta: true, label: 'Open…', btn: '#openBtn', run: () => $('#fileInput').click() },
   { key: 'z', meta: true, label: 'Undo', run: undo },
