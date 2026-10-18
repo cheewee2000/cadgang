@@ -208,6 +208,7 @@ const addPart = (p, name) => (p.lines ? addLines(p.lines, p.name || name) : addM
 /** Fill the bodies panel; returns a note when a later file repeated a body and it was unticked. */
 function listBodies() {
   const panel = $('#bodies');
+  highlightBody(null);
   panel.replaceChildren();
   panel.hidden = model.children.length < 2;
   // A body a later file repeats (the leg file opened over the bench that already holds the leg) would
@@ -240,6 +241,8 @@ function listBodies() {
       for (const o of model.children) setBodyVisible(o, e.shiftKey || o === m);
       for (const r of panel.querySelectorAll('input')) r.checked = model.children[[...panel.children].indexOf(r.parentElement)].visible;
     });
+    row.addEventListener('pointerenter', () => highlightBody(m));
+    row.addEventListener('pointerleave', () => highlightBody(null));
     row.append(cb, nm);
     panel.appendChild(row);
   }
@@ -260,6 +263,24 @@ window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name
 /** The tick of each body row takes its colour when COLOR is on. */
 function paintRows() {
   [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.style.accentColor = ui.color ? `#${partColor(i).getHexString()}` : ''; });
+}
+/**
+ * Hovering a body row lays a see-through overlay on that body, drawn over everything, so the
+ * row can be matched to its part even when it is buried inside the assembly. A child of the
+ * body, so it rides the explode; it shares the geometry and dies on leave.
+ */
+let hoverOverlay = null;
+function highlightBody(m) {
+  if (hoverOverlay) { hoverOverlay.parent?.remove(hoverOverlay); hoverOverlay.material.dispose(); hoverOverlay = null; }
+  if (!m) return;
+  const opts = { color: 0xff5a1f, transparent: true, opacity: m.isLine ? 1 : 0.45, depthTest: false, depthWrite: false,
+    clippingPlanes: section.axis && bbox ? [section.plane] : [] };
+  hoverOverlay = m.isLine
+    ? new THREE.LineSegments(m.geometry, new THREE.LineBasicMaterial(opts))
+    : new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ ...opts, side: THREE.DoubleSide }));
+  hoverOverlay.renderOrder = 10;
+  hoverOverlay.raycast = () => {};   // never a measure or markup target
+  m.add(hoverOverlay);
 }
 function setBodyVisible(m, on) {
   m.visible = on;
