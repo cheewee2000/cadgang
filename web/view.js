@@ -306,7 +306,7 @@ function bodiesHead() {
   const all = document.createElement('button'); all.className = 'ghost'; all.textContent = 'ALL'; all.title = 'Show every body';
   all.addEventListener('click', () => {
     for (const m of model.children) setBodyVisible(m, true);
-    panel.querySelectorAll('input').forEach((r) => { r.checked = true; });
+    syncRows();   // body ticks on, group ticks full (not half)
   });
   const tools = document.createElement('span'); tools.className = 'bodies-tools'; tools.append(all, btn);
   head.append(Object.assign(document.createElement('span'), { textContent: 'BODIES' }), tools);

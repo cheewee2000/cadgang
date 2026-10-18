@@ -27,3 +27,18 @@ test('a three-solid STEP imports as three bodies whose ranges tile the triangles
   const names = JSON.parse(buf.subarray(buf.length - head[4]).toString('utf8'));
   assert.equal(names.length, 3);
 });
+
+test('a nested STEP assembly gives each body its group path and colour (the importer alone flattens it)', async () => {
+  // fixtures/nested.step (cadquery): root > G > H > {leaf1 red, leaf2}, root > G > leaf3, root > loose
+  const m = await importCadFile(fs.readFileSync(path.join(path.dirname(fixture), 'nested.step')), { name: 'nested.step' });
+  const by = Object.fromEntries(m.bodies.map((b) => [b.name.replace(/_part$/, ''), b]));
+  assert.deepEqual(by.leaf1.path, ['G', 'H']);
+  assert.deepEqual(by.leaf2.path, ['G', 'H']);
+  assert.deepEqual(by.leaf3.path, ['G']);
+  assert.deepEqual(by.loose.path ?? [], []);
+  assert.deepEqual(by.leaf1.color, [1, 0, 0]);
+  const buf = pack(m);
+  const head = new Uint32Array(buf.buffer, buf.byteOffset, 5);
+  const names = JSON.parse(buf.subarray(buf.length - head[4]).toString('utf8'));
+  assert.deepEqual(names.find((n) => n.name === by.leaf1.name).path, ['G', 'H']);
+});

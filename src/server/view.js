@@ -74,7 +74,8 @@ export function pack(m) {
   const bodyList = m.bodies?.length ? m.bodies : [{ first: 0, count: idx.length / 3, name: m.name || 'body' }];
   const bodies = new Uint32Array(bodyList.length * 2);
   bodyList.forEach((b, i) => { bodies[2 * i] = b.first; bodies[2 * i + 1] = b.count; });
-  const names = Buffer.from(JSON.stringify(bodyList.map((b) => b.name)), 'utf8');
+  // each body: its name, or {name, path, color} when the file has groups or colours (the viewer takes both)
+  const names = Buffer.from(JSON.stringify(bodyList.map((b) => (b.path || b.color ? { name: b.name, path: b.path ?? [], color: b.color ?? null } : b.name))), 'utf8');
   const head = Uint32Array.of(pos.length, idx.length, m.faces.length, bodyList.length, names.length, nrm.length);
   return Buffer.concat([...[head, pos, nrm, idx, faces, bodies].map((a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength)), names]);
 }
