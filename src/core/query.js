@@ -855,13 +855,3 @@ export const q = {
   edges: (shape) => new Query(shape, 'edge'),
 };
 
-/**
- * Resolve a query (or a plain list of already-resolved entries) to the live
- * OCCT elements of `shape`, for handing to a replicad finder.
- */
-export function elementsFor(query, shape) {
-  if (!(query instanceof Query)) {
-    throw new GraphError('Expected a query built with q.faces(...) or q.edges(...)');
-  }
-  return query.resolveOn(shape).map((e) => e.element);
-}

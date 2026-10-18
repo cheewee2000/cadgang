@@ -28,7 +28,7 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
 }
 .stack-label {
   font-size: var(--fs-12); letter-spacing: var(--ls-label);
-  text-transform: uppercase; color: var(--ink-faint); font-weight: 700;
+  text-transform: uppercase; color: var(--ink-faint);
 }
 .stack-count { font-size: var(--fs-12); color: var(--ink-faint); }
 
@@ -66,7 +66,7 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
 .cell-del:hover { color: var(--signal-red); }
 
 .cell-id {
-  font-weight: 700; font-size: var(--fs-14); letter-spacing: var(--ls-label);
+  font-size: var(--fs-14); letter-spacing: var(--ls-label);
   color: var(--ink); cursor: pointer;
 }
 .cell-id:hover { opacity: 0.6; }
@@ -77,7 +77,7 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
    how you tell a part that matches its prompt from one that has drifted. */
 .badge {
   font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
-  padding: 2px 6px; border: var(--bw-hair) solid currentColor; font-weight: 700;
+  padding: 2px 6px; border: var(--bw-hair) solid currentColor;
 }
 .badge.ok { color: var(--ink-faint); }
 .badge.stale { color: #c98a1e; }
@@ -93,7 +93,7 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
 }
 .cell-prompt:hover { border-color: var(--rule); }
 .cell-prompt:focus { outline: none; border-color: var(--ink); background: var(--paper); }
-.cell-prompt::placeholder { color: var(--ink-faint); font-style: italic; }
+.cell-prompt::placeholder { color: var(--ink-faint); }
 
 /* ------------------------------------------------------------------ params */
 
@@ -169,7 +169,7 @@ footer {
 /* `display: flex` beats the user-agent rule for [hidden], so say it explicitly
    or an empty bar floats over the viewport whenever nothing is pending. */
 #pickBar[hidden] { display: none; }
-#pickBar b { font-weight: 700; }
+#pickBar b { }
 #pickBar button { padding: 4px 10px; font-size: var(--fs-12); }
 #pickBar button:disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -258,7 +258,7 @@ footer {
 .check:last-child { border-bottom: 0; }
 .check-mark { color: var(--ink-faint); }
 .check-label { color: var(--ink-soft); }
-.check-value { font-weight: 700; }
+.check-value { }
 .check-limit { color: var(--ink-faint); }
 .check.bad .check-mark, .check.bad .check-value { color: var(--signal-red); }
 

@@ -122,9 +122,6 @@ export function initBrep() {
   return initPromise;
 }
 
-/** True once the kernel is loaded and B-rep blocks can compile. */
-export const brepReady = () => rc !== null;
-
 /**
  * Size of the OCCT WASM heap in bytes, or null before the kernel loads.
  *
@@ -135,15 +132,6 @@ export const brepReady = () => rc !== null;
  */
 export const brepHeapBytes = () => (OC?.HEAPU8 ? OC.HEAPU8.length : null);
 
-/** Kernel diagnostics, surfaced on /api/health. */
-export const brepStats = () => ({
-  ready: rc !== null,
-  heapBytes: brepHeapBytes(),
-  gcAvailable: forceGC !== null,
-  collections,
-  scopesSinceCollect,
-});
-
 function kernel() {
   if (!rc) throw new GraphError('B-rep kernel is still loading — retry in a moment');
   return rc;
@@ -151,8 +139,6 @@ function kernel() {
 
 /** The replicad namespace, for modules that build on the kernel (query.js). */
 export const brepKernel = kernel;
-/** The raw OCCT module, for the few operations replicad does not wrap. */
-export const brepOC = () => OC;
 
 // ------------------------------------------------------------- error mapping
 
@@ -258,14 +244,11 @@ const COLLECT_EVERY_SCOPES = 16;
 let scopesSinceCollect = 0;
 let collectTimer = null;
 
-let collections = 0;
-
 function collectNow() {
   clearTimeout(collectTimer);
   collectTimer = null;
   scopesSinceCollect = 0;
   if (!forceGC) return;
-  collections++;
   // Three passes with a turn of the loop between them. One pass is not enough:
   // the first collection is what RUNS the finalizers, and the delete() calls
   // they make only land on the WASM heap once the queued callbacks have run.
@@ -385,21 +368,6 @@ export function requireSolid(shape, slot) {
   return shape;
 }
 
-// ---------------------------------------------------------------- primitives
-
-/** Box centred on the origin in X/Y, sitting on z = 0..height (replicad's basis). */
-export function brepBox([sx, sy, sz]) {
-  return attempt('box', () => track(kernel().makeBaseBox(sx, sy, sz)));
-}
-
-export function brepCylinder(radius, height) {
-  return attempt('cylinder', () => track(kernel().makeCylinder(radius, height)));
-}
-
-export function brepSphere(radius) {
-  return attempt('sphere', () => track(kernel().makeSphere(radius)));
-}
-
 // ------------------------------------------------------------------ sketches
 //
 // A sketch is a closed 2D profile plus the plane it lives on. It is NOT a solid:
@@ -464,59 +432,6 @@ export function brepPlaneOfFace(face) {
 
 /** A sketch value from a raw replicad drawing on a named plane (for primitives). */
 export const brepDrawingSketch = (drawing, plane = 'XY', offset = 0) => sketchValue(drawing, plane, offset);
-
-export function sketchRect(plane, offset, width, height, radius, [cx, cy]) {
-  const k = kernel();
-  return attempt('rectangle sketch', () => {
-    const d = radius > 0
-      ? k.drawRoundedRectangle(width, height, radius)
-      : k.drawRectangle(width, height);
-    return sketchValue(d.translate(cx, cy), plane, offset);
-  });
-}
-
-export function sketchCircle(plane, offset, radius, [cx, cy]) {
-  const k = kernel();
-  return attempt('circle sketch', () =>
-    sketchValue(k.drawCircle(radius).translate(cx, cy), plane, offset));
-}
-
-export function sketchPolygon(plane, offset, sides, radius, [cx, cy]) {
-  const k = kernel();
-  const n = Math.max(3, Math.round(sides));
-  return attempt('polygon sketch', () =>
-    sketchValue(k.drawPolysides(radius, n).translate(cx, cy), plane, offset));
-}
-
-/**
- * General closed profile from an authored point list. Each point is [x, y] or
- * [x, y, r], where r rounds that corner — the sketcher equivalent of dropping a
- * fillet on a sketch vertex.
- *
- * The rounding on a point applies to the corner at that point, so it is only
- * meaningful for points 1..n-1; the start point is where the closing segment
- * meets the first, and replicad has no hook to round it. Authoring the profile
- * so its start sits mid-edge (or leaving that corner sharp) sidesteps it.
- */
-export function sketchProfile(plane, offset, points) {
-  const k = kernel();
-  if (!Array.isArray(points) || points.length < 3) {
-    throw new GraphError('Profile needs at least 3 points, each [x, y] or [x, y, cornerRadius]');
-  }
-  for (const [i, p] of points.entries()) {
-    if (!Array.isArray(p) || p.length < 2 || !Number.isFinite(p[0]) || !Number.isFinite(p[1])) {
-      throw new GraphError(`Profile point ${i} must be [x, y] or [x, y, cornerRadius] with finite numbers`);
-    }
-  }
-  return attempt('profile sketch', () => {
-    let pen = k.draw([points[0][0], points[0][1]]);
-    for (const [x, y, r] of points.slice(1)) {
-      pen = pen.lineTo([x, y]);
-      if (Number.isFinite(r) && r > 0) pen = pen.customCorner(r);
-    }
-    return sketchValue(pen.close(), plane, offset);
-  });
-}
 
 /**
  * A drawing from solved sketch loops — the bridge out of the 2D solver.
@@ -1082,97 +997,6 @@ export function brepDistanceBetween(a, b) {
   return attempt('distance', () => kernel().measureDistanceBetween(a, b));
 }
 
-/** Tessellated outline of a sketch, for drawing the profile in the viewport. */
-export function sketchOutline(sketch, { tolerance = 0.05 } = {}) {
-  try {
-    const wire = placed(sketch).wire;
-    const e = wire.meshEdges({ tolerance, angularTolerance: 0.3, keepMesh: true });
-    return { lines: Array.from(e.lines), groups: e.edgeGroups ?? [] };
-  } catch {
-    return null; // preview only; never fail a build over it
-  }
-}
-
-// ---------------------------------------------------------------- operations
-
-const BOOLEAN_OPS = { union: 'fuse', subtract: 'cut', intersect: 'intersect' };
-
-export function brepBoolean(op, base, tools) {
-  const method = BOOLEAN_OPS[op];
-  if (!method) {
-    throw new GraphError(`Unknown boolean '${op}'. Valid: ${Object.keys(BOOLEAN_OPS).join(', ')}`);
-  }
-  const list = (Array.isArray(tools) ? tools : [tools]).filter(Boolean);
-  if (!list.length) throw new GraphError(`Boolean '${op}' needs at least one shape in the 'tool' input`);
-  return attempt(`boolean ${op}`, () => {
-    let acc = borrow(base, 'base');
-    for (const tool of list) acc = track(acc[method](borrow(tool, 'tool')));
-    return acc;
-  });
-}
-
-// Edge selection for fillet/chamfer. Full topological picking belongs in the
-// viewport; these cover the cases a graph can express without one.
-const EDGE_FILTERS = {
-  all: null,
-  x: (e) => e.inDirection([1, 0, 0]),
-  y: (e) => e.inDirection([0, 1, 0]),
-  z: (e) => e.inDirection([0, 0, 1]),
-};
-
-function edgeFilter(select, op) {
-  if (!(select in EDGE_FILTERS)) {
-    throw new GraphError(`Unknown ${op} edge selection '${select}'. Valid: ${Object.keys(EDGE_FILTERS).join(', ')}`);
-  }
-  return EDGE_FILTERS[select];
-}
-
-export function brepFillet(solid, radius, select) {
-  if (radius <= 0) throw new GraphError('Fillet radius must be greater than zero');
-  const filter = edgeFilter(select, 'fillet');
-  return attempt('fillet', () => {
-    const s = borrow(solid, 'shape');
-    return track(filter ? s.fillet(radius, filter) : s.fillet(radius));
-  });
-}
-
-export function brepChamfer(solid, distance, select) {
-  if (distance <= 0) throw new GraphError('Chamfer distance must be greater than zero');
-  const filter = edgeFilter(select, 'chamfer');
-  return attempt('chamfer', () => {
-    const s = borrow(solid, 'shape');
-    return track(filter ? s.chamfer(distance, filter) : s.chamfer(distance));
-  });
-}
-
-export function brepShell(solid, thickness, openFace) {
-  if (thickness === 0) throw new GraphError('Shell thickness cannot be zero');
-  return attempt('shell', () => {
-    const s = borrow(solid, 'shape');
-    const box = s.boundingBox.bounds;
-    const finder = openFace === 'none'
-      ? null
-      : (f) => f.inPlane('XY', openFace === 'top' ? box[1][2] : box[0][2]);
-    return track(finder ? s.shell(thickness, finder) : s.shell(thickness));
-  });
-}
-
-export function brepTransform(solid, translate, rotate, scale) {
-  return attempt('transform', () => {
-    let s = borrow(solid, 'shape');
-    if (scale !== 1) {
-      if (scale <= 0) throw new GraphError('Scale must be greater than zero');
-      s = track(s.scale(scale));
-    }
-    const [rx, ry, rz] = rotate;
-    if (rx) s = track(s.rotate(rx, [0, 0, 0], [1, 0, 0]));
-    if (ry) s = track(s.rotate(ry, [0, 0, 0], [0, 1, 0]));
-    if (rz) s = track(s.rotate(rz, [0, 0, 0], [0, 0, 1]));
-    if (translate.some(Boolean)) s = track(s.translate(translate));
-    return s;
-  });
-}
-
 // -------------------------------------------------------------- STEP file I/O
 
 /** Serialise a B-rep solid as a STEP AP214 file. Returns a Buffer. */
@@ -1183,14 +1007,6 @@ export async function exportStep(shape) {
   }
   const blob = await attempt('STEP export', () => shape.blobSTEP());
   return Buffer.from(await blob.arrayBuffer());
-}
-
-/** Read a STEP file into an exact B-rep solid (no tessellation). */
-export async function importStepExact(buffer) {
-  const k = kernel();
-  const blob = new Blob([buffer]);
-  const shape = await attempt('STEP import', () => k.importSTEP(blob));
-  return track(shape);
 }
 
 /**

@@ -1,104 +1,9 @@
 /**
- * Server-side raymarched preview of an SDF — no GPU, no browser.
- * Sphere-traces the compiled distance function and shades with a simple
- * two-light + rim model. Returns a PNG buffer (encoder built on node:zlib).
+ * Server-side preview of a tessellated solid — no GPU, no browser.
+ * Returns a PNG buffer (encoder built on node:zlib).
  */
 
 import zlib from 'node:zlib';
-
-export function renderPreview(fn, bounds, opts = {}) {
-  const width = Math.max(64, Math.min(1600, opts.width ?? 640));
-  const height = Math.max(64, Math.min(1200, opts.height ?? 480));
-  const yawDeg = opts.yaw ?? -35;
-  const pitchDeg = opts.pitch ?? 25;
-
-  const center = [
-    (bounds.min[0] + bounds.max[0]) / 2,
-    (bounds.min[1] + bounds.max[1]) / 2,
-    (bounds.min[2] + bounds.max[2]) / 2,
-  ];
-  const radius = Math.hypot(
-    bounds.max[0] - bounds.min[0],
-    bounds.max[1] - bounds.min[1],
-    bounds.max[2] - bounds.min[2]
-  ) / 2 || 10;
-
-  const yaw = (yawDeg * Math.PI) / 180;
-  const pitch = (pitchDeg * Math.PI) / 180;
-  const dist = radius * 2.6;
-  const eye = [
-    center[0] + dist * Math.cos(pitch) * Math.sin(yaw),
-    center[1] + dist * Math.cos(pitch) * Math.cos(yaw) * -1,
-    center[2] + dist * Math.sin(pitch),
-  ];
-
-  // camera basis (Z-up)
-  const fwd = norm3(sub3(center, eye));
-  const right = norm3(cross3(fwd, [0, 0, 1]));
-  const up = cross3(right, fwd);
-  const fov = 0.9;
-  const aspect = width / height;
-
-  const maxDist = dist + radius * 3;
-  const eps = radius * 1e-3;
-  const safety = 0.75; // conservative stepping: SDFs here are only bounded, not exact
-
-  const px = Buffer.alloc(width * height * 3);
-  const bgTop = [24, 26, 33], bgBot = [10, 11, 15];
-
-  for (let j = 0; j < height; j++) {
-    const v = (1 - (2 * (j + 0.5)) / height) * Math.tan(fov / 2);
-    for (let i = 0; i < width; i++) {
-      const u = ((2 * (i + 0.5)) / width - 1) * Math.tan(fov / 2) * aspect;
-      const dir = norm3([
-        fwd[0] + u * right[0] + v * up[0],
-        fwd[1] + u * right[1] + v * up[1],
-        fwd[2] + u * right[2] + v * up[2],
-      ]);
-
-      let t = 0, hit = false;
-      for (let s = 0; s < 160 && t < maxDist; s++) {
-        const p = [eye[0] + dir[0] * t, eye[1] + dir[1] * t, eye[2] + dir[2] * t];
-        const d = fn(p[0], p[1], p[2]);
-        if (d < eps) { hit = true; break; }
-        t += Math.max(d * safety, eps * 0.5);
-      }
-
-      const o = (j * width + i) * 3;
-      if (!hit) {
-        const g = j / height;
-        px[o] = bgTop[0] + (bgBot[0] - bgTop[0]) * g;
-        px[o + 1] = bgTop[1] + (bgBot[1] - bgTop[1]) * g;
-        px[o + 2] = bgTop[2] + (bgBot[2] - bgTop[2]) * g;
-        continue;
-      }
-
-      const p = [eye[0] + dir[0] * t, eye[1] + dir[1] * t, eye[2] + dir[2] * t];
-      const e = eps * 2;
-      const n = norm3([
-        fn(p[0] + e, p[1], p[2]) - fn(p[0] - e, p[1], p[2]),
-        fn(p[0], p[1] + e, p[2]) - fn(p[0], p[1] - e, p[2]),
-        fn(p[0], p[1], p[2] + e) - fn(p[0], p[1], p[2] - e),
-      ]);
-
-      const l1 = norm3([0.5, -0.6, 0.65]);
-      const l2 = norm3([-0.6, 0.3, -0.2]);
-      const d1 = Math.max(dot3(n, l1), 0);
-      const d2 = Math.max(dot3(n, l2), 0) * 0.35;
-      const rim = Math.pow(1 - Math.max(-dot3(n, dir), 0), 3) * 0.35;
-      const spec = Math.pow(Math.max(dot3(reflect(dir, n), l1), 0), 24) * 0.5;
-      const amb = 0.16;
-
-      const base = [96, 158, 255]; // cadgang blue
-      const L = amb + d1 * 0.85 + d2;
-      px[o] = clamp8(base[0] * L + 255 * (spec + rim * 0.6));
-      px[o + 1] = clamp8(base[1] * L + 255 * (spec + rim * 0.6));
-      px[o + 2] = clamp8(base[2] * L + 255 * (spec + rim));
-    }
-  }
-
-  return encodePNG(px, width, height);
-}
 
 /**
  * Rasterise a tessellated solid: the exact surfaces' own triangles, flat-shaded
@@ -172,7 +77,7 @@ export function renderMesh(mesh, edges, bounds, opts = {}) {
   return encodePNG(px, width, height);
 }
 
-/** The camera renderPreview uses, as a projector: world point -> [x, y, depth] in pixels. */
+/** The camera, as a projector: world point -> [x, y, depth] in pixels. */
 function camera(bounds, opts, width, height) {
   const yawDeg = opts.yaw ?? -35;
   const pitchDeg = opts.pitch ?? 25;
