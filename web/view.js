@@ -1106,11 +1106,22 @@ document.addEventListener('visibilitychange', focus);
 // sky; samples pile up while the view holds still and any orbit starts them over. Lines, grid,
 // edges, sky, markup and section caps sit it out, and the path tracer ignores clipping, so a
 // section shows whole bodies.
-const rt = { on: false, pt: null, floor: null, env: null, hidden: [], cam: new THREE.Matrix4(), proj: new THREE.Matrix4() };
+// In the Mac app RENDER is native instead (mac/render.swift, Metal ray tracing): the page sends
+// the visible triangles and the camera + section plane, and turns see-through over the viewport
+// so the shell's render view under it shows. Sections render, with caps.
+let NATIVE = !!window.webkit?.messageHandlers?.cadgang;
+const post = (m) => window.webkit.messageHandlers.cadgang.postMessage(m);
+window.cadgangNativeRender = (ok) => { if (ok || !NATIVE) return; NATIVE = false; document.documentElement.classList.remove('native-render'); rt.on = false; setRender(true); };   // no Metal ray tracing: the WebGL one
+const rt = { on: false, pt: null, floor: null, env: null, hidden: [], cam: new THREE.Matrix4(), proj: new THREE.Matrix4(), last: '' };
 async function setRender(on) {
   if (on === rt.on) return;
   rt.on = on;
   $('#renderBtn').classList.toggle('on', on);
+  if (NATIVE) {
+    document.documentElement.classList.toggle('native-render', on);
+    if (on) { nativeScene(); rt.last = ''; } else post({ cmd: 'render' });
+    return;
+  }
   if (!on) {
     for (const o of rt.hidden) o.visible = true;
     rt.hidden = [];
@@ -1155,6 +1166,49 @@ function renderSample() {
   }
   rt.pt.renderSample();
 }
+const b64 = (a) => {
+  const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = '';
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+/** The visible bodies as world-space triangles with their materials, to the shell. */
+function nativeScene() {
+  model.updateMatrixWorld(true);
+  const meshes = model.children.filter((m) => m.isMesh && m.visible);
+  let nv = 0, nt = 0;
+  for (const m of meshes) { nv += m.geometry.attributes.position.count; nt += (m.geometry.index?.count ?? m.geometry.attributes.position.count) / 3; }
+  const verts = new Float32Array(nv * 6), idx = new Uint32Array(nt * 3), tri = new Uint32Array(nt), mats = [];
+  const v = new THREE.Vector3(), nm = new THREE.Matrix3();
+  let vo = 0, to = 0;
+  meshes.forEach((m, mi) => {
+    const g = m.geometry;
+    if (!g.attributes.normal) g.computeVertexNormals();
+    const pos = g.attributes.position, nrm = g.attributes.normal;
+    nm.getNormalMatrix(m.matrixWorld);
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld); verts.set([v.x, v.y, v.z], (vo + i) * 6);
+      v.fromBufferAttribute(nrm, i).applyMatrix3(nm).normalize(); verts.set([v.x, v.y, v.z], (vo + i) * 6 + 3);
+    }
+    const n = (g.index?.count ?? pos.count);
+    for (let i = 0; i < n; i++) idx[to * 3 + i] = vo + (g.index ? g.index.getX(i) : i);
+    tri.fill(mi, to, to + n / 3);
+    const mat = m.material, c = mat.color ?? new THREE.Color(0xb9b8b3);
+    mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0]);
+    vo += pos.count; to += n / 3;
+  });
+  const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff);
+  post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b] });
+}
+/** Camera, section plane and viewport rect, whenever any of them moved. */
+function nativeCam() {
+  camera.updateMatrixWorld();
+  const r = renderer.domElement.getBoundingClientRect(), e = camera.matrixWorld.elements;
+  const clip = section.axis && bbox ? [section.plane.normal.x, section.plane.normal.y, section.plane.normal.z, section.plane.constant] : null;
+  const c = { cmd: 'renderCam', pos: [e[12], e[13], e[14]], fwd: [-e[8], -e[9], -e[10]], right: [e[0], e[1], e[2]], up: [e[4], e[5], e[6]],
+    fov: persp.fov, ortho: ui.ortho, orthoH: camera.top ?? 1, clip, rect: [r.left, r.top, r.width, r.height] };
+  const key = JSON.stringify(c);
+  if (key !== rt.last) { rt.last = key; post(c); }
+}
 $('#renderBtn').addEventListener('click', () => { setRender(!rt.on); commit(); });
 
 // -------------------------------------------------------------------- loop
@@ -1172,7 +1226,7 @@ new ResizeObserver(resize).observe(viewport);
   resize();
   applyCamera();
   if (sky.visible) { sky.position.copy(orbit.target); sky.scale.setScalar(orbit.dist * 50); sky.material.uniforms.center.value.copy(orbit.target); }
-  if (rt.pt && rt.on) renderSample(); else renderer.render(scene, camera);
+  if (rt.on && NATIVE) nativeCam(); else if (rt.pt && rt.on) renderSample(); else renderer.render(scene, camera);
   measure.projectLabels();
   markup.projectLabels();
   requestAnimationFrame(loop);
@@ -1194,7 +1248,7 @@ window.__view = { model, section, orbit, ui, measure, rt, THREE, partAt, faceAt,
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
 // ?open=/abs/a.step|/abs/b.stl — the same local-path door, for the shell and for headless tests.
-// ?section=z:0.3 and ?explode=0.4 set the tools once the file is in (a pushed view, a test harness).
+// ?section=z:0.3, ?explode=0.4 and ?render set the tools once the file is in (a pushed view, a test harness).
 const params = new URLSearchParams(location.search);
 const openArg = params.get('open');
 if (follow) fetch('/api/view/tabs').then((r) => r.json()).then((d) => { setTabs(d.tabs || []); if (!d.tabs?.length) return fetch('/api/view/screen').then((r) => r.json()).then((s) => followTo(s.screen?.subject)); }).catch(() => {});
@@ -1203,6 +1257,7 @@ if (openArg) window.cadgangOpen(openArg.split('|')).then(() => {
   if (sec) { $('#sectPos').value = Math.round(parseFloat(sec[2]) * 1000); setSectionAxis(sec[1]); }
   const ex = parseFloat(params.get('explode'));
   if (ex > 0) { $('#explode').value = Math.round(ex * 100); applyExplode(); }
+  if (params.has('render')) setRender(true);
 });
 
 // ------------------------------------------------------------- commands
@@ -1263,7 +1318,7 @@ function snap() {
 function commit() {
   const s = snap();
   if (s === history.list[history.i]) return;
-  if (rt.pt && rt.on) syncRender();
+  if (rt.on) { if (NATIVE) nativeScene(); else if (rt.pt) syncRender(); }
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
   try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho })); } catch {}
 }

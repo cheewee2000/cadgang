@@ -14,7 +14,7 @@ if [ ! -d "$SPARKLE/Sparkle.framework" ]; then
   tar -xf "$SPARKLE/sparkle.tar.xz" -C "$SPARKLE"; rm "$SPARKLE/sparkle.tar.xz"
 fi
 mkdir -p "$APP/Contents/Frameworks"; cp -R "$SPARKLE/Sparkle.framework" "$APP/Contents/Frameworks/"
-swiftc -O -o "$APP/Contents/MacOS/cadgang" mac/main.swift -framework Cocoa -framework WebKit \
+swiftc -O -o "$APP/Contents/MacOS/cadgang" mac/main.swift mac/render.swift -framework Cocoa -framework WebKit -framework Metal -framework MetalKit \
   -F "$SPARKLE" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 sed "s/__VERSION__/$VERSION/g" mac/Info.plist > "$APP/Contents/Info.plist"
 cp "$(command -v node)" "$RES/node"

@@ -19,6 +19,7 @@ let EXTS = ["step", "stp", "iges", "igs", "brep", "stl", "obj", "ply", "3mf", "g
 /// Files dropped ANYWHERE in the window (toolbar, canvas) open like a Finder
 /// double-click. Left to WebKit, a file drop outside the page's own drop zone did nothing.
 final class DropWebView: WKWebView {
+    var tracer: PathTracer?
     var onFiles: (([URL]) -> Void)?
     private func files(_ s: NSDraggingInfo) -> [URL] {
         (s.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
@@ -33,11 +34,16 @@ final class DropWebView: WKWebView {
     }
 }
 
+/// The window's content: the page over the Metal render view (render.swift). Flipped, so the page's
+/// viewport rect (top-left origin) is the render view's frame as is.
+final class PageBox: NSView { override var isFlipped: Bool { true } }
+func webIn(_ win: NSWindow?) -> DropWebView? { win?.contentView?.subviews.lazy.compactMap { $0 as? DropWebView }.first }
+
 final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     var web: DropWebView!            // the first window's page; files that arrive before it is ready wait for it
     var windows: [NSWindow] = []     // one per open file; each page has its own markups, the server tells them apart
     var titleWatch: [NSKeyValueObservation] = []
-    var keyWeb: DropWebView { (NSApp.keyWindow?.contentView as? DropWebView) ?? web }
+    var keyWeb: DropWebView { webIn(NSApp.keyWindow) ?? web }
     var node: Process?
     // Sparkle: checks the appcast in Info.plist (SUFeedURL), verifies with SUPublicEDKey, swaps the app in place.
     let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
@@ -68,7 +74,11 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
                            backing: .buffered, defer: false)
         win.isReleasedWhenClosed = false
         win.title = "CADgang"
-        win.contentView = w
+        let box = PageBox()
+        win.contentView = box
+        w.frame = box.bounds; w.autoresizingMask = [.width, .height]
+        w.setValue(false, forKey: "drawsBackground")   // the page paints its own paper; under RENDER its viewport is see-through
+        box.addSubview(w)
         w.onFiles = { [weak self, weak w] urls in if let w = w { self?.open(urls.map { $0.path }, in: w) } }
         titleWatch.append(w.observe(\.title, options: [.new]) { [weak win] w, _ in win?.title = (w.title?.isEmpty == false) ? w.title! : "CADgang" })
         titleWatch.append(w.observe(\.url, options: [.new]) { [weak self] _, _ in self?.saveWindows() })
@@ -106,7 +116,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     static let SESSION = "cadgang.windows"
     func saveWindows() {
         if quitting { return }
-        let urls = windows.compactMap { ($0.contentView as? WKWebView)?.url }.filter { $0.query?.contains("open=") == true }
+        let urls = windows.compactMap { webIn($0)?.url }.filter { $0.query?.contains("open=") == true }
         UserDefaults.standard.set(urls.map { $0.absoluteString }, forKey: Self.SESSION)
     }
     func savedWindows() -> [URL] {
@@ -191,8 +201,26 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         guard let body = m.body as? [String: Any], let cmd = body["cmd"] as? String else { return }
         if cmd == "defaultApp" { makeDefaultViewer() }
+        if cmd.hasPrefix("render"), let w = m.webView as? DropWebView { render(cmd, body, in: w) }
         // AirDrop the ?follow link: the sheet lists nearby devices; the iPad opens it in Safari.
         if cmd == "airdrop", let s = body["url"] as? String, let u = URL(string: s) { NSSharingService(named: .sendViaAirDrop)?.perform(withItems: [u]) }
+    }
+
+    /// RENDER: the page drives a PathTracer that sits under it (render.swift).
+    func render(_ cmd: String, _ body: [String: Any], in w: DropWebView) {
+        if cmd == "render" { w.tracer?.stop(); return }
+        if w.tracer == nil, let box = w.superview {
+            guard let t = PathTracer(frame: .zero) else { w.evaluateJavaScript("window.cadgangNativeRender?.(false)"); return }
+            box.addSubview(t.view, positioned: .below, relativeTo: w)
+            w.tracer = t
+        }
+        guard let t = w.tracer else { return }
+        if cmd == "renderScene",
+           let v = (body["verts"] as? String).flatMap({ Data(base64Encoded: $0) }), let i = (body["idx"] as? String).flatMap({ Data(base64Encoded: $0) }),
+           let tr = (body["tri"] as? String).flatMap({ Data(base64Encoded: $0) }), let mats = body["mats"] as? [[Double]] {
+            t.setScene(verts: v, idx: i, tri: tr, mats: mats, cap: (body["cap"] as? [Double]) ?? [0.04, 0.04, 0.04], bg: (body["bg"] as? [Double]) ?? [1, 1, 1])
+        }
+        if cmd == "renderCam" { t.setCamera(body) }
     }
 
     /// Become the Finder's app for every extension the viewer reads. One LaunchServices

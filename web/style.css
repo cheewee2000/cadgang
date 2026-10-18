@@ -32,6 +32,9 @@ html, body {
 }
 
 body { display: flex; flex-direction: column; }
+/* RENDER in the Mac app: the native render view sits under the page; the viewport lets it through. */
+:root.native-render, :root.native-render body { background: transparent; }
+:root.native-render #viewport canvas { opacity: 0; }
 
 /* ------------------------------------------------------------ header */
 
