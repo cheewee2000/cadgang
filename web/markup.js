@@ -118,20 +118,22 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   const uid = () => Math.random().toString(36).slice(2, 9);
   let last = null;
 
-  // Which tool a press uses: the chosen one — except a finger, which always orbits, and a stylus
-  // (Apple Pencil), which draws even with no tool chosen. On an iPad the pencil marks up and the
-  // hand turns the part, no mode switch; the mouse keeps the explicit tool.
-  const toolFor = (e) => (e.pointerType === 'touch' ? null : tool || (e.pointerType === 'pen' ? 'pen' : null));
-  const mine = (e) => !!current || (!!tool && e.pointerType !== 'touch');
+  // Which tool a press uses: the chosen one, whatever presses (mouse, finger or pencil) — and with
+  // none chosen, a stylus (Apple Pencil) still draws with the pen while fingers orbit. On an iPad
+  // the pencil marks up and the hand turns the part with no mode switch; pick a tool and a finger
+  // draws too (v0.14.14: before, a finger never drew, so PEN/ARROW did nothing without a pencil).
+  const toolFor = (e) => tool || (e.pointerType === 'pen' ? 'pen' : null);
+  const mine = (e) => (current ? e.pointerId === last.id : !!tool);
 
   canvas.addEventListener('pointerdown', (e) => {
     const using = e.button === 0 ? toolFor(e) : null;
     if (!using) return;
     e.stopImmediatePropagation(); e.preventDefault();
+    if (current) return;   // a second finger mid-stroke: neither draws nor orbits
     const p = pointAt(e);
     if (!p) return;
     canvas.setPointerCapture(e.pointerId);
-    last = { x: e.clientX, y: e.clientY };
+    last = { x: e.clientX, y: e.clientY, id: e.pointerId };
     if (using === 'pen') current = { id: uid(), kind: 'pen', points: [p], ...pen };
     else if (using === 'arrow') current = { id: uid(), kind: 'arrow', points: [p, p], ...pen };
     else if (using === 'note') { startNote(p, e); }   // startNote reads pen for its colour
