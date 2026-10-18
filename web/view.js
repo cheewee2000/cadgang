@@ -226,6 +226,7 @@ function listBodies() {
   radialOffsets(model.children, bbox.getCenter(new THREE.Vector3()));
   const tris = model.children.reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.getAttribute('position').count) / 3, 0);
   $('#solveBtn').hidden = model.children.length < 2;
+  $('#resetBtn').hidden = model.children.length < 2;
   if (model.children.length > 1 && tris <= 300000) solveExplode();
   for (const m of model.children) {
     const row = document.createElement('label');
@@ -255,7 +256,7 @@ function solveExplode() {
 }
 $('#solveBtn').addEventListener('click', () => { say('solving explode vectors…'); setTimeout(solveExplode, 30); });
 // For a headless drive or a console: what the solver decided.
-window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, axis: m.userData.axis ?? null, nudge: +(m.userData.nudge ?? 0).toFixed(2) }));
+window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, axis: m.userData.axis ?? null, travel: m.userData.travel == null ? null : +m.userData.travel.toFixed(2) }));
 /** The tick of each body row takes its colour when COLOR is on. */
 function paintRows() {
   [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.style.accentColor = ui.color ? `#${partColor(i).getHexString()}` : ''; });
@@ -267,8 +268,9 @@ function setBodyVisible(m, on) {
 }
 // A body's explode vector at full slider: the solver's offset, or along the axis the
 // user chose for it (`${sign}${axis}`, right-click menu), at least a body-length
-// long so a part the solver left put still moves. A drag adds a nudge along that
-// axis in world units, slider or not.
+// long so a part the solver left put still moves. A drag sets how far the part goes at
+// full slider (userData.travel, world units): the slider scales every part from rest (0)
+// to where it was dropped (100). RESET forgets travels and axes.
 const AXES = ['+x', '-x', '+y', '-y', '+z', '-z'];
 function explodeVec(m) {
   const o = m.userData.offset ?? new THREE.Vector3();
@@ -285,7 +287,8 @@ function applyExplode() {
     if (done.has(m)) return m.position;
     done.add(m);
     const v = explodeVec(m), len = v.length();
-    m.position.copy(v).multiplyScalar(len ? k * 2 + (m.userData.nudge ?? 0) / len : 0);
+    const full = m.userData.travel ?? len * 2;   // the solver's travel is twice its offset
+    m.position.copy(v).multiplyScalar(len ? (full * k) / len : 0);
     if (m.userData.parent) m.position.add(place(m.userData.parent));
     if (m.userData.edges) m.userData.edges.position.copy(m.position);
     return m.position;
@@ -295,6 +298,7 @@ function applyExplode() {
 }
 $('#explode').addEventListener('input', applyExplode);
 function setExplode(v) { $('#explode').value = Math.max(0, Math.min(100, v)); applyExplode(); }
+$('#resetBtn').addEventListener('click', () => { for (const m of model.children) { m.userData.axis = undefined; m.userData.travel = undefined; } applyExplode(); say('explode positions reset'); });
 
 function finishLoad(name, ms, keep = false) {
   const box = new THREE.Box3().setFromObject(model);
@@ -397,6 +401,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
   else if (e.button === 0 && !e.shiftKey && !measure.on && e.pointerType !== 'touch') {
     const hit = partAt(e);   // a part under the mouse slides along its explode axis; empty space orbits
+    if (hit && +$('#explode').value === 0) setExplode(100);   // a drag places the part at full explode: show that
     if (hit) { const v = explodeVec(hit.body); if (moves(hit.body, v)) drag.part = { m: hit.body, ...screenAxis(hit.point, v.normalize()) }; }
   }
   renderer.domElement.setPointerCapture(e.pointerId);
@@ -426,7 +431,8 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     return;
   }
   if (drag.part) {
-    drag.part.m.userData.nudge = (drag.part.m.userData.nudge ?? 0) + dx * drag.part.sx + dy * drag.part.sy;
+    const k = +$('#explode').value / 100 || 1, u = drag.part.m.userData;
+    u.travel = Math.max(0, (u.travel ?? explodeVec(drag.part.m).length() * 2) + (dx * drag.part.sx + dy * drag.part.sy) / k);
     applyExplode();
     return;
   }
@@ -947,7 +953,7 @@ const history = { list: [], i: -1 };
 function snap() {
   return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value,
-    bodies: model.children.map((m) => m.visible), parts: model.children.map((m) => [m.userData.axis ?? null, +(m.userData.nudge ?? 0).toFixed(3)]),
+    bodies: model.children.map((m) => m.visible), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.travel == null ? null : +m.userData.travel.toFixed(3)]),
     markup: markup.items, dims: measure.dims });
 }
 function commit() {
@@ -971,7 +977,7 @@ function apply(s) {
   for (const k of ['edges', 'wire', 'grid', 'color']) if (ui[k] !== st[k]) toggle(k, `#${k}Btn`);
   if (ui.ortho !== st.ortho) setOrtho(st.ortho);
   $('#sectPos').value = st.section.pos; section.flip = st.section.flip; setSectionAxis(st.section.axis);
-  model.children.forEach((m, i) => { const [axis, nudge] = st.parts?.[i] ?? [null, 0]; m.userData.axis = axis || undefined; m.userData.nudge = nudge || 0; });
+  model.children.forEach((m, i) => { const [axis, travel] = st.parts?.[i] ?? [null, null]; m.userData.axis = axis || undefined; m.userData.travel = travel ?? undefined; });
   $('#explode').value = st.explode; applyExplode();
   model.children.forEach((m, i) => setBodyVisible(m, st.bodies[i] ?? true));
   [...$('#bodies').querySelectorAll('input')].forEach((cb, i) => { cb.checked = model.children[i]?.visible ?? true; });
@@ -991,7 +997,7 @@ function partCmds(m) {
   if (!m) return [];
   const v = explodeVec(m), i = ['x', 'y', 'z'].reduce((b, _, j) => (Math.abs(v.getComponent(j)) > Math.abs(v.getComponent(b)) ? j : b), 0);
   const auto = moves(m, v) ? ` (${v.getComponent(i) < 0 ? '−' : '+'}${'XYZ'[i]})` : '';
-  const set = (axis) => { m.userData.axis = axis; if (!axis) m.userData.nudge = 0; applyExplode(); commit(); };
+  const set = (axis) => { m.userData.axis = axis; if (!axis) m.userData.travel = undefined; applyExplode(); commit(); };
   return [
     { head: m.userData.name },
     { label: `Explode auto${auto}`, run: () => set(undefined), on: () => !m.userData.axis },
