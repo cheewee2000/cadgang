@@ -131,7 +131,12 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   // Claude Code sessions that run the cadgang MCP server say which Knife Terminal tab they live in
   // (KNIFE_TAB). The button then types the review prompt into the newest live one, which is the one
   // thing that makes Claude act without the user typing. Other terminals: the prompt lands on the clipboard.
+  // The list outlives a server restart (the Mac app restarts it on every update; before v0.14.13 that
+  // forgot every session and the button fell back to the clipboard until a session reconnected).
+  const CLAUDE_FILE = path.join(dataDir, 'claude-tabs.json');
   const claude = new Map();   // tab → { cwd, at }
+  try { for (const [tab, v] of Object.entries(JSON.parse(fsSync.readFileSync(CLAUDE_FILE, 'utf8')))) claude.set(tab, v); } catch {}
+  const saveClaude = () => { try { fsSync.mkdirSync(dataDir, { recursive: true }); fsSync.writeFileSync(CLAUDE_FILE, JSON.stringify(Object.fromEntries(claude))); } catch {} };
   const KNIFE = path.join(os.homedir(), '.knife-terminal.sock');
   const knife = (msg) => new Promise((resolve) => {
     if (!fsSync.existsSync(KNIFE)) return resolve(null);
@@ -142,14 +147,14 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   });
   r.post('/claude', express.json(), (req, res) => {
     const tab = String(req.body?.tab ?? '').trim();
-    if (tab) claude.set(tab, { cwd: req.body.cwd ?? null, at: new Date().toISOString() });
+    if (tab) { claude.set(tab, { cwd: req.body.cwd ?? null, at: new Date().toISOString() }); saveClaude(); }
     res.json({ ok: true, tab: tab || null, sessions: [...claude.keys()] });
   });
   const PROMPT = 'Review the view I just sent from CADgang: call cadgang_feedback and give me feedback on what you see, anchored to my markups.';
   async function sendToClaude() {
     for (const tab of [...claude.keys()].reverse()) {   // newest registration first
       const status = ((await knife(`tab status ${tab}`)) || '').trim();
-      if (!status || status === 'gone') { claude.delete(tab); continue; }
+      if (!status || status === 'gone') { claude.delete(tab); saveClaude(); continue; }
       const reply = ((await knife(`tab type ${tab} ${PROMPT}`)) || '').trim();
       if (reply === 'ok') return { tab, status };
     }

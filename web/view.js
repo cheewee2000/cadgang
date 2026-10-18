@@ -939,7 +939,7 @@ $('#feedbackBtn').addEventListener('click', async () => {
     if (!r.ok) throw new Error(j.error || r.statusText);
     if (j.delivered) { say(`sent to Claude in terminal tab ${j.delivered.tab}`); return; }
     let copied = false; try { await navigator.clipboard.writeText(j.prompt); copied = true; } catch {}
-    say(copied ? 'queued for Claude · no session reachable, prompt copied — paste it in Claude Code' : 'queued for Claude · ask it to run cadgang_feedback', true);
+    say(copied ? 'queued · no Claude session reachable (run /mcp there) · prompt copied' : 'queued · no Claude session reachable · ask it to run cadgang_feedback', true);
   } catch (e) { say(`feedback failed: ${e.message}`, true); }
 });
 
