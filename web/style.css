@@ -172,6 +172,9 @@ select.ghost:hover { opacity: 0.55; }
 #ctx kbd, #tip kbd { font: inherit; color: var(--ink-faint); }
 #tip { position: fixed; z-index: 21; background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--ink); padding: 3px 7px; font-size: var(--fs-12); letter-spacing: var(--ls-label); pointer-events: none; white-space: nowrap; }
 #tip[hidden] { display: none; }
+#measures { flex: 1 1 auto; min-width: 0; }
+footer .foot-tools { display: flex; align-items: center; gap: var(--sp-1); }
+footer button.ghost { font-size: var(--fs-12); padding: 4px 8px; }
 #stats { flex: 0 0 auto; text-align: right; color: var(--ink-soft); text-transform: uppercase; letter-spacing: var(--ls-label); font-variant-numeric: tabular-nums; }
 .status { color: var(--ink-soft); font-size: var(--fs-12); min-width: 84px; text-align: right; text-transform: uppercase; letter-spacing: var(--ls-label); font-variant-numeric: tabular-nums; }
 .status.err { color: var(--signal-red); }
