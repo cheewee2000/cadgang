@@ -90,6 +90,12 @@ export function pack(m) {
  *   POST    /api/view/open {paths}      tell every open page to open these files (the MCP tool)
  *   GET|PUT /api/view/parts?subject=    per-file explode axes and maxima, by body name
  */
+/** The one file in a multipart/form-data body (what Share to web sends; ponytail: one part, no streaming). */
+function multipartFile(buf, ctype) {
+  const b = Buffer.from('--' + /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(ctype).slice(1).find(Boolean));
+  const start = buf.indexOf('\r\n\r\n', buf.indexOf(b)) + 4;
+  return buf.subarray(start, buf.indexOf(Buffer.concat([Buffer.from('\r\n'), b]), start));
+}
 const SHARE_HOST = process.env.CADGANG_SHARE_HOST || 'https://www.experiments.cwandt.com/cadgang';
 const SHARE_KEY_FILE = path.join(os.homedir(), '.cadgang', 'share_key');
 const shareKey = () => { try { return fsSync.readFileSync(SHARE_KEY_FILE, 'utf8').trim(); } catch { return process.env.CADGANG_SHARE_KEY || ''; } };
@@ -279,22 +285,43 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       if (!mayReadLocal(req)) throw Object.assign(new Error('Sharing starts from the Mac app'), { status: 403 });
       const key = shareKey();
       if (!key) throw Object.assign(new Error(`No share key: put it in ${SHARE_KEY_FILE}`), { status: 500 });
-      const up = await fetch(`${SHARE_HOST}/api/view/share/store`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/octet-stream' }, body: req.body });
-      const d = await up.json().catch(() => ({}));
-      if (!up.ok) throw Object.assign(new Error(d.error || `share host: HTTP ${up.status}`), { status: 502 });
-      res.json({ id: d.id, url: `${SHARE_HOST}/view?share=${d.id}` });
+      // DreamHost's ModSecurity refuses plain bodies over 2.5 MB (and flags small binary ones as attacks),
+      // and its proxy drops multipart ones over ~5 MB: the bundle goes up as 1 MB file parts.
+      const CHUNK = 1 << 20, of = Math.max(1, Math.ceil(req.body.length / CHUNK));
+      let id = '';
+      for (let part = 0; part < of; part++) {
+        const form = new FormData();
+        form.append('part', new Blob([req.body.subarray(part * CHUNK, (part + 1) * CHUNK)], { type: 'application/octet-stream' }), 'part.bin');
+        const up = await fetch(`${SHARE_HOST}/api/view/share/store?part=${part}&of=${of}${id ? `&id=${id}` : ''}`, { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form });
+        const d = await up.json().catch(() => ({}));
+        if (!up.ok) throw Object.assign(new Error(d.error || `share host: HTTP ${up.status} on part ${part + 1} of ${of}`), { status: 502 });
+        id = d.id;
+      }
+      res.json({ id, url: `${SHARE_HOST}/view?share=${id}` });
     } catch (e) { next(e); }
   });
-  r.post('/share/store', express.raw({ type: () => true, limit: '1gb' }), async (req, res, next) => {
+  r.post('/share/store', express.raw({ type: () => true, limit: '8mb' }), async (req, res, next) => {
     try {
       const key = shareKey(), got = String(req.headers.authorization || '').replace(/^Bearer /, '');
       if (!key || got.length !== key.length || !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(key))) throw Object.assign(new Error('Bad share key'), { status: 401 });
-      const buf = req.body;
-      const head = JSON.parse(buf.subarray(4, 4 + buf.readUInt32LE(0)).toString('utf8'));   // a bundle that does not parse is refused
-      const id = crypto.randomBytes(12).toString('base64url');
-      await fs.mkdir(path.join(dataDir, 'shares'), { recursive: true });
-      await fs.writeFile(sharePath(id), buf);
-      res.json({ id, files: head.files?.length ?? 0 });
+      const part = parseInt(req.query.part) || 0, of = parseInt(req.query.of) || 1;
+      const chunk = /multipart/i.test(req.headers['content-type'] || '') ? multipartFile(req.body, req.headers['content-type']) : req.body;
+      let id = String(req.query.id || '');
+      const tmp = () => `${sharePath(id)}.part`;
+      if (part === 0) {
+        id = crypto.randomBytes(12).toString('base64url');
+        await fs.mkdir(path.join(dataDir, 'shares'), { recursive: true });
+        await fs.writeFile(tmp(), chunk);
+      } else {
+        if (!/^[\w-]{16}$/.test(id) || !fsSync.existsSync(tmp())) throw Object.assign(new Error('No such upload'), { status: 404 });
+        await fs.appendFile(tmp(), chunk);
+      }
+      if (part === of - 1) {
+        const buf = await fs.readFile(tmp());
+        JSON.parse(buf.subarray(4, 4 + buf.readUInt32LE(0)).toString('utf8'));   // a bundle that does not parse is refused
+        await fs.rename(tmp(), sharePath(id));
+      }
+      res.json({ id });
     } catch (e) { next(e); }
   });
   r.get('/share/:id', (req, res) => {
