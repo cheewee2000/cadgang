@@ -1331,9 +1331,11 @@ let roomEnv = null;
     }
   }
   applyCamera();
-  // Under the ground, no ground: the grid, and the WebGL render's floor (the Metal render drops its own)
-  if (grid) grid.visible = ui.grid && camera.position.z >= grid.position.z;
-  if (rt.on && !NATIVE && rt.floor && rt.floor.visible !== camera.position.z >= rt.floor.position.z) { rt.floor.visible = !rt.floor.visible; syncRender(); }
+  // The ground goes as soon as it would hide the model: seen from under it (camera below it, or an ortho view
+  // looking up, whose rays start below it). The grid, and the WebGL render's floor; the Metal render drops its own.
+  const above = (z) => (ui.ortho ? camera.getWorldDirection(new THREE.Vector3()).z < 0 : camera.position.z >= z);
+  if (grid) grid.visible = ui.grid && above(grid.position.z);
+  if (rt.on && !NATIVE && rt.floor && rt.floor.visible !== above(rt.floor.position.z)) { rt.floor.visible = !rt.floor.visible; syncRender(); }
   if (sky.visible) { sky.position.copy(orbit.target); sky.scale.setScalar(orbit.dist * 50); sky.material.uniforms.center.value.copy(orbit.target); }
   if (rt.on && NATIVE) nativeCam(); else if (rt.pt && rt.on) renderSample(); else renderer.render(scene, camera);
   measure.projectLabels();

@@ -183,7 +183,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
             float3 p = o + d * x.distance;
             uint i = x.primitive_id;
             bool isFloor = i >= u.info.w;
-            if (isFloor && u.camPos.z < u.scene.z) { tmin = x.distance + u.scene.y; continue; }   // looking up from under it: no floor
+            if (isFloor && d.z > 0.0) { tmin = x.distance + u.scene.y; continue; }   // met from underneath, it would hide the model: no floor (an ortho view looking up starts its rays under it while the camera is above)
             if (clipOn && !isFloor && dot(u.clip.xyz, p) + u.clip.w < 0.0) { tmin = x.distance + u.scene.y; continue; }
             float3 a = vtx[idx[3 * i]].p, b = vtx[idx[3 * i + 1]].p, c = vtx[idx[3 * i + 2]].p;
             float3 ng = normalize(cross(b - a, c - a));
