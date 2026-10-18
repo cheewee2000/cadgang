@@ -289,8 +289,9 @@ function listBodies() {
   return dups.join(' · ');
 }
 /**
- * The panel's title row: − folds it to just the title, + brings it back. Width drags at the
- * bottom-right corner (CSS resize). Both are remembered per browser.
+ * The panel's title row: − folds it to just the title, + brings it back. The grip on the
+ * panel's right edge drags its width (CSS resize had an invisible corner and no touch).
+ * Both are remembered per browser.
  */
 const BODIES_KEY = 'cadgang.bodies';
 function bodiesHead() {
@@ -310,15 +311,26 @@ function bodiesHead() {
     syncRows();   // body ticks on, group ticks full (not half)
   });
   const tools = document.createElement('span'); tools.className = 'bodies-tools'; tools.append(all, btn);
-  head.append(Object.assign(document.createElement('span'), { textContent: 'BODIES' }), tools);
+  // Absolutely placed against the panel, so it spans the panel's full height from inside the head.
+  const grip = document.createElement('div'); grip.className = 'bodies-grip'; grip.title = 'Drag to set the width';
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    grip.setPointerCapture(e.pointerId);
+    const x0 = e.clientX, w0 = panel.offsetWidth;
+    const move = (ev) => { panel.style.width = `${Math.min(innerWidth * 0.7, Math.max(120, w0 + ev.clientX - x0))}px`; };
+    const up = () => {
+      for (const [t, f] of [['pointermove', move], ['pointerup', up], ['pointercancel', up]]) grip.removeEventListener(t, f);
+      saveBodies();
+    };
+    grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+  });
+  head.append(Object.assign(document.createElement('span'), { textContent: 'BODIES' }), tools, grip);
   return head;
 }
 function saveBodies() {
   const panel = $('#bodies');
   try { localStorage.setItem(BODIES_KEY, JSON.stringify({ min: panel.classList.contains('min'), width: panel.style.width ? panel.offsetWidth : null })); } catch {}
 }
-// A corner drag sets an inline width; remember it.
-new ResizeObserver(() => { const p = $('#bodies'); if (p.style.width && !p.hidden && !p.classList.contains('min')) saveBodies(); }).observe($('#bodies'));
 
 /** Solve the explode vectors from the bodies at rest, then put the explode back. */
 function solveExplode() {
