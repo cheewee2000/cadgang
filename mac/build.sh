@@ -31,6 +31,8 @@ fi
 rsync -a package.json src web "$RES/app/"
 # three.js is a devDependency only because web/vendor carries its own copy.
 rsync -a --exclude three node_modules "$RES/app/"
+# Native STEP/IGES/BREP import with its OCCT dylibs (src/core/step.js falls back to WASM without it).
+bash mac/occt/build.sh "$RES/app/bin" >/dev/null 2>&1 || echo "warning: no native OCCT importer (brew install opencascade); the app falls back to WASM"
 # A Dock-less way in from a shell: `dist/cadgang.app/Contents/MacOS/cadgang-open file.step`.
 cp mac/cadgang-open "$APP/Contents/MacOS/cadgang-open"
 codesign --force --deep --sign - "$APP"

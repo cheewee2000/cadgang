@@ -9,6 +9,10 @@
 
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
+import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { weldVertices, positionsBBox } from './mesh.js';
 
 /**
@@ -48,6 +52,45 @@ function readerFor(occt, name = '') {
   return occt.ReadStepFile.bind(occt);
 }
 
+// Native OCCT (mac/occt, built into bin/ by mac/occt/build.sh): the same importer code as the
+// WASM one, parallel meshing, no 32-bit heap — 3–5× faster and opens files the WASM heap can't.
+// The WASM importer stays as the fallback where the binary isn't built.
+const NATIVE = fileURLToPath(new URL('../../bin/cadgang-occt', import.meta.url));
+const hasNative = () => process.env.CADGANG_WASM !== '1' && fs.existsSync(NATIVE);
+
+/** Run cadgang-occt on the buffer; returns what occt-import-js's Read*File returns (meshes only). */
+async function readNative(buffer, name, linearDeflection, angularDeflection) {
+  const ext = String(name).toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  const fmt = ext === 'igs' || ext === 'iges' ? 'iges' : ext === 'brep' ? 'brep' : 'step';
+  const tmp = path.join(os.tmpdir(), `cadgang-${process.pid}-${Date.now()}.${fmt}`);
+  await fs.promises.writeFile(tmp, buffer);
+  try {
+    const out = await new Promise((resolve, reject) => execFile(NATIVE, [fmt, tmp, String(linearDeflection), String(angularDeflection)],
+      { encoding: 'buffer', maxBuffer: 2 ** 32 }, (e, stdout, stderr) => e ? reject(new Error(String(stderr).trim() || e.message)) : resolve(stdout)));
+    return { success: true, meshes: parseNative(out) };
+  } catch { return { success: false }; }
+  finally { fs.promises.rm(tmp, { force: true }); }
+}
+/** main.cpp's stream → occt-import-js mesh objects. */
+export function parseNative(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength), meshes = [];
+  let o = 0;
+  const u32 = () => { const v = dv.getUint32(o, true); o += 4; return v; };
+  const f32s = (n) => { const a = new Float32Array(n); for (let i = 0; i < n; i++, o += 4) a[i] = dv.getFloat32(o, true); return a; };
+  for (let nameLen; (nameLen = u32()) !== 0xFFFFFFFF;) {
+    const name = buf.subarray(o, o + nameLen).toString('utf8'); o += nameLen;
+    const color = dv.getUint8(o++) ? Array.from(f32s(3)) : null;
+    const nv = u32(), position = f32s(nv * 3);
+    const normal = dv.getUint8(o++) ? f32s(nv * 3) : null;
+    const nt = u32(), index = new Uint32Array(nt * 3);
+    for (let i = 0; i < nt * 3; i++) index[i] = u32();
+    const brep_faces = [];
+    for (let nf = u32(); nf--;) { const first = u32(), last = dv.getInt32(o, true); o += 4; brep_faces.push({ first, last }); }
+    meshes.push({ name, color, attributes: { position: { array: position }, ...(normal && { normal: { array: normal } }) }, index: { array: index }, brep_faces });
+  }
+  return meshes;
+}
+
 /**
  * buffer: Buffer|Uint8Array of the CAD file.
  * Options: name (filename, picks the reader by extension), linearDeflection
@@ -56,14 +99,13 @@ function readerFor(occt, name = '') {
  *           vertexCount, triangleCount, faceCount } with plain JSON arrays.
  */
 export async function importCadFile(buffer, { name = 'import.step', linearDeflection = 0.001, angularDeflection = 0.5 } = {}) {
-  const occt = await getOcct();
-  const read = readerFor(occt, name);
-  const result = read(new Uint8Array(buffer), {
-    linearUnit: 'millimeter',
-    linearDeflectionType: 'bounding_box_ratio',
-    linearDeflection,
-    angularDeflection,
-  });
+  const result = hasNative() ? await readNative(buffer, name, linearDeflection, angularDeflection)
+    : readerFor(await getOcct(), name)(new Uint8Array(buffer), {
+      linearUnit: 'millimeter',
+      linearDeflectionType: 'bounding_box_ratio',
+      linearDeflection,
+      angularDeflection,
+    });
   if (!result?.success || !result.meshes?.length) {
     // The importer swallows its own out-of-memory (a 465 MB PCB export: 10 M
     // entities, 14k solids) and reports plain failure; size tells the two apart.
