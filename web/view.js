@@ -24,6 +24,8 @@ import { explodeOffsets, radialOffsets } from './explode.js';
 import { renderDrawing } from './drawing.js';
 import { createMeasure } from './measure.js';
 import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { MATERIALS, materialOf, pickMaterial, materialFor } from './materials.js';
 
 const $ = (s) => document.querySelector(s);
 const ui = { edges: true, wire: false, grid: true, look: 'shaded', ortho: false, flat: false, color: false }; // flat: a 2D drawing is open
@@ -84,6 +86,7 @@ const PRESETS = {
   glass: () => new THREE.MeshPhysicalMaterial({ color: 0xdfe8ee, metalness: 0, roughness: 0.05, transmission: 0.9, thickness: 2, transparent: true, opacity: 0.6 }),
   xray: () => new THREE.MeshBasicMaterial({ color: 0x2f5d8a, transparent: true, opacity: 0.18, depthWrite: false }),
   normals: () => new THREE.MeshNormalMaterial(),
+  materials: null,   // per body, from what it is made of: materialFor (materials.js)
 };
 const SOLID_LOOKS = new Set(['shaded', 'metal', 'plastic']);
 // One hue per body or layer when COLOR is on; golden-ratio spacing keeps any count apart.
@@ -95,7 +98,7 @@ function styleMesh(m) {
     m.material.clippingPlanes = section.axis && bbox ? [section.plane] : [];
     return;
   }
-  const mat = PRESETS[ui.look]();
+  const mat = ui.look === 'materials' ? materialFor(THREE, m) : PRESETS[ui.look]();
   if (ui.color && mat.color) mat.color.copy(partColor(i));
   // the file's own colour (a STEP part's material) on the solid looks; COLOR still overrides it
   else if (m.userData.color && SOLID_LOOKS.has(ui.look)) mat.color.setRGB(...m.userData.color, THREE.SRGBColorSpace);
@@ -280,7 +283,11 @@ function listBodies() {
       row.addEventListener('pointerenter', () => highlightBody(m));
       row.addEventListener('pointerleave', () => highlightBody(null));
       if (root.kids.size) row.append(Object.assign(document.createElement('span'), { className: 'fold-gap' }));   // aligns with the groups' +/−
-      row.append(cb, nm);
+      const pick = document.createElement('select'); pick.className = 'ghost mat-pick'; pick.title = 'What this body is made of (MATERIALS look)';
+      for (const [k, d] of Object.entries(MATERIALS)) pick.append(new Option(d.label, k));
+      pick.value = materialOf(m);
+      pick.addEventListener('change', () => { pickMaterial(m, pick.value); styleMesh(m); rerender(); });
+      row.append(cb, nm, pick);
       into.appendChild(row);
     }
   };
@@ -942,7 +949,7 @@ $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
 $('#gridBtn').addEventListener('click', () => toggle('grid', '#gridBtn'));
 $('#fitBtn').addEventListener('click', fit);
-$('#look').addEventListener('change', (e) => { ui.look = e.target.value; for (const m of model.children) styleMesh(m); });
+$('#look').addEventListener('change', (e) => { ui.look = document.documentElement.dataset.look = e.target.value; for (const m of model.children) styleMesh(m); });
 function setOrtho(on) {
   ui.ortho = on;
   camera = on ? ortho : persp;
@@ -1166,6 +1173,8 @@ function renderSample() {
   }
   rt.pt.renderSample();
 }
+/** The render, if on, takes the scene again. */
+function rerender() { if (rt.on) { if (NATIVE) nativeScene(); else if (rt.pt) syncRender(); } }
 const b64 = (a) => {
   const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = '';
   for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
@@ -1193,7 +1202,7 @@ function nativeScene() {
     for (let i = 0; i < n; i++) idx[to * 3 + i] = vo + (g.index ? g.index.getX(i) : i);
     tri.fill(mi, to, to + n / 3);
     const mat = m.material, c = mat.color ?? new THREE.Color(0xb9b8b3);
-    mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0]);
+    mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5]);
     vo += pos.count; to += n / 3;
   });
   const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff);
@@ -1222,8 +1231,14 @@ function resize() {
   }
 }
 new ResizeObserver(resize).observe(viewport);
+// MATERIALS needs something for metal and glass to reflect in the live view: a soft studio room.
+let roomEnv = null;
 (function loop() {
   resize();
+  if (!(rt.on && rt.pt)) {   // the WebGL path tracer owns the environment while it runs
+    const env = ui.look === 'materials' ? (roomEnv ??= new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture) : null;
+    if (scene.environment !== env) scene.environment = env;
+  }
   applyCamera();
   if (sky.visible) { sky.position.copy(orbit.target); sky.scale.setScalar(orbit.dist * 50); sky.material.uniforms.center.value.copy(orbit.target); }
   if (rt.on && NATIVE) nativeCam(); else if (rt.pt && rt.on) renderSample(); else renderer.render(scene, camera);
@@ -1248,7 +1263,7 @@ window.__view = { model, section, orbit, ui, measure, rt, THREE, partAt, faceAt,
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
 // ?open=/abs/a.step|/abs/b.stl — the same local-path door, for the shell and for headless tests.
-// ?section=z:0.3, ?explode=0.4 and ?render set the tools once the file is in (a pushed view, a test harness).
+// ?section=z:0.3, ?explode=0.4, ?look=materials and ?render set the tools once the file is in (a pushed view, a test harness).
 const params = new URLSearchParams(location.search);
 const openArg = params.get('open');
 if (follow) fetch('/api/view/tabs').then((r) => r.json()).then((d) => { setTabs(d.tabs || []); if (!d.tabs?.length) return fetch('/api/view/screen').then((r) => r.json()).then((s) => followTo(s.screen?.subject)); }).catch(() => {});
@@ -1257,6 +1272,8 @@ if (openArg) window.cadgangOpen(openArg.split('|')).then(() => {
   if (sec) { $('#sectPos').value = Math.round(parseFloat(sec[2]) * 1000); setSectionAxis(sec[1]); }
   const ex = parseFloat(params.get('explode'));
   if (ex > 0) { $('#explode').value = Math.round(ex * 100); applyExplode(); }
+  const look = params.get('look');
+  if (look in PRESETS) { $('#look').value = look; $('#look').dispatchEvent(new Event('change')); }
   if (params.has('render')) setRender(true);
 });
 
@@ -1318,7 +1335,7 @@ function snap() {
 function commit() {
   const s = snap();
   if (s === history.list[history.i]) return;
-  if (rt.on) { if (NATIVE) nativeScene(); else if (rt.pt) syncRender(); }
+  rerender();
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
   try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho })); } catch {}
 }
@@ -1327,13 +1344,13 @@ function commit() {
 const PREFS_KEY = 'cadgang-view';
 try {
   const p = JSON.parse(localStorage.getItem(PREFS_KEY));
-  if (p?.look in PRESETS) ui.look = $('#look').value = p.look;
+  if (p?.look in PRESETS) ui.look = document.documentElement.dataset.look = $('#look').value = p.look;
   for (const k of ['edges', 'wire', 'grid', 'color']) if (typeof p?.[k] === 'boolean' && ui[k] !== p[k]) toggle(k, `#${k}Btn`);
   if (p?.ortho) setOrtho(true);
 } catch {}
 function apply(s) {
   const st = JSON.parse(s);
-  if (st.look !== ui.look) { ui.look = $('#look').value = st.look; for (const m of model.children) styleMesh(m); }
+  if (st.look !== ui.look) { ui.look = document.documentElement.dataset.look = $('#look').value = st.look; for (const m of model.children) styleMesh(m); }
   for (const k of ['edges', 'wire', 'grid', 'color']) if (ui[k] !== st[k]) toggle(k, `#${k}Btn`);
   if (ui.ortho !== st.ortho) setOrtho(st.ortho);
   $('#sectPos').value = st.section.pos; section.flip = st.section.flip; setSectionAxis(st.section.axis);

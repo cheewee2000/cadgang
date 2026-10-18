@@ -174,6 +174,9 @@ select.ghost:hover { opacity: 0.55; }
 .tabs button { font-size: var(--fs-12); padding: 4px 8px; white-space: nowrap; }
 .bodies label { display: flex; align-items: center; gap: var(--sp-2); cursor: pointer; white-space: nowrap; }
 .bodies input { accent-color: var(--ink); margin: 0; }
+.bodies .mat-pick { display: none; flex: none; width: 10em; font: inherit; font-size: var(--fs-12); height: 20px; padding: 0 18px 0 4px; margin-left: auto; background-position: right 4px center; }
+.bodies label > span { flex: none; }
+:root[data-look="materials"] .bodies .mat-pick { display: block; }
 .bodies span:hover { text-decoration: underline; }
 .bodies { box-sizing: border-box; min-width: 120px; max-width: 70vw; }
 .bodies-grip { position: absolute; top: 0; right: 0; bottom: 0; width: 6px; cursor: ew-resize; touch-action: none; }

@@ -10,7 +10,7 @@ struct RenderUniforms {
     var camPos = SIMD4<Float>(), camFwd = SIMD4<Float>(), camRight = SIMD4<Float>(), camUp = SIMD4<Float>()
     var sunDir = SIMD4<Float>(), sunCol = SIMD4<Float>(), skyTop = SIMD4<Float>(), skyBot = SIMD4<Float>()
     var bg = SIMD4<Float>(), clip = SIMD4<Float>()   // clip: keep where dot(xyz, p) + w >= 0; xyz = 0 is off
-    var scene = SIMD4<Float>()                       // x: scene diagonal, y: ray offset
+    var scene = SIMD4<Float>()                       // x: scene diagonal, y: ray offset, z: floor height
     var info = SIMD4<UInt32>()                       // x: samples so far, y: ortho, z: samples this frame, w: floor's first triangle
 }
 
@@ -49,7 +49,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     func stop() { view.isHidden = true; view.isPaused = true; accel = nil; vtx = nil; idx = nil; tri = nil; mats = nil }
 
     /// verts: [x y z nx ny nz] per vertex, world space. idx: 3 per triangle. tri: material per triangle.
-    /// mats: [r g b metalness roughness transmission] (linear colour).
+    /// mats: [r g b metalness roughness transmission ior] (linear colour).
     func setScene(verts: Data, idx idxData: Data, tri triData: Data, mats matList: [[Double]], cap: [Double], bg: [Double]) {
         let dev = view.device!
         var v = [Float](repeating: 0, count: verts.count / 4); _ = v.withUnsafeMutableBytes { verts.copyBytes(to: $0) }
@@ -64,16 +64,16 @@ final class PathTracer: NSObject, MTKViewDelegate {
         for (x, y) in [(-r, -r), (r, -r), (r, r), (-r, r)] { v += [c.x + x, c.y + y, z, 0, 0, 1] }
         ix += [base, base + 1, base + 2, base, base + 2, base + 3]
         var m = matList.map { $0.map(Float.init) }
-        m.append([0.92, 0.91, 0.89, 0, 0.9, 0])                               // floor
-        m.append(cap.map(Float.init) + [0, 0.7, 0])                            // section cap
+        m.append([0.92, 0.91, 0.89, 0, 0.9, 0, 1.5])                          // floor
+        m.append(cap.map(Float.init) + [0, 0.7, 0, 1.5])                       // section cap
         tm += [UInt32(m.count - 2), UInt32(m.count - 2)]
-        let mats8: [Float] = m.flatMap { [$0[0], $0[1], $0[2], 0, $0[3], $0[4], $0[5], 0] }   // two float4 per material
+        let mats8: [Float] = m.flatMap { [$0[0], $0[1], $0[2], 0, $0[3], $0[4], $0[5], $0.count > 6 ? $0[6] : 1.5] }   // two float4 per material
         vtx = dev.makeBuffer(bytes: v, length: v.count * 4, options: .storageModeShared)
         idx = dev.makeBuffer(bytes: ix, length: ix.count * 4, options: .storageModeShared)
         tri = dev.makeBuffer(bytes: tm, length: tm.count * 4, options: .storageModeShared)
         mats = dev.makeBuffer(bytes: mats8, length: mats8.count * 4, options: .storageModeShared)
         u.bg = SIMD4(Float(bg[0]), Float(bg[1]), Float(bg[2]), 1)
-        u.scene = SIMD4(diag, diag * 2e-5, 0, 0)
+        u.scene = SIMD4(diag, diag * 2e-5, z, 0)
         u.info.w = UInt32(ix.count / 3 - 2)
 
         let g = MTLAccelerationStructureTriangleGeometryDescriptor()
@@ -154,7 +154,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
 
     struct U { float4 camPos, camFwd, camRight, camUp, sunDir, sunCol, skyTop, skyBot, bg, clip, scene; uint4 info; };
     struct Vtx { packed_float3 p; packed_float3 n; };
-    struct Mat { float4 color; float4 prm; };   // prm: metalness, roughness, transmission
+    struct Mat { float4 color; float4 prm; };   // prm: metalness, roughness, transmission, ior
 
     static uint pcg(thread uint& s) { s = s * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
     static float rnd(thread uint& s) { return float(pcg(s)) * (1.0 / 4294967296.0); }
@@ -183,6 +183,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
             float3 p = o + d * x.distance;
             uint i = x.primitive_id;
             bool isFloor = i >= u.info.w;
+            if (isFloor && u.camPos.z < u.scene.z) { tmin = x.distance + u.scene.y; continue; }   // looking up from under it: no floor
             if (clipOn && !isFloor && dot(u.clip.xyz, p) + u.clip.w < 0.0) { tmin = x.distance + u.scene.y; continue; }
             float3 a = vtx[idx[3 * i]].p, b = vtx[idx[3 * i + 1]].p, c = vtx[idx[3 * i + 2]].p;
             float3 ng = normalize(cross(b - a, c - a));
@@ -200,6 +201,20 @@ final class PathTracer: NSObject, MTKViewDelegate {
             return h;
         }
         return h;
+    }
+
+    // How much sun gets through from o along d: clear bodies let it through tinted, anything else stops it.
+    static float3 shadow(constant U& u, primitive_acceleration_structure accel, device const Vtx* vtx, device const uint* idx,
+                         device const uint* tri, device const Mat* mats, float3 o, float3 d) {
+        float3 t = 1.0;
+        for (int k = 0; k < 8; k++) {
+            Hit h = closest(u, accel, vtx, idx, tri, o, d, INFINITY);
+            if (!h.hit) return t;
+            if (h.cap || mats[h.mat].prm.z < 0.5) return 0.0;
+            t *= mats[h.mat].color.rgb;
+            o += d * (h.t + u.scene.y);
+        }
+        return 0.0;
     }
 
     static float ggxD(float nh, float a2) { float d = nh * nh * (a2 - 1.0) + 1.0; return a2 / (M_PI_F * d * d); }
@@ -260,8 +275,8 @@ final class PathTracer: NSObject, MTKViewDelegate {
                 if (trans > 0.5) {   // glass: Fresnel-weighted reflect or refract, IOR 1.5
                     bool entering = dot(h.ng, d) < 0.0;
                     float3 n = entering ? h.n : -h.n;
-                    float eta = entering ? 1.0 / 1.5 : 1.5, cosi = min(dot(v, n), 1.0);
-                    float F = 0.04 + 0.96 * pow(saturate(1.0 - cosi), 5.0);
+                    float ior = m.prm.w > 1.0 ? m.prm.w : 1.5, eta = entering ? 1.0 / ior : ior, cosi = min(dot(v, n), 1.0);
+                    float f0 = (ior - 1.0) * (ior - 1.0) / ((ior + 1.0) * (ior + 1.0)), F = f0 + (1.0 - f0) * pow(saturate(1.0 - cosi), 5.0);
                     float3 rd = refract(d, n, eta);
                     if (all(rd == 0.0) || rnd(seed) < F) { d = reflect(d, n); o = p + n * eps; }
                     else { d = rd; o = p - n * eps; T *= col; }
@@ -272,8 +287,8 @@ final class PathTracer: NSObject, MTKViewDelegate {
                 o = p + ng * eps;
                 // Sun: one shadowed sample inside its disc (soft shadow edge).
                 float3 sd = normalize(u.sunDir.xyz + onb(u.sunDir.xyz, float3((rnd(seed) * 2.0 - 1.0), (rnd(seed) * 2.0 - 1.0), 0.0)) * u.sunDir.w);
-                if (dot(n, sd) > 0.0 && !closest(u, accel, vtx, idx, tri, o, sd, INFINITY).hit)
-                    L += T * brdf(n, v, sd, col, metal, a2) * dot(n, sd) * u.sunCol.rgb;
+                if (dot(n, sd) > 0.0)
+                    L += T * brdf(n, v, sd, col, metal, a2) * dot(n, sd) * u.sunCol.rgb * shadow(u, accel, vtx, idx, tri, mats, o, sd);
                 // Next direction: GGX lobe or cosine hemisphere, weighted by their mixture pdf.
                 float pSpec = mix(0.25, 1.0, metal);
                 float3 l;
