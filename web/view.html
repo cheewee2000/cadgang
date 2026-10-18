@@ -35,6 +35,12 @@
         <button id="resetBtn" class="ghost" title="Forget dragged positions and chosen axes: back to the solved explode">Reset</button>
       </label>
       <span class="sep"></span>
+      <span class="sect rot" title="Turn the whole model about the origin, parts, marks and dims together; shift-click turns the other way">Rotate
+        <button class="ghost" data-rot="x">X</button><button class="ghost" data-rot="y">Y</button><button class="ghost" data-rot="z">Z</button>
+        <select id="rotStep" class="ghost" title="Degrees per click"><option value="90">90°</option><option value="45">45°</option><option value="15">15°</option><option value="1">1°</option></select>
+        <button id="rotReset" class="ghost" title="Back to the file's own orientation">Reset</button>
+      </span>
+      <span class="sep"></span>
       <span class="share">
         <button id="shareBtn" class="ghost icon" title="Share this view" aria-label="Share"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1.5v9M4.5 5 8 1.5 11.5 5M3 8v6.5h10V8"/></svg></button>
         <div id="shareMenu" class="share-menu" hidden>

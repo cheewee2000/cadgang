@@ -69,7 +69,7 @@ header {
 .project-name:hover { opacity: 0.55; color: var(--ink); }
 
 .toolbar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
-.toolbar label {
+.toolbar label, .toolbar .rot {
   color: var(--ink-faint); display: flex; align-items: center; gap: var(--sp-2);
   text-transform: uppercase; font-size: var(--fs-12); letter-spacing: var(--ls-label);
 }
@@ -171,6 +171,7 @@ select.ghost:hover { opacity: 0.55; }
 .hud .sect, .hud > button, .hud > select { background: var(--paper); }
 .hud .sect { border: var(--bw-hair) solid var(--rule); padding: var(--sp-1) var(--sp-2); }
 .hud > button, .hud > select, .hud .sect button { font-size: var(--fs-12); padding: 4px 8px; height: auto; }
+.sect select.ghost { font-size: var(--fs-12); padding: 4px 22px 4px 8px; background-position: right 7px center; }
 .hud-bl > button, .hud-bl > #look { height: 24px; padding: 0 6px; line-height: 1; }   /* the view cluster is smaller */
 .hud-bl > #look { padding-right: 18px; }
 .bodies { position: relative; z-index: 2; display: flex; flex-direction: column; gap: 2px; max-height: 60%; overflow: auto; background: var(--paper); border: var(--bw-hair) solid var(--rule); padding: var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); }

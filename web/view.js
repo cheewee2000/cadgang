@@ -125,6 +125,7 @@ function clearModel() {
   }
   bbox = null;
   sources = [];
+  rot.identity();
   setRender(false);
   ui.flat = false; $('#sideBtn').hidden = true;
   $('#bodies').replaceChildren(); $('#bodies').hidden = true;
@@ -464,6 +465,7 @@ let partsReady = false, partsSaved = '{}', partsTimer = null;
 function partsState() {
   const out = {};
   for (const m of model.children) if (m.userData.axis || m.userData.pull != null) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null };
+  if (rot.w < 1 - 1e-9) out['@rot'] = rotArr();   // the axes and marks above are in this turned frame
   return out;
 }
 function saveParts() {
@@ -479,6 +481,8 @@ function loadParts() {
   const s = subject;
   api(`/parts?subject=${encodeURIComponent(s)}`).then((d) => {
     if (s !== subject) return;
+    const r = d.parts?.['@rot'];
+    if (r) { bakeRot(new THREE.Quaternion().fromArray(r)); history.list = []; history.i = -1; queueMicrotask(commit); }   // undo never goes back past the saved turn
     for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; } }
     partsSaved = JSON.stringify(partsState()); partsReady = true;
     applyExplode();
@@ -502,6 +506,49 @@ function applyExplode() {
   saveParts();
 }
 $('#explode').addEventListener('input', applyExplode);
+
+// ROTATE turns the whole model about the origin, a step at a time. The turn is baked into every body's
+// geometry, so the grid, section axes, views and floor read the new way up; what rides on the model turns
+// with it (explode vectors and axes, marks, dims), so nothing loses its place. It is saved with the file's
+// explode edits (parts['@rot']) and in the view state, so reloads, undo and shared links keep it.
+const rot = new THREE.Quaternion();   // the file's frame → what is on screen
+const rotArr = () => rot.toArray().map((v) => +v.toFixed(6));
+/** Put the geometry (and the solver's offsets) at turn `q`; returns the delta applied. */
+function bakeRot(q) {
+  const d = q.clone().multiply(rot.clone().invert());
+  const M = new THREE.Matrix4().makeRotationFromQuaternion(d);
+  for (const m of model.children) {
+    for (const g of [m.geometry, m.userData.edges?.geometry]) {
+      if (!g) continue;
+      for (const a of [g.attributes.position, g.attributes.normal]) if (a && sources.some((f) => f.buffer === a.array.buffer)) a.array = a.array.slice();   // never turn the bytes Share to web sends
+      g.applyMatrix4(M); g.computeBoundingBox();
+    }
+    m.userData.offset?.applyQuaternion(d);
+  }
+  rot.copy(q);
+  bbox = new THREE.Box3(); for (const m of model.children) bbox.union(m.geometry.boundingBox);
+  placeGrid(); setupSection(); applyExplode();
+  return d;
+}
+function turnModel(q) {
+  if (!bbox) return;
+  const d = bakeRot(q);
+  const turn = (v) => new THREE.Vector3().fromArray(v).applyQuaternion(d).toArray().map((x) => +x.toFixed(6));
+  // every [x, y, z] in a mark or a dim is a point or a direction about the same origin: both just turn
+  const walk = (o) => (Array.isArray(o) ? (o.length === 3 && o.every(Number.isFinite) ? turn(o) : o.map(walk)) : o && typeof o === 'object' ? Object.fromEntries(Object.entries(o).map(([k, v]) => [k, walk(v)])) : o);
+  for (const m of model.children) {
+    const a = m.userData.axis;
+    if (a) m.userData.axis = turn(Array.isArray(a) ? a : [0, 1, 2].map((j) => (j === 'xyz'.indexOf(a[1]) ? (a[0] === '-' ? -1 : 1) : 0)));
+  }
+  applyExplode();
+  orbit.target.applyQuaternion(d);   // keep looking at the same spot on the part
+  const marks = walk(markup.items); markup.load(marks); markupChanged(marks);
+  measure.load(walk(measure.dims));
+}
+const rotStep = () => THREE.MathUtils.degToRad(+$('#rotStep').value);
+for (const b of document.querySelectorAll('[data-rot]')) b.addEventListener('click', (e) =>
+  turnModel(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3().setComponent('xyz'.indexOf(b.dataset.rot), 1), e.shiftKey ? -rotStep() : rotStep()).multiply(rot)));
+$('#rotReset').addEventListener('click', () => turnModel(new THREE.Quaternion()));
 function setExplode(v) { $('#explode').value = Math.max(0, Math.min(100, v)); applyExplode(); }
 $('#resetBtn').addEventListener('click', () => { for (const m of model.children) { m.userData.axis = undefined; m.userData.pull = undefined; } applyExplode(); say('explode positions reset'); });
 
@@ -1410,7 +1457,7 @@ window.addEventListener('keydown', (e) => {
 const history = { list: [], i: -1 };
 function snap() {
   return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho,
-    section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value,
+    section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value, rot: rotArr(),
     bodies: model.children.map((m) => m.visible), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3)]),
     markup: markup.items, dims: measure.dims });
 }
@@ -1432,6 +1479,8 @@ try {
 } catch {}
 function apply(s) {
   const st = JSON.parse(s);
+  const r = st.rot ?? [0, 0, 0, 1];   // the state's marks, dims and axes are in its own turn: only the geometry follows
+  if (bbox && JSON.stringify(r) !== JSON.stringify(rotArr())) bakeRot(new THREE.Quaternion().fromArray(r));
   if (st.look !== ui.look) { ui.look = document.documentElement.dataset.look = $('#look').value = st.look; for (const m of model.children) styleMesh(m); }
   for (const k of ['edges', 'wire', 'grid', 'color']) if (ui[k] !== st[k]) toggle(k, `#${k}Btn`);
   if (ui.ortho !== st.ortho) setOrtho(st.ortho);
