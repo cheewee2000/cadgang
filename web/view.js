@@ -76,7 +76,8 @@ const key = new THREE.DirectionalLight(0xfffdf8, 2.4);
 key.position.set(60, -80, 120);
 const fill = new THREE.DirectionalLight(0xf3e9d8, 0.9);
 fill.position.set(-90, 50, -30);
-scene.add(key, fill, new THREE.AmbientLight(0xffffff, 1.15), new THREE.HemisphereLight(0xffffff, 0xdedbd4, 0.6));
+const ambient = new THREE.AmbientLight(0xffffff, 1.15), hemi = new THREE.HemisphereLight(0xffffff, 0xdedbd4, 0.6);
+scene.add(key, fill, ambient, hemi);
 
 /** Render presets. Every mesh carries its own instance so per-mesh flags (flat, wire, clipping) never leak. */
 const PRESETS = {
@@ -1260,7 +1261,10 @@ let roomEnv = null;
   resize();
   if (!(rt.on && rt.pt)) {   // the WebGL path tracer owns the environment while it runs
     const env = ui.look === 'materials' ? (roomEnv ??= new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture) : null;
-    if (scene.environment !== env) scene.environment = env;
+    if (scene.environment !== env) {
+      scene.environment = env;
+      ambient.intensity = env ? 0 : 1.15; hemi.intensity = env ? 0 : 0.6;   // the room is the ambient light under MATERIALS; both washed plastic out
+    }
   }
   applyCamera();
   if (sky.visible) { sky.position.copy(orbit.target); sky.scale.setScalar(orbit.dist * 50); sky.material.uniforms.center.value.copy(orbit.target); }
