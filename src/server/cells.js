@@ -117,12 +117,16 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
   const tolerance = (req, shape = null) => {
     const t = parseFloat(req.query.tolerance ?? '');
     if (Number.isFinite(t) && t > 0) return Math.min(Math.max(t, 0.001), 5);
-    if (!shape) return 0.01;
-    try {
-      const { min, max } = tightBounds(shape);
-      const diag = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
-      return Math.min(0.1, Math.max(0.01, diag / 2000));
-    } catch { return 0.01; }
+    let auto = 0.01;
+    if (shape) {
+      try {
+        const { min, max } = tightBounds(shape);
+        const diag = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+        auto = Math.min(0.1, Math.max(0.01, diag / 2000));
+      } catch { /* keep 0.01 */ }
+    }
+    // A scrub redraws on every step: ten times coarser keeps up, and the release refines it.
+    return req.query.draft === '1' ? Math.min(5, auto * 10) : auto;
   };
 
   // ------------------------------------------------------------------ document
@@ -497,21 +501,32 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
   /** Triangles for the viewport, tessellated from the real surfaces. */
   r.get('/mesh', async (req, res) => {
     try {
-      await withShape(req, ({ shape, target, shown, partial }) => {
-        const t = tessellate(shape, { tolerance: tolerance(req, shape) });
+      await withShape(req, ({ shape, target, shown, partial, report, assertions, assertionsPass }) => {
+        const tol = tolerance(req, shape);
+        const t = tessellate(shape, { tolerance: tol });
+        const edges = tessellateEdges(shape, { tolerance: tol });
         const bounds = meshingBounds(brepBBox(shape));
-        res.json({
+        const meta = {
           cell: shown,
           requested: target,
           partial,
           revision: doc.revision,
           exact: true,
+          faces: t.faces,
+          stats: meshStats(t.positions, t.indices, bounds, null),
+          // The /evaluate report rides along, so an edit costs one rebuild, not two.
+          cells: report,
+          assertions,
+          assertionsPass,
+          measures: measuresOf(shape),
+        };
+        if (req.query.bin === '1') return sendBinaryMesh(res, meta, t, edges);
+        res.json({
+          ...meta,
           positions: Array.from(t.positions),
           normals: Array.from(t.normals),
           indices: Array.from(t.indices),
-          faces: t.faces,
-          edges: tessellateEdges(shape, { tolerance: tolerance(req, shape) }),
-          stats: meshStats(t.positions, t.indices, bounds, null),
+          edges,
         });
       }, { partial: true });
     } catch (e) { fail(res, e); }
@@ -647,6 +662,23 @@ function pickSource(doc, id) {
 }
 
 /** Cheap facts about a result that a text-only client can act on. */
+/**
+ * ?bin=1 mesh: [u32 json length][json, space-padded to 4][positions f32][normals f32]
+ * [indices u32][edge lines f32]. `bin` in the json holds the four lengths. JSON number
+ * arrays were megabytes of text to write and parse on every edit.
+ */
+function sendBinaryMesh(res, meta, t, edges) {
+  const parts = [t.positions, t.normals, t.indices, Float32Array.from(edges?.lines ?? [])];
+  const json = Buffer.from(JSON.stringify({ ...meta, edges: edges && { groups: edges.groups }, bin: parts.map((a) => a.length) }));
+  const pad = (4 - (json.length % 4)) % 4;
+  const head = Buffer.alloc(4);
+  head.writeUInt32LE(json.length + pad);
+  res.type('application/octet-stream').send(Buffer.concat([
+    head, json, Buffer.alloc(pad, 0x20),
+    ...parts.map((a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength)),
+  ]));
+}
+
 function measuresOf(shape) {
   const { min, max, size } = ops.bbox(shape);
   const r4 = (v) => Math.round(v * 1e4) / 1e4;

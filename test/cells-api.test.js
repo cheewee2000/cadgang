@@ -222,6 +222,28 @@ test('geometry comes out as triangles, STEP, and a PNG', async () => {
   assert.deepEqual([...png.data.subarray(1, 4)], [0x50, 0x4e, 0x47]);
 });
 
+test('?bin=1 mesh matches the JSON one, carries the report, and ?draft=1 is coarser', async () => {
+  const json = (await api('/mesh')).data;
+  const decode = async (q) => {
+    const buf = new Uint8Array(await (await fetch(`${base}/mesh?${q}`)).arrayBuffer()).buffer;
+    const n = new DataView(buf).getUint32(0, true);
+    const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+    let off = 4 + n;
+    const [positions, , indices, lines] = meta.bin.map((len, i) => {
+      const a = new (i === 2 ? Uint32Array : Float32Array)(buf, off, len); off += len * 4; return a;
+    });
+    assert.equal(off, buf.byteLength);
+    return { meta, positions, indices, lines };
+  };
+  const bin = await decode('bin=1');
+  assert.deepEqual([...bin.indices], json.indices);
+  assert.equal(bin.positions.length, json.positions.length);
+  assert.equal(bin.lines.length, json.edges.lines.length);
+  assert.ok(bin.meta.cells.length > 0 && bin.meta.measures.volume > 0, 'evaluate report rides along');
+  const draft = await decode('bin=1&draft=1');
+  assert.ok(draft.indices.length <= bin.indices.length);
+});
+
 test('a compound keeps touching parts as separate bodies, and exports as STL', async () => {
   await api('/', { method: 'POST', body: { id: 'asm', prompt: 'two stacked boxes kept apart', code: `
 export const params = {};

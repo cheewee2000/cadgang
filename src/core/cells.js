@@ -18,11 +18,13 @@
  * rather than something to detect.
  */
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { GraphError } from './errors.js';
 import { compileCell, normalizeParams } from './sandbox.js';
 import { cellApi, checkCellResult } from './cellapi.js';
+import { trackBrepShape } from './brep.js';
 
 const CELL_ID = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 const PROMPT_LIMIT = 20000;
@@ -625,6 +627,41 @@ function compiledFor(cell) {
 }
 
 /**
+ * Built shapes per cell, across requests, so an edit re-runs only the edited cell
+ * and what depends on it. Keyed by a hash of everything the cell reads (code,
+ * kind, params, selections, sketch) plus its inputs' keys, so a change upstream
+ * misses everything below it. Entries hold an UNTRACKED clone — no request scope
+ * frees it — and a hit hands out a fresh tracked clone, since a clone shares the
+ * OCCT geometry (and its triangulation) for a few bytes. Only successful
+ * modelling cells are kept; assertions and failures always re-run.
+ */
+const RESULT_CACHE_LIMIT = 48; // ponytail: count cap, not bytes — a byte budget if the heap limit trips
+const resultCache = new Map();
+
+function cellKey(cell, inputKeys) {
+  return crypto.createHash('sha1').update(JSON.stringify([
+    cell.code, cell.kind, cell.params, cell.selections, cell.sketch, inputKeys,
+  ])).digest('base64');
+}
+
+function cacheResult(key, value, logs, checks) {
+  if (resultCache.size >= RESULT_CACHE_LIMIT) {
+    const [oldest, gone] = resultCache.entries().next().value;
+    resultCache.delete(oldest);
+    try { gone.shape.delete(); } catch { /* already freed */ }
+  }
+  resultCache.set(key, { shape: value.clone(), logs, checks });
+}
+
+/** Drop every cached shape (tests, and anything that changes what a cell means). */
+export function clearCellCache() {
+  for (const { shape } of resultCache.values()) {
+    try { shape.delete(); } catch { /* already freed */ }
+  }
+  resultCache.clear();
+}
+
+/**
  * Run the document up to `targetId` and return its shape.
  *
  * The caller owns the OCCT scope: every shape produced here — including the one
@@ -641,8 +678,10 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
   if (!targetId) throw new GraphError('Document has no cells to evaluate');
   const order = evaluationOrder(doc, targetId);
   const results = new Map();
+  const keys = new Map(); // cell id -> cache key of what it handed on
   const report = [];
   let previous = null;
+  let previousKey = null;
   let lastGood = null;
 
   for (const cell of order) {
@@ -672,9 +711,28 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
     const inputs = {};
     for (const dep of dependenciesOf(doc, index)) inputs[dep] = results.get(dep) ?? null;
     const input = cell.refs?.length ? inputs[cell.refs[0]] : previous;
+    const inputKeys = [previousKey, ...dependenciesOf(doc, index).map((dep) => keys.get(dep) ?? null)];
+    const key = cellKey(cell, inputKeys);
+    // An assertion hands on its input, so it hands on its input's key too.
+    if (cell.kind === CELL_KIND.assert) keys.set(cell.id, cell.refs?.length ? keys.get(cell.refs[0]) ?? null : previousKey);
 
     const started = Date.now();
     const asserting = cell.kind === CELL_KIND.assert;
+    const hit = !asserting && resultCache.get(key);
+    if (hit) {
+      resultCache.delete(key); // re-insert: Map order is the LRU order
+      resultCache.set(key, hit);
+      entry.logs = hit.logs.map((l) => ({ ...l }));
+      entry.checks.push(...hit.checks.map((c) => ({ ...c })));
+      entry.cached = true;
+      results.set(cell.id, trackBrepShape(hit.shape.clone()));
+      keys.set(cell.id, key);
+      previous = results.get(cell.id);
+      previousKey = key;
+      lastGood = cell.id;
+      entry.ms = Date.now() - started;
+      continue;
+    }
     try {
       const compiled = compiledFor(cell);
       const value = compiled.run(cellApi({
@@ -692,8 +750,11 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
       // middle of a stack would redirect everything below it — and a check
       // that changes the model is not a check.
       if (!asserting) {
+        keys.set(cell.id, key);
         previous = results.get(cell.id);
+        previousKey = key;
         lastGood = cell.id;
+        cacheResult(key, previous, entry.logs, entry.checks);
       }
     } catch (err) {
       // A lost pick is not a bug in the code — it is a question only the human

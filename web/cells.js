@@ -35,6 +35,25 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
+/** A ?bin=1 mesh (see sendBinaryMesh on the server): typed arrays, no JSON number parsing. */
+async function apiMesh(path) {
+  const res = await fetch(API + path + (path.includes('?') ? '&' : '?') + 'bin=1' + (scrubbing ? '&draft=1' : ''));
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  const buf = await res.arrayBuffer();
+  const n = new DataView(buf).getUint32(0, true);
+  const mesh = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+  let off = 4 + n;
+  const [positions, normals, indices, lines] = mesh.bin.map((len, i) => {
+    const a = new (i === 2 ? Uint32Array : Float32Array)(buf, off, len);
+    off += len * 4;
+    return a;
+  });
+  return { ...mesh, positions, normals, indices, edges: mesh.edges && { ...mesh.edges, lines } };
+}
+
 let statusTimer = null;
 function say(text, isError = false) {
   const el = $('#status');
@@ -83,7 +102,7 @@ function setGeometry(mesh) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(mesh.positions, 3));
   if (mesh.normals?.length) geo.setAttribute('normal', new THREE.Float32BufferAttribute(mesh.normals, 3));
-  geo.setIndex(mesh.indices);
+  geo.setIndex(ArrayBuffer.isView(mesh.indices) ? new THREE.BufferAttribute(mesh.indices, 1) : mesh.indices);
   if (!mesh.normals?.length) geo.computeVertexNormals();
   meshObj = new THREE.Mesh(geo, material);
   scene.add(meshObj);
@@ -482,6 +501,7 @@ function paramRow(cellId, name, value) {
     let scrub = null;
     label.addEventListener('pointerdown', (e) => {
       scrub = { x: e.clientX, start: parseFloat(input.value) || 0 };
+      scrubbing = true;
       label.setPointerCapture?.(e.pointerId);
       e.preventDefault();
     });
@@ -492,7 +512,12 @@ function paramRow(cellId, name, value) {
       input.value = next;
       push(cellId, name, next);
     });
-    label.addEventListener('pointerup', () => { scrub = null; });
+    label.addEventListener('pointerup', () => {
+      scrub = null;
+      scrubbing = false;
+      // Refine the draft mesh. A drain still running refreshes on its own, now at full detail.
+      if (!inFlight && !pending.size) refresh({ structural: false });
+    });
   } else {
     label.style.cursor = 'default';
   }
@@ -516,6 +541,7 @@ function paramRow(cellId, name, value) {
  */
 const pending = new Map();
 let inFlight = false;
+let scrubbing = false; // while true, meshes come back coarse (?draft=1)
 function push(cellId, name, value) {
   pending.set(`${cellId}\u0000${name}`, { cellId, name, value });
   drain();
@@ -876,7 +902,21 @@ $('#historyToggle').onclick = () => {
  * one — the transcript should show the whole stack's health at once, which is
  * exactly what the authoring loop wants to look at after an edit.
  */
-async function refresh({ structural = true } = {}) {
+let refreshRun = null;
+let refreshNext = null;
+/** Single-flight: a refresh asked for mid-run is folded into one more run after it. */
+function refresh({ structural = true } = {}) {
+  if (refreshRun) {
+    refreshNext = { structural: structural || !!refreshNext?.structural };
+    return refreshRun;
+  }
+  refreshRun = (async () => {
+    for (let o = { structural }; o; o = refreshNext, refreshNext = null) await refreshOnce(o);
+  })().finally(() => { refreshRun = null; });
+  return refreshRun;
+}
+
+async function refreshOnce({ structural }) {
   try {
     doc = await api('/document');
   } catch (e) {
@@ -888,10 +928,15 @@ async function refresh({ structural = true } = {}) {
   const changed = sig !== structureSig;
   structureSig = sig;
 
+  // Outside pick mode the mesh carries the evaluate report: one rebuild per refresh.
+  // In pick mode it is the pick source's mesh, so the document is evaluated separately.
   let evaluation = null;
+  let mesh = null;
+  let meshError = null;
   if (doc.cells.length) {
+    try { mesh = await apiMesh(pick ? `/mesh?cell=${encodeURIComponent(pick.source)}` : '/mesh'); } catch (e) { meshError = e; }
     try {
-      evaluation = await api('/evaluate?stopOnError=0');
+      evaluation = mesh && !pick ? mesh : await api('/evaluate?stopOnError=0');
       report = new Map(evaluation.cells.map((c) => [c.id, c]));
     } catch (e) {
       report = new Map();
@@ -954,7 +999,7 @@ async function refresh({ structural = true } = {}) {
     // In pick mode the viewport must show the shape being picked ON — the
     // cell's input — not the document's output, which cannot even build until
     // the pick is made.
-    const mesh = await api(pick ? `/mesh?cell=${encodeURIComponent(pick.source)}` : '/mesh');
+    if (!mesh) throw meshError;
     lastMesh = mesh;
     // Looking at an old version: keep showing it, but have the current mesh ready for BACK.
     if (viewingVersion === null && viewingOption === null) setGeometry(mesh);
@@ -1026,7 +1071,7 @@ function connect() {
     // Non-structural on purpose: a real change of structure is caught by the
     // signature check inside, while a drawn line or a turned knob must not
     // remount every canvas on the page.
-    if (msg.type === 'cells_changed' && msg.revision !== doc.revision) refresh({ structural: false });
+    if (msg.type === 'cells_changed' && msg.revision !== doc.revision && !inFlight) refresh({ structural: false });
     if (msg.type === 'history_changed') renderHistory();
     if (msg.type === 'options_changed') renderOptions();
     if (msg.type === 'snapshot_request') postSnapshot();
