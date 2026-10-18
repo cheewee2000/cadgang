@@ -268,11 +268,12 @@ function setBodyVisible(m, on) {
 }
 // A body's explode vector at full slider: the solver's offset, or along the axis the
 // user chose for it (`${sign}${axis}`, right-click menu), at least a body-length
-// long so a part the solver left put still moves. A drag pulls that one part out along its
-// vector and it stays where it was dropped (userData.pull, world units) at any slider
-// position; the slider scales only the parts nobody dragged, from rest (0) to twice the
-// solver's offset (100). RESET forgets pulls and axes. (v0.14.9: before, a drag set the
-// part's spot at FULL explode and a drag at slider 0 flung the whole model open.)
+// long so a part the solver left put still moves. Every part travels the slider's fraction of its
+// maximum travel: twice the solver's offset, or userData.pull (world units) once a drag pushed it
+// further. Dragging a part IS the slider with that part as the handle: the whole model follows so
+// each part sits at the same fraction of its own maximum; dragged past its maximum, the part's
+// maximum grows to where it is (and the slider pins at 100). RESET forgets maxima and axes.
+// (v0.14.16: before, a drag pinned only that part at a fixed spot and the rest stayed put.)
 // userData.axis: a world unit vector [x, y, z] picked off a face (v0.14.10), or a `${sign}${axis}`
 // string from the old menu (still honoured when a saved view carries one).
 function explodeVec(m) {
@@ -318,6 +319,7 @@ function setPartAxis(m, n) {
 }
 // Does the vector move the body at all? The base part's radial offset is a rounding away from zero.
 const moves = (m, v) => v.length() > 0.01 * (m.geometry.boundingBox?.getSize(new THREE.Vector3()).length() ?? 1);
+const maxTravel = (m) => m.userData.pull ?? explodeVec(m).length() * 2;   // the solver's full travel is twice its offset
 function applyExplode() {
   const k = parseFloat($('#explode').value) / 100;
   const done = new Set();
@@ -325,7 +327,7 @@ function applyExplode() {
     if (done.has(m)) return m.position;
     done.add(m);
     const v = explodeVec(m), len = v.length();
-    const dist = m.userData.pull ?? len * 2 * k;   // the solver's full travel is twice its offset
+    const dist = maxTravel(m) * k;
     m.position.copy(v).multiplyScalar(len ? dist / len : 0);
     if (m.userData.parent) m.position.add(place(m.userData.parent));
     if (m.userData.edges) m.userData.edges.position.copy(m.position);
@@ -483,8 +485,10 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     return;
   }
   if (drag.part) {
-    const u = drag.part.m.userData, len = explodeVec(drag.part.m).length();
-    u.pull = Math.max(0, (u.pull ?? len * 2 * (+$('#explode').value / 100)) + dx * drag.part.sx + dy * drag.part.sy);
+    const m = drag.part.m, max = maxTravel(m);
+    const d = Math.max(0, max * (+$('#explode').value / 100) + dx * drag.part.sx + dy * drag.part.sy);
+    if (d > max) m.userData.pull = d;   // past its maximum: that is the new maximum
+    $('#explode').value = 100 * Math.min(1, d / maxTravel(m));
     applyExplode();
     return;
   }
