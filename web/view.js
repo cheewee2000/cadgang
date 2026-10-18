@@ -508,9 +508,9 @@ function screenAxis(p0, dir) {
 // solid material, hollow walls read as rings, and nothing depends on stencil
 // parity — the stencil version held on a shelled box and failed on a merged
 // STEP in WebKit.
-// Each body's cut gets its own colour: the part palette hue, darker and flat, so cut material
-// reads as cut whether the bodies are grey or coloured (a grey cap on grey bodies read as a hole).
-const capColor = (i) => new THREE.Color().setHSL((i * 0.618034) % 1, 0.65, 0.34);
+// The cut is flat dark grey on every body (user call, v0.14.8): far darker than the shaded grey
+// bodies and than any part colour, so cut material reads as cut without borrowing the palette.
+const capColor = () => new THREE.Color(0x3a3a3a);
 function buildCaps() {
   model.children.forEach((m, i) => {
     if (m.userData.cap) { m.remove(m.userData.cap); m.userData.cap.material.dispose(); m.userData.cap = null; }
