@@ -273,12 +273,48 @@ function setBodyVisible(m, on) {
 // position; the slider scales only the parts nobody dragged, from rest (0) to twice the
 // solver's offset (100). RESET forgets pulls and axes. (v0.14.9: before, a drag set the
 // part's spot at FULL explode and a drag at slider 0 flung the whole model open.)
-const AXES = ['+x', '-x', '+y', '-y', '+z', '-z'];
+// userData.axis: a world unit vector [x, y, z] picked off a face (v0.14.10), or a `${sign}${axis}`
+// string from the old menu (still honoured when a saved view carries one).
 function explodeVec(m) {
   const o = m.userData.offset ?? new THREE.Vector3();
-  if (!m.userData.axis) return o.clone();
+  const a = m.userData.axis;
+  if (!a) return o.clone();
   const len = Math.max(o.length(), m.geometry.boundingBox?.getSize(new THREE.Vector3()).length() ?? 0);
-  return new THREE.Vector3().setComponent('xyz'.indexOf(m.userData.axis[1]), m.userData.axis[0] === '-' ? -len : len);
+  if (Array.isArray(a)) return new THREE.Vector3().fromArray(a).normalize().multiplyScalar(len);
+  return new THREE.Vector3().setComponent('xyz'.indexOf(a[1]), a[0] === '-' ? -len : len);
+}
+// PICK EXPLODE DIRECTION: from a part's right-click menu. The pointer then shows the normal of
+// the face under it as an arrow on the model; a click takes that normal as the part's explode
+// direction (world), right-click or Esc backs out. Faces of any body count — you may want a
+// part to leave along a neighbour's face — but the arrow sits where you point, so what you get is
+// never in doubt (the old ±X/±Y/±Z menu was: which way is +Y on a turned part?).
+let pickAxis = null;
+const axisArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), 1, 0xd11d1d, 0.25, 0.12);
+axisArrow.visible = false; axisArrow.renderOrder = 6;
+axisArrow.line.material.depthTest = axisArrow.cone.material.depthTest = false;
+// A ring on the face around the pointer: the arrow alone vanishes when the face looks straight at you.
+const axisRing = new THREE.Mesh(new THREE.RingGeometry(0.8, 1, 48), new THREE.MeshBasicMaterial({ color: 0xd11d1d, side: THREE.DoubleSide, depthTest: false }));
+axisRing.renderOrder = 6;
+axisArrow.add(axisRing);   // rides the arrow: the ring geometry's +Z follows the arrow's direction below
+axisRing.rotation.x = Math.PI / 2;   // ArrowHelper points along its local +Y; a RingGeometry faces +Z
+scene.add(axisArrow);
+function faceAt(e) {   // the body face under the pointer (caps and clipped-away faces skipped), with its world normal
+  const r = renderer.domElement.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const h = raycaster.intersectObjects(model.children, true).find((h) => h.face && model.children.includes(h.object) && h.object.visible && (!section.axis || section.plane.distanceToPoint(h.point) > -1e-6));
+  return h ? { body: h.object, point: h.point, normal: h.face.normal.clone().transformDirection(h.object.matrixWorld).normalize() } : null;
+}
+function startPickAxis(m) {
+  pickAxis = { m };
+  renderer.domElement.classList.add('picking');
+  say(`${m.userData.name}: click a face to explode along its normal · Esc cancels`);
+}
+function endPickAxis() { pickAxis = null; axisArrow.visible = false; renderer.domElement.classList.remove('picking'); }
+function setPartAxis(m, n) {
+  m.userData.axis = n.toArray().map((v) => +v.toFixed(4));
+  m.userData.pull = undefined;
+  applyExplode(); commit();
+  say(`${m.userData.name} explodes along (${m.userData.axis.map((v) => v.toFixed(2)).join(', ')})`);
 }
 // Does the vector move the body at all? The base part's radial offset is a rounding away from zero.
 const moves = (m, v) => v.length() > 0.01 * (m.geometry.boundingBox?.getSize(new THREE.Vector3()).length() ?? 1);
@@ -394,6 +430,11 @@ const pair = () => { const [a, b] = [...touches.values()]; return { d: Math.hypo
 for (const t of ['gesturestart', 'gesturechange', 'gestureend'])   // WebKit's own pinch would zoom a second time
   renderer.domElement.addEventListener(t, (e) => { if (touches.size) { e.preventDefault(); e.stopImmediatePropagation(); } }, { capture: true });
 renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (pickAxis) {   // picking an explode direction: left takes the face under the pointer, anything else backs out
+    if (e.button === 0) { const h = faceAt(e); if (h) setPartAxis(pickAxis.m, h.normal); }
+    endPickAxis();
+    return;
+  }
   if (e.pointerType === 'touch') {
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     renderer.domElement.setPointerCapture(e.pointerId);
@@ -408,6 +449,16 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   renderer.domElement.setPointerCapture(e.pointerId);
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
+  if (pickAxis) {
+    const h = faceAt(e);
+    axisArrow.visible = !!h;
+    if (h) {
+      const len = 0.35 * (pickAxis.m.geometry.boundingBox?.getSize(new THREE.Vector3()).length() || 10);
+      axisArrow.position.copy(h.point); axisArrow.setDirection(h.normal); axisArrow.setLength(len, len * 0.25, len * 0.12);
+      axisRing.scale.setScalar(len * 0.08);
+    }
+    return;
+  }
   if (touches.size > 1) {
     if (!touches.has(e.pointerId)) return;
     const before = pair();
@@ -762,27 +813,44 @@ $('#measureBtn').addEventListener('click', () => setMeasure(!measure.on));
 
 // ------------------------------------------------------------------- theme
 
-// Four backgrounds (v0.14.9): light and dark are flat paper; dusk and dawn are sky gradients,
-// drawn into a texture the scene wears as its background so a snapshot carries them too.
-// Dusk takes the dark UI chrome, dawn the light one (data-theme); data-bg names the mode.
+// Five backgrounds: light and dark are flat paper, night is flat dusk-navy; dusk and dawn are
+// skies. The sky is a sphere around the orbit target shaded by the WORLD height of each point
+// (Z up, horizon at the model's Z = 0 plane), so it turns with the model and the horizon says
+// which way is up (v0.14.10 — the v0.14.9 screen-space gradient stayed put while you orbited).
+// Dusk and night take the dark UI chrome, dawn the light one (data-theme); data-bg names the mode.
 const THEME_KEY = 'cwt-theme';
-const THEMES = ['light', 'dark', 'dusk', 'dawn'];
-const SKIES = { dusk: ['#12172e', '#3f2f58', '#8a4a5a', '#d9754a'], dawn: ['#2f4272', '#8a7fa6', '#eaa6a0', '#fbe9d2'] };
-function skyTexture(stops) {
-  const c = document.createElement('canvas'); c.width = 2; c.height = 256;
-  const g = c.getContext('2d'), grad = g.createLinearGradient(0, 0, 0, 256);
-  stops.forEach((col, i) => grad.addColorStop(i / (stops.length - 1), col));
-  g.fillStyle = grad; g.fillRect(0, 0, 2, 256);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
-}
-const isDarkTheme = (t) => t === 'dark' || t === 'dusk';
+const THEMES = ['light', 'dark', 'dusk', 'dawn', 'night'];
+const NIGHT = 0x12172e;
+// Sky stops from straight down (-Z) through the horizon (middle) to straight up (+Z), sRGB.
+const SKIES = {
+  dusk: ['#1a1420', '#8a4a5a', '#d9754a', '#3f2f58', '#12172e'],
+  dawn: ['#fbe9d2', '#f3c9b4', '#eaa6a0', '#8a7fa6', '#2f4272'],
+};
+const srgb = (hex) => { const n = parseInt(hex.slice(1), 16); return new THREE.Vector3((n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255); };
+// A unit sphere, scaled each frame to 50 orbit distances: inside the far plane (100, set on fit)
+// and far beyond the model.
+const sky = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 32), new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, depthTest: false,
+  uniforms: { stops: { value: SKIES.dusk.map(srgb) }, center: { value: new THREE.Vector3() } },
+  vertexShader: 'varying vec3 vW; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }',
+  fragmentShader: `uniform vec3 stops[5]; uniform vec3 center; varying vec3 vW;
+    void main() {
+      float t = clamp(normalize(vW - center).z * 0.5 + 0.5, 0.0, 1.0) * 4.0;
+      vec3 c = t < 1.0 ? mix(stops[0], stops[1], t) : t < 2.0 ? mix(stops[1], stops[2], t - 1.0) : t < 3.0 ? mix(stops[2], stops[3], t - 2.0) : mix(stops[3], stops[4], t - 3.0);
+      gl_FragColor = vec4(c, 1.0);   // stops are sRGB already: written straight to the sRGB canvas
+    }`,
+}));
+sky.renderOrder = -10; sky.frustumCulled = false; sky.visible = false;
+scene.add(sky);
+const isDarkTheme = (t) => t === 'dark' || t === 'dusk' || t === 'night';
 function applyTheme(t) {
   if (!THEMES.includes(t)) t = 'light';
   document.documentElement.dataset.theme = isDarkTheme(t) ? 'dark' : 'light';
   document.documentElement.dataset.bg = t;
   $('#themeToggle').textContent = t.toUpperCase();
-  if (scene.background?.isTexture) scene.background.dispose();
-  scene.background = SKIES[t] ? skyTexture(SKIES[t]) : new THREE.Color(t === 'dark' ? 0x1a1a18 : 0xffffff);
+  sky.visible = !!SKIES[t];
+  if (SKIES[t]) sky.material.uniforms.stops.value = SKIES[t].map(srgb);
+  scene.background = new THREE.Color(t === 'dark' ? 0x1a1a18 : t === 'light' ? 0xffffff : NIGHT);
   for (const m of model.children) if (m.isLine) styleMesh(m);
   try { localStorage.setItem(THEME_KEY, t); } catch {}
 }
@@ -889,6 +957,7 @@ new ResizeObserver(resize).observe(viewport);
 (function loop() {
   resize();
   applyCamera();
+  if (sky.visible) { sky.position.copy(orbit.target); sky.scale.setScalar(orbit.dist * 50); sky.material.uniforms.center.value.copy(orbit.target); }
   renderer.render(scene, camera);
   measure.projectLabels();
   markup.projectLabels();
@@ -906,7 +975,7 @@ fetch('/api/health').then((r) => r.json()).then((h) => {
     : navigator.clipboard.writeText(link).then(() => say(`copied ${link}`), () => say(link)));
 }).catch(() => {});
 // For headless drives: the scene objects behind the page.
-window.__view = { model, section, orbit, ui, measure, THREE, partAt, applyExplode, get camera() { return camera; },
+window.__view = { model, section, orbit, ui, measure, THREE, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
   project: (x, y, z) => { const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3(x, y, z).project(camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; } };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
@@ -945,7 +1014,7 @@ const CMDS = [
   { key: '0', label: 'Explode all / none', btn: '#explode', run: () => setExplode(+$('#explode').value ? 0 : 100), on: () => +$('#explode').value > 0 },
   { key: '=', label: 'Explode more', run: () => setExplode(+$('#explode').value + 10) },
   { key: '-', label: 'Explode less', run: () => setExplode(+$('#explode').value - 10) },
-  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (measure.cancel()) return; setSectionAxis(''); setMeasure(false); } },
+  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (pickAxis) { endPickAxis(); return; } if (measure.cancel()) return; setSectionAxis(''); setMeasure(false); } },
   { sep: true },
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },
@@ -953,7 +1022,7 @@ const CMDS = [
   { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
   { sep: true },
   { key: 'k', label: 'Send to Claude', btn: '#feedbackBtn', run: () => $('#feedbackBtn').click() },
-  { key: 'd', label: 'Background: light / dark / dusk / dawn', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.bg !== 'light' },
+  { key: 'd', label: 'Background: light / dark / dusk / dawn / night', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.bg !== 'light' },
   { key: 'o', meta: true, label: 'Open…', btn: '#openBtn', run: () => $('#fileInput').click() },
   { key: 'z', meta: true, label: 'Undo', run: undo },
   { key: 'z', meta: true, shift: true, label: 'Redo', run: redo },
@@ -1022,7 +1091,7 @@ function partCmds(m) {
   return [
     { head: m.userData.name },
     { label: `Explode auto${auto}`, run: () => set(undefined), on: () => !m.userData.axis },
-    ...AXES.map((a) => ({ label: `Explode ${a.replace('-', '−').toUpperCase()}`, run: () => set(a), on: () => m.userData.axis === a })),
+    { label: 'Explode direction: pick a face…', run: () => startPickAxis(m), on: () => !!m.userData.axis },
     { sep: true },
   ];
 }

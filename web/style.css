@@ -131,6 +131,7 @@ select.ghost:hover { opacity: 0.55; }
 :root[data-theme="dark"] select.ghost { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0h8L4 5z' fill='%23fff'/%3E%3C/svg%3E"); }
 #viewport canvas.oncap { cursor: grab; }
 #viewport canvas.oncap:active { cursor: grabbing; }
+#viewport canvas.picking { cursor: crosshair; }
 .sect { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); }
 .sect input[type=range] { width: 120px; accent-color: var(--ink); }
 .sect button { font-size: var(--fs-12); padding: 4px 8px; }
@@ -176,5 +177,6 @@ select.ghost:hover { opacity: 0.55; }
 footer .foot-tools { display: flex; align-items: center; gap: var(--sp-1); }
 footer button.ghost { font-size: var(--fs-12); padding: 4px 8px; }
 #stats { flex: 0 0 auto; text-align: right; color: var(--ink-soft); text-transform: uppercase; letter-spacing: var(--ls-label); font-variant-numeric: tabular-nums; }
-.status { color: var(--ink-soft); font-size: var(--fs-12); min-width: 84px; text-align: right; text-transform: uppercase; letter-spacing: var(--ls-label); font-variant-numeric: tabular-nums; }
+.status { color: var(--ink-soft); font-size: var(--fs-12); min-width: 84px; max-width: 40vw; text-align: right; text-transform: uppercase; letter-spacing: var(--ls-label); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+footer > * { white-space: nowrap; }
 .status.err { color: var(--signal-red); }
