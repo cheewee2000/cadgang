@@ -38,11 +38,14 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 /** JSON-stringify an object and send it to every open WebSocket client — except an `open` or a
- *  screen request, which go to the page the user last touched: tabs and windows share this server. */
+ *  screen request, which go to the page the user last touched: tabs and windows share this server.
+ *  A screen request with `dir` (the asking Claude session's folder) goes to the pages showing a file in it. */
 let active = null;
+const under = (subject, dir) => !!dir && String(subject || '').split('|').some((f) => (f + '/').startsWith(dir.replace(/\/+$/, '') + '/'));
 function broadcast(obj) {
   const msg = JSON.stringify(obj);
-  const to = (obj.type === 'open' || obj.type === 'snapshot_request') && active?.readyState === 1 ? [active] : wss.clients;
+  const mine = obj.type === 'snapshot_request' && obj.dir ? [...wss.clients].filter((c) => c.readyState === 1 && under(c.subject, obj.dir)) : [];
+  const to = mine.length ? mine : (obj.type === 'open' || obj.type === 'snapshot_request') && active?.readyState === 1 ? [active] : wss.clients;
   for (const client of to) if (client.readyState === 1) client.send(msg);
 }
 

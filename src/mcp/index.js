@@ -54,7 +54,7 @@ Args:
   },
   async ({ fresh }) => {
     try {
-      const { screen, markups, fresh: got, pendingFeedback } = await call(`/view/screen${fresh ? '?fresh=1&wait=4' : ''}`);
+      const { screen, markups, fresh: got, pendingFeedback } = await call(`/view/screen?dir=${encodeURIComponent(process.cwd())}${fresh ? '&fresh=1&wait=4' : ''}`);
       const text = { fresh: got, at: screen?.at ?? null, subject: screen?.subject ?? null, camera: screen?.camera ?? null, markups, pendingFeedback: pendingFeedback || 0 };
       const content = [{ type: 'text', text: JSON.stringify(text, null, 2) }];
       if (screen?.png) content.push({ type: 'image', data: screen.png, mimeType: 'image/png' });

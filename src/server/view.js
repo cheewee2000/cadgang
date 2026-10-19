@@ -109,6 +109,7 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   const sharePath = (id) => path.join(dataDir, 'shares', `${id}.bin`);
   const readMarkup = (subject) => { if (!subject) return []; try { return JSON.parse(fsSync.readFileSync(markupPath(subject), 'utf8')); } catch { return []; } };
   let latest = null;      // { png: Buffer, camera, subject, at }
+  const shots = new Map();   // subject → its newest snapshot: each Claude session gets the tab showing its own project
   let waiters = [];
   const subjectOf = (req) => String(req.query.subject || req.body?.subject || latest?.subject || '');
 
@@ -147,6 +148,7 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       const was = latest?.subject;
       latest = { png: Buffer.from(m[1], 'base64'), camera: req.body.camera ?? null, subject: req.body.subject ?? null, at: new Date().toISOString() };
       if (latest.subject !== was) broadcast({ type: 'subject', subject: latest.subject });   // a ?follow page opens it too
+      shots.set(latest.subject, latest);
       try { fsSync.mkdirSync(dataDir, { recursive: true }); fsSync.writeFileSync(path.join(dataDir, 'screen.png'), latest.png); } catch {}
       const w = waiters; waiters = [];
       for (const fn of w) fn();
@@ -214,19 +216,26 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     res.json({ pending: req.query.keep === '1' ? items.map(({ png, ...f }) => f) : items });
   });
 
-  const screenJson = () => latest && { at: latest.at, subject: latest.subject, camera: latest.camera, png: latest.png.toString('base64') };
+  // ?dir=: the asking session's folder; the newest frame of a file inside it, else the newest of all.
+  const shotFor = (dir) => [...shots.values()].filter((s) => s.subject && dir && inside(s.subject.split('|')[0], dir)).sort((a, b) => b.at.localeCompare(a.at))[0] ?? latest;
+  const screenJson = (s) => s && { at: s.at, subject: s.subject, camera: s.camera, png: s.png.toString('base64') };
   r.get('/screen', async (req, res) => {
+    const dir = req.query.dir ? String(req.query.dir) : null;
     if (req.query.fresh === '1') {
       const wait = Math.min(10, Math.max(0.2, parseFloat(req.query.wait || '3')));
-      const before = latest?.at;
+      const before = shotFor(dir)?.at;
       await new Promise((done) => {
-        const t = setTimeout(done, wait * 1000);
-        waiters.push(() => { clearTimeout(t); done(); });
-        broadcast({ type: 'snapshot_request' });
+        let over = false;
+        const t = setTimeout(() => { over = true; done(); }, wait * 1000);
+        const check = () => { if (over) return; if (shotFor(dir)?.at !== before) { clearTimeout(t); done(); } else waiters.push(check); };
+        waiters.push(check);
+        broadcast({ type: 'snapshot_request', dir });
       });
-      return res.json({ screen: screenJson(), fresh: !!latest && latest.at !== before, markups: readMarkup(latest?.subject), pendingFeedback: feedback.length });
+      const s = shotFor(dir);
+      return res.json({ screen: screenJson(s), fresh: !!s && s.at !== before, markups: readMarkup(s?.subject), pendingFeedback: feedback.length });
     }
-    res.json({ screen: screenJson(), fresh: false, markups: readMarkup(latest?.subject), pendingFeedback: feedback.length });
+    const s = shotFor(dir);
+    res.json({ screen: screenJson(s), fresh: false, markups: readMarkup(s?.subject), pendingFeedback: feedback.length });
   });
   r.get('/screen.png', (req, res) => latest ? res.type('png').send(latest.png) : res.status(404).json({ error: 'No snapshot yet — open the app' }));
 

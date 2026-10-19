@@ -65,6 +65,8 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         cfg.userContentController.addUserScript(WKUserScript(source: "window.cadgangDesktop = true", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         cfg.userContentController.add(self, name: "cadgang")
         cfg.preferences.javaScriptCanOpenWindowsAutomatically = true   // the page opens a second file with window.open
+        // A background tab stays awake (WebKit suspends it by default): a Claude session asking for its screen gets an answer.
+        if #available(macOS 14.0, *) { cfg.preferences.inactiveSchedulingPolicy = .none }
         web = makeWindow(cfg)
         NSApp.activate(ignoringOtherApps: true)
         startServer()
