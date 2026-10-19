@@ -358,8 +358,13 @@ function saveBodies() {
 /** Solve the explode vectors from the bodies at rest, then put the explode back. */
 function solveExplode() {
   const t0 = performance.now();
+  // Solve in the file's own frame: the probes run along x, y and z, and a model turned 45° has no faces on them.
+  // The offsets turn back with the geometry.
+  const q = rot.clone(), turned = q.w < 1 - 1e-9;
+  if (turned) bakeRot(new THREE.Quaternion());
   for (const m of model.children) { m.position.set(0, 0, 0); m.updateMatrixWorld(true); }
   explodeOffsets(model.children, bbox.getCenter(new THREE.Vector3()));
+  if (turned) bakeRot(q);
   applyExplode();
   say(`explode vectors solved in ${Math.round(performance.now() - t0)} ms`);
 }
