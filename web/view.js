@@ -377,17 +377,37 @@ function solveExplode() {
   const q = rot.clone(), turned = q.w < 1 - 1e-9;
   if (turned) bakeRot(new THREE.Quaternion());
   for (const m of model.children) { m.position.set(0, 0, 0); m.quaternion.identity(); m.updateMatrixWorld(true); }
-  explodeOffsets(model.children, bbox.getCenter(new THREE.Vector3()));
+  explodeOffsets(model.children, bbox.getCenter(new THREE.Vector3()), jointHints());
+  solvedFor = hintSig();
   if (turned) bakeRot(q);
   applyExplode();
   say(`explode vectors solved in ${Math.round(performance.now() - t0)} ms`);
+}
+// The joints tell the solver how the parts go together: a screw leaves along its axis, a fixed part goes with its parent.
+let solvedFor = '[]', solveTimer = null;
+function jointHints() {
+  const byKey = new Map([...bodyKeys()].map(([m, k]) => [k, m])), out = new Map();
+  for (const j of joints) {
+    const m = byKey.get(j.body);
+    if (m && !out.has(m)) out.set(m, { type: j.type, axis: new THREE.Vector3(...j.axis), origin: new THREE.Vector3(...j.origin), parent: (j.parent && byKey.get(j.parent)) || null });
+  }
+  return out;
+}
+const hintSig = () => JSON.stringify(joints.map((j) => [j.body, j.parent, j.type, j.axis]));
+/** New joints change how the parts should explode: solve again, quietly, when the model is small enough to do it on load. */
+function resolveForJoints() {
+  clearTimeout(solveTimer);
+  if (model.children.length < 2 || hintSig() === solvedFor) return;
+  const tris = model.children.reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.getAttribute('position').count) / 3, 0);
+  if (tris > 300000) return;
+  solveTimer = setTimeout(() => { try { solveExplode(); say('explode re-solved from the joints'); } catch {} }, 250);
 }
 $('#solveBtn').addEventListener('click', () => {
   say('solving explode vectors…'); progressStart('explode', 'solving explode vectors…');
   setTimeout(() => { const t = performance.now(); try { solveExplode(); } finally { progressEnd('explode', performance.now() - t); } }, 30);
 });
 // For a headless drive or a console: what the solver decided.
-window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, axis: m.userData.axis ?? null, pull: m.userData.pull == null ? null : +m.userData.pull.toFixed(2) }));
+window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, stage: m.userData.stage ?? 0, axis: m.userData.axis ?? null, pull: m.userData.pull == null ? null : +m.userData.pull.toFixed(2) }));
 /** Body ticks in model order (a group tree renders them out of order). */
 const bodyBoxes = () => { const by = new Map([...$('#bodies').querySelectorAll('input.body-cb')].map((cb) => [cb._body, cb])); return model.children.map((m) => by.get(m)).filter(Boolean); };
 /** Ticks follow the bodies: a group is ticked when all of it shows, half when some does. */
@@ -558,6 +578,10 @@ function setPartAxis(m, n) {
 }
 // Does the vector move the body at all? The base part's radial offset is a rounding away from zero.
 const moves = (m, v) => v.length() > 0.01 * (m.geometry.boundingBox?.getSize(new THREE.Vector3()).length() ?? 1);
+// Stages (the solver's order of removal): a part waits for what stands in its way, so the slider's first stretch moves the
+// outer parts and the next the ones under them. Part of stage s of S has its own slice of the slider.
+const stageCount = () => 1 + Math.max(0, ...model.children.map((m) => m.userData.stage ?? 0));
+const stageFrac = (m, k) => { const S = stageCount(); return S < 2 ? k : THREE.MathUtils.clamp(k * S - (m.userData.stage ?? 0), 0, 1); };
 const maxTravel = (m) => m.userData.pull ?? explodeVec(m).length() * 2;   // the solver's full travel is twice its offset
 // The user's explode edits (axis, maximum travel) are saved per file and come back on load and on a
 // re-export, by body name: `${name}#${n}` for the n-th body of that name.
@@ -647,7 +671,7 @@ function applyExplode() {
     if (done.has(m)) return at;
     done.add(m);
     const v = explodeVec(m), len = v.length();
-    at.copy(v).multiplyScalar(len ? (maxTravel(m) * k) / len : 0);
+    at.copy(v).multiplyScalar(len ? (maxTravel(m) * stageFrac(m, k)) / len : 0);
     if (m.userData.parent) at.add(place(m.userData.parent));
     return at;
   };
@@ -895,10 +919,11 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   }
   if (drag.joint) { driveJoint(drag.joint, dx, dy, e.altKey); return; }
   if (drag.part) {
-    const m = drag.part.m, max = maxTravel(m);
-    const d = Math.max(0, max * (+$('#explode').value / 100) + dx * drag.part.sx + dy * drag.part.sy);
+    const m = drag.part.m, max = maxTravel(m), S = stageCount();
+    const d = Math.max(0, max * stageFrac(m, +$('#explode').value / 100) + dx * drag.part.sx + dy * drag.part.sy);
     if (d > max) m.userData.pull = d;   // past its maximum: that is the new maximum
-    $('#explode').value = 100 * Math.min(1, d / maxTravel(m));
+    const f = Math.min(1, d / maxTravel(m));
+    $('#explode').value = 100 * (S < 2 ? f : ((m.userData.stage ?? 0) + f) / S);   // the part is the slider's handle, in its own slice
     applyExplode();
     return;
   }
@@ -1001,7 +1026,7 @@ const bodyOfKey = (key) => [...bodyKeys()].find(([, k]) => k === key)?.[0] ?? nu
 const jointId = () => 'j' + Math.random().toString(36).slice(2, 8);
 function setJoints(list) {
   joints = list.map(normalizeJoint);
-  renderJoints(); applyExplode(); saveJoints();
+  renderJoints(); applyExplode(); saveJoints(); resolveForJoints();
 }
 const jointVal = (j, key) => (key.startsWith('rot') ? j.rot[+key.slice(3)] : j[key]);
 function setJointValue(j, key, v) {
