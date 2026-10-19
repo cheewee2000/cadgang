@@ -109,10 +109,28 @@ app.post('/api/project', (req, res, next) => {
     setProject(String(req.body?.dir || '')); res.json({ dir: project.dir, cells: cells.filePath });
   } catch (e) { next(e); }
 });
-const cellsApi = cellsRouter(cells, ROOT, { project });
-app.use('/api/cells/history', historyRouter(cells, { dirOf: () => path.join(path.dirname(cells.filePath || CELLS_PATH), 'history'), modelOf: cellsApi.modelOf, broadcast }));
-app.use('/api/cells/options', optionsRouter(cells, { modelOf: cellsApi.modelOf, broadcast }));
-app.use('/api/cells', cellsApi);
+/** A cell document's routes: the cells, their history and option sets. */
+function cellRoutes(doc, proj) {
+  const api = cellsRouter(doc, ROOT, { project: proj }), r = express.Router();
+  r.use('/history', historyRouter(doc, { dirOf: () => path.join(path.dirname(doc.filePath || CELLS_PATH), 'history'), modelOf: api.modelOf, broadcast }));
+  r.use('/options', optionsRouter(doc, { modelOf: api.modelOf, broadcast }));
+  r.use(api);
+  return r;
+}
+const appRoutes = cellRoutes(cells, project);
+// Each Claude session's MCP server names its folder (X-Cadgang-Project): it gets that folder's own
+// document, exports and history, so two sessions never write into each other's project. The app's
+// pages send no header and work in the app's project.
+const sessions = new Map();   // folder → routes
+app.use('/api/cells', (req, res, next) => {
+  const h = req.get('x-cadgang-project');
+  const dir = h && path.resolve(h);
+  if (!dir || dir === project.dir || !fs.existsSync(dir)) { setImportRoot(project.dir || process.cwd()); return appRoutes(req, res, next); }
+  if (!sessions.has(dir)) sessions.set(dir, cellRoutes(new CellDocument(path.join(dir, 'cadgang', 'cells.json')), { dir }));
+  // ponytail: importStep reads one global root, set per request; two sessions evaluating in the same tick could cross. Pass the root down if that bites.
+  setImportRoot(dir);
+  sessions.get(dir)(req, res, next);
+});
 // Load the kernel now so the first evaluate does not pay the WASM load.
 initBrep().catch((e) => console.error('B-rep kernel failed to load:', e.message));
 // Everything that goes wrong on the API answers in its own shape, never as HTML.

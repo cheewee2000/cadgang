@@ -19,10 +19,12 @@ import { registerCellTools } from './cells.js';
 const BASE = (process.env.CADGANG_URL || 'http://localhost:4477').replace(/\/$/, '');
 const VERSION = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../package.json'), 'utf8')).version;
 
+// Which project this session works in: the server keeps a cell document per folder (exports and history land there).
+const HEADERS = { 'X-Cadgang-Project': process.cwd() };
 async function call(p, { method = 'GET', body } = {}) {
   let res;
   try {
-    res = await fetch(`${BASE}/api${p}`, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+    res = await fetch(`${BASE}/api${p}`, { method, headers: body ? { ...HEADERS, 'Content-Type': 'application/json' } : HEADERS, body: body ? JSON.stringify(body) : undefined });
   } catch (e) {
     throw new Error(`Cannot reach CADgang at ${BASE} (${e.cause?.code || e.message}). Open the CADgang app, or run 'npm start' in the repo, or set CADGANG_URL.`);
   }
@@ -164,7 +166,7 @@ server.registerTool(
   async (spec) => { try { return ok(await call('/view/drawing/make', { method: 'POST', body: { spec } })); } catch (e) { return fail(e); } }
 );
 
-registerCellTools(server, { call, ok, fail, base: BASE });
+registerCellTools(server, { call, ok, fail, base: BASE, headers: HEADERS });
 // Claude Code starts this server in the project folder: make it cadgang's project (unless a document is already open elsewhere).
 fetch(`${BASE}/api/project`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: process.cwd(), ifUnset: true }) })
   .then((r) => (r.ok ? r.json() : null)).then((p) => p && console.error(p.kept ? `cadgang project folder stays ${p.dir} (a document is open there)` : `cadgang project folder: ${p.dir}`)).catch(() => {});

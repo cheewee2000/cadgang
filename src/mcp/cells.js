@@ -174,7 +174,7 @@ const CELL_STATUS = `Cell status: 'ok' (code matches prompt) | 'stale' (prompt e
  * `call`, `ok` and `fail` are the same HTTP and result helpers the v1 tools use,
  * passed in rather than duplicated.
  */
-export function registerCellTools(server, { call, ok, fail, base }) {
+export function registerCellTools(server, { call, ok, fail, base, headers }) {
   const paramValue = z.union([z.number(), z.string(), z.boolean()]);
 
   const sketchSchema = z.object({
@@ -531,7 +531,7 @@ Args:
         }
         const { snapshot, ...v } = await call(`/cells/history/${n}`);
         const content = [{ type: 'text', text: JSON.stringify({ ...v, cells: snapshot.cells.map((c) => ({ id: c.id, kind: c.kind, prompt: c.prompt, params: c.params })) }, null, 2) }];
-        const img = await fetch(`${base}/api/cells/history/${n}.png`);
+        const img = await fetch(`${base}/api/cells/history/${n}.png`, { headers });
         if (img.ok) content.push({ type: 'image', data: Buffer.from(await img.arrayBuffer()).toString('base64'), mimeType: 'image/png' });
         return { content };
       } catch (e) { return fail(e); }
@@ -639,7 +639,7 @@ Args:
       try {
         const qs = new URLSearchParams({ file: filename });
         if (cell) qs.set('cell', cell);
-        const res = await fetch(`${base}/api/cells/export/${format}?${qs}`);
+        const res = await fetch(`${base}/api/cells/export/${format}?${qs}`, { headers });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error || `cadgang API error (HTTP ${res.status})`);
