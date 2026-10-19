@@ -29,7 +29,7 @@ export function radialOffsets(bodies, centre) {
 }
 
 /** The cylinders among a body's B-rep faces: axis, centre, radius, span. */
-function cylinders(m) {
+export function cylinders(m) {
   const faces = m.userData.faces; if (!faces) return [];
   const pos = m.geometry.getAttribute('position'), idx = m.geometry.index?.array;
   const out = [];

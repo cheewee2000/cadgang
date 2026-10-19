@@ -14,7 +14,7 @@ import Sparkle
 
 let PORT = 4477
 let BASE = URL(string: "http://127.0.0.1:\(PORT)")!
-let EXTS = ["step", "stp", "iges", "igs", "brep", "stl", "obj", "ply", "3mf", "gltf", "glb", "fbx", "dxf"]
+let EXTS = ["step", "stp", "iges", "igs", "brep", "stl", "obj", "ply", "3mf", "gltf", "glb", "fbx", "dxf", "cadgang"]
 
 /// Files dropped ANYWHERE in the window (toolbar, canvas) open like a Finder
 /// double-click. Left to WebKit, a file drop outside the page's own drop zone did nothing.
@@ -213,6 +213,17 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         // AirDrop the ?follow link: the sheet lists nearby devices; the iPad opens it in Safari.
         if cmd == "airdrop", let s = body["url"] as? String, let u = URL(string: s) { NSSharingService(named: .sendViaAirDrop)?.perform(withItems: [u]) }
         // The page's clipboard API refuses after an await (the click's activation is spent), so the shell copies.
+        // Save project: the Save panel picks the path; the page then sends the bytes to the server, which writes them.
+        if cmd == "saveProject", let w = m.webView {
+            let panel = NSSavePanel()
+            panel.allowedFileTypes = ["cadgang"]
+            panel.nameFieldStringValue = body["name"] as? String ?? "project.cadgang"
+            if let d = body["dir"] as? String, !d.isEmpty { panel.directoryURL = URL(fileURLWithPath: d) }
+            panel.begin { r in
+                guard r == .OK, let u = panel.url, let data = try? JSONSerialization.data(withJSONObject: [u.path]), let json = String(data: data, encoding: .utf8) else { return }
+                w.evaluateJavaScript("window.cadgangSaveTo?.(\(json)[0])")
+            }
+        }
         if cmd == "copy", let s = body["text"] as? String { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string) }
     }
 
@@ -255,6 +266,9 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
             self.keyWeb.evaluateJavaScript("window.cadgangNotify && cadgangNotify(...\(json))")
         }
     }
+
+    @objc func saveProject(_ s: Any?) { keyWeb.evaluateJavaScript("window.cadgangSave?.(false)") }
+    @objc func saveProjectAs(_ s: Any?) { keyWeb.evaluateJavaScript("window.cadgangSave?.(true)") }
 
     @objc func openDocument(_ s: Any?) {
         let p = NSOpenPanel()
@@ -305,6 +319,8 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "New Window", action: #selector(newWindow(_:)), keyEquivalent: "n")
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "Save Project", action: #selector(saveProject(_:)), keyEquivalent: "s")
+        fileMenu.addItem(withTitle: "Save Project As…", action: #selector(saveProjectAs(_:)), keyEquivalent: "S")
         fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         file.submenu = fileMenu
 

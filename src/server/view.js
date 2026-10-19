@@ -84,6 +84,8 @@ export function pack(m) {
  * Markups, the screen, and files pushed from MCP.
  *   GET/PUT /api/view/markup?subject=…  the markups of one opened file (default: the file on screen)
  *   POST    /api/view/snapshot          the page posts {png, camera, subject} — the live view
+ *   GET/PUT /api/view/joints?subject=…  the joints of one file (+ the bodies the page reports)
+ *   PUT     /api/view/project?path=/abs/x.cadgang  desktop only: write a saved project
  *   GET     /api/view/screen?fresh=1    latest snapshot (+its markups); fresh=1 asks open pages to post
  *                                       a new one first and waits up to ?wait= seconds (default 3)
  *   GET     /api/view/screen.png        the image alone
@@ -126,6 +128,24 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     } catch (e) { next(e); }
   });
 
+  // Joints of one file, and the bodies they can be made on (the page posts those: name key, box, cylinders).
+  // Claude reads both and writes joints; the page loads what changed unless it made the change itself (`from`).
+  const jointsPath = (subject) => path.join(dataDir, 'joints', `${slug(subject)}.json`);
+  const readJoints = (subject) => { try { const d = JSON.parse(fsSync.readFileSync(jointsPath(subject), 'utf8')); return { joints: d.joints ?? [], bodies: d.bodies ?? [] }; } catch { return { joints: [], bodies: [] }; } };
+  r.get('/joints', (req, res) => { const subject = subjectOf(req); res.json({ subject, ...readJoints(subject) }); });
+  r.put('/joints', (req, res, next) => {
+    try {
+      const subject = subjectOf(req);
+      if (!subject) throw Object.assign(new Error('No file is open to attach joints to'), { status: 400 });
+      const cur = readJoints(subject), has = Array.isArray(req.body?.joints);
+      const next_ = { joints: has ? req.body.joints : cur.joints, bodies: Array.isArray(req.body?.bodies) ? req.body.bodies : cur.bodies };
+      fsSync.mkdirSync(path.dirname(jointsPath(subject)), { recursive: true });
+      fsSync.writeFileSync(jointsPath(subject), JSON.stringify(next_));
+      if (has) broadcast({ type: 'joints_changed', subject, from: String(req.body.from || '') });
+      res.json({ subject, ...next_ });
+    } catch (e) { next(e); }
+  });
+
   // Per-file explode settings the user made (axis picked off a face, maximum travel set by a drag),
   // keyed `${body name}#${n}` so a re-exported file gets them back without redoing them.
   const partsPath = (subject) => path.join(dataDir, 'explode', `${slug(subject)}.json`);
@@ -137,6 +157,7 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       const parts = req.body?.parts && typeof req.body.parts === 'object' ? req.body.parts : {};
       fsSync.mkdirSync(path.dirname(partsPath(subject)), { recursive: true });
       fsSync.writeFileSync(partsPath(subject), JSON.stringify(parts));
+      broadcast({ type: 'parts_changed', subject, from: String(req.body?.from || '') });   // other windows on this file pick up renames
       res.json({ subject, parts });
     } catch (e) { next(e); }
   });
@@ -282,6 +303,22 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     try {
       const { name, buffer } = await local(req);
       res.set('Content-Type', 'application/octet-stream').set('X-Name', encodeURIComponent(name)).send(buffer);
+    } catch (e) { next(e); }
+  });
+
+  // Save project: the page's bundle (same layout as Share to web) written to a .cadgang file chosen
+  // by the shell's Save panel. Local paths only, like reading them; written beside the target and
+  // renamed in, so a crash mid-save never leaves a half project over a good one.
+  r.put('/project', express.raw({ type: () => true, limit: '2gb' }), async (req, res, next) => {
+    try {
+      if (!mayReadLocal(req)) throw Object.assign(new Error('Saving to a path is only available in the desktop app, or from this computer'), { status: 403 });
+      const p = String(req.query.path || '');
+      if (!path.isAbsolute(p) || !/\.cadgang$/i.test(p)) throw Object.assign(new Error('path must be an absolute .cadgang path'), { status: 400 });
+      if (!Buffer.isBuffer(req.body) || req.body.length < 4) throw Object.assign(new Error('empty project'), { status: 400 });
+      const tmp = `${p}.${process.pid}.part`;
+      await fs.writeFile(tmp, req.body);
+      await fs.rename(tmp, p);
+      res.json({ path: p, bytes: req.body.length });
     } catch (e) { next(e); }
   });
 

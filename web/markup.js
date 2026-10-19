@@ -52,10 +52,13 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   let hitBody = null;
   const keyOf = (m) => { const all = getTargets(); const n = all.filter((o, i) => o.userData.name === m.userData.name && i < all.indexOf(m)).length; return `${m.userData.name}#${n}`; };
   const byKey = (k) => { const i = k.lastIndexOf('#'), name = k.slice(0, i), n = +k.slice(i + 1); return getTargets().filter((o) => o.userData.name === name)[n] ?? null; };
-  const ZERO = new THREE.Vector3();
-  const shift = (item) => (item.body && byKey(item.body)?.position) || ZERO;
-  const toWorld = (item, p) => new THREE.Vector3(...p).add(shift(item)).toArray();
-  const toRest = (item, p) => new THREE.Vector3(...p).sub(shift(item)).toArray();
+  // A part moves by its explode offset and by its joint (a turn about an axis), so a mark rides its pose, not just its position.
+  const IDENT = new THREE.Matrix4();
+  const bodyOf = (item) => (item.body && byKey(item.body)) || null;
+  const poseOf = (item) => { const b = bodyOf(item); if (!b) return IDENT; b.updateMatrix(); return b.matrix; };
+  const toWorld = (item, p) => new THREE.Vector3(...p).applyMatrix4(poseOf(item)).toArray();
+  const toRest = (item, p) => new THREE.Vector3(...p).applyMatrix4(poseOf(item).clone().invert()).toArray();
+  const follow = (holder, item) => { const b = bodyOf(item); if (b) { holder.position.copy(b.position); holder.quaternion.copy(b.quaternion); } else { holder.position.set(0, 0, 0); holder.quaternion.identity(); } };
   function pointAt(e) {
     const cam = getCamera();
     raycaster.setFromCamera(ndc(e), cam);
@@ -116,7 +119,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       objs.push(dot);
     }
     const holder = new THREE.Group();   // moved by the part's explode offset each frame
-    holder.userData.item = item; holder.position.copy(shift(item));
+    holder.userData.item = item; follow(holder, item);
     for (const o of objs) { o.renderOrder = Math.max(o.renderOrder, 5); o.userData.item = item; holder.add(o); }
     group.add(holder);
     return objs;
@@ -174,7 +177,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   function projectLabels() {
     const r = canvas.getBoundingClientRect();
     for (const m of mats.values()) m.line.resolution.set(r.width, r.height);
-    for (const h of group.children) h.position.copy(shift(h.userData.item));
+    for (const h of group.children) follow(h, h.userData.item);
     for (const el of layer.querySelectorAll('.note-label')) {
       const item = items.find((i) => i.id === el.dataset.id);
       if (!item) continue;
