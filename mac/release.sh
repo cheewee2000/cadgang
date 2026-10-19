@@ -40,6 +40,6 @@ curl -sfI "$URL/cadgang.xml" >/dev/null && echo "appcast live: $URL/cadgang.xml"
 if gh release view "v$VERSION" >/dev/null 2>&1; then
   gh release upload "v$VERSION" "$ZIP" --clobber
 else
-  gh release create "v$VERSION" "$ZIP" --title "CADgang $VERSION" --notes "$NOTES" --latest
+  gh release create "v$VERSION" "$ZIP" --target "$(git rev-parse HEAD)" --title "CADgang $VERSION" --notes "$NOTES" --latest
 fi
 echo "released $VERSION: $URL/cadgang-$VERSION.zip"
