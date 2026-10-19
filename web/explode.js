@@ -85,13 +85,14 @@ export function explodeOffsets(bodies, centre) {
   // "down" free where the head lands on the standoff. Origins start a hair behind the surface so a face
   // resting on another registers as a touch, not a miss.
   // skip(h): hits to look past (the lip of a hole whose pin is bigger than it)
-  const hitFrom = (i, d, among, skip) => {
+  // lead: how square a face must face d to probe (flat faces only: 0.9)
+  const hitFrom = (i, d, among, skip, lead = 0.3) => {
     d = d.clone().normalize();
     const { c, r, pts } = info[i], eps = 1e-3 * r;
     const meshes = among.map((b) => probe[bodies.indexOf(b)]);
     let best = null;
     for (const { p, n } of pts) {
-      if (n.dot(d) < 0.3) continue;   // not a leading face
+      if (n.dot(d) < lead) continue;   // not a leading face
       // a hair behind the surface along the travel, and a hair inward: a point on a neighbour's edge must not
       // graze its side face (a lid's rim ran along the box's side and read as "walled")
       const o = p.clone().addScaledVector(d, -eps); if (o.distanceToSquared(c) > eps * eps) o.add(c.clone().sub(o).setLength(eps));
@@ -151,8 +152,31 @@ export function explodeOffsets(bodies, centre) {
         const fp = own(plus), fm = own(minus);
         const d = fp > fm ? plus : fm > fp ? minus : (radial.dot(plus) >= 0 ? plus : minus);
         P.cands.push(plus, minus);
-        if (!P.dir) { P.dir = d; P.parent = rideOn(bearing(i, d, j) ?? bodies[j]); P.housing = bodies[j]; P.lip = lip; }
+        if (!P.dir) {
+          // its way out blocked on contact by something bigger (an SMT nut on its board): held there, it rides that
+          // and lifts off it, the way a part leaves the face it sits on. A flat face on it: a countersunk head only
+          // grazes its countersink, and comes out of it.
+          const front = hitFrom(i, d, bigger.filter((o) => o !== bodies[j]), undefined, 0.9), held = front && front.gap <= 1e-3 * r;
+          P.dir = held ? d.clone().negate() : d; P.parent = rideOn(held ? front.object : bearing(i, d, j) ?? bodies[j]); P.housing = bodies[j]; P.lip = lip;
+        }
       }
+    }
+    // a ring on a smaller shaft (a washer under a screw head: wider than the screw, so the loop above never
+    // paired them): along the shaft, out the freer end. Thin along the axis only — a standoff is not a ring.
+    if (!P.dir) for (const a of info[i].cyl) {
+      if (2 * ext(a.axis) > 2 * a.r) continue;
+      const shaft = [...bodies.keys()].some((j) => j !== i && info[j].r < r && info[j].cyl.some((b) => {
+        if (Math.abs(a.axis.dot(b.axis)) < 0.999 || b.r < 0.75 * a.r || b.r > 1.25 * a.r) return false;
+        const off = a.c.clone().sub(b.c); off.addScaledVector(b.axis, -off.dot(b.axis));
+        if (off.length() > 0.02 * a.r + 1e-6) return false;
+        const t = info[i].c.clone().sub(info[j].c).dot(a.axis);   // through it: the shaft body reaches past the ring both ways
+        return Math.abs(t) + ext(a.axis) < extOf(info[j].half, a.axis);
+      }));
+      if (!shaft) continue;
+      const plus = a.axis.clone(), minus = a.axis.clone().negate(), fp = free(plus), fm = free(minus);
+      P.dir = fp > fm ? plus : fm > fp ? minus : (radial.dot(plus) >= 0 ? plus : minus);
+      P.cands.push(plus, minus);
+      break;
     }
     P.cands.push(...DIRS);
     if (P.dir) return P;
@@ -181,6 +205,7 @@ export function explodeOffsets(bodies, centre) {
       if (v.lengthSq() === 0) { const a = axisOf(touching[0].d); v.setComponent(a, Math.sign(radial.getComponent(a)) || 1); }
       P.dir = v.normalize();
       P.parent = rideOn(touching[0].h.object);   // a part rests on what it touches and moves with it: a screw head on a lid that slides away
+      P.leave = touching.find((x) => x.d.dot(P.dir) < -0.5)?.h.object;   // what it backs away from
       return P;
     }
     const block = radial.lengthSq() > 1e-12 && hit(radial);
@@ -189,10 +214,28 @@ export function explodeOffsets(bodies, centre) {
       if (best.free > 2 * r) { P.dir = best.d; P.parent = rideOn(block.object); P.radialLen = Math.max(radial.length(), 2 * r); return P; }
     }
     P.dir = radial.lengthSq() ? radial.clone().normalize() : null;   // the central body stays
-    P.radialLen = radial.length();
+    P.radialLen = radial.length(); P.fallback = true;
     return P;
   });
   for (const P of plan) P.offset = P.dir ? P.dir.clone().multiplyScalar(P.radialLen ?? P.len(P.dir)) : new THREE.Vector3();
+  // A body backing away from what it rests against takes what rides on it out of that body too: a board under a
+  // cover went its own thickness, and the parts on it stayed in the cover's pockets. Far enough that each rider,
+  // with its own travel, clears the far face of the body left behind. Only a body wholly behind it: a part leaving
+  // a shell through its side wall would cross the whole shell to its far wall.
+  const span = (i, d) => { const c = info[i].c.dot(d), e = extOf(info[i].half, d); return [c - e, c + e]; };
+  for (const P of plan) {
+    if (!P.leave || !P.dir) continue;
+    const d = P.dir.clone().normalize(), top = span(bodies.indexOf(P.leave), d)[1];
+    if (top > span(P.i, d)[1] + 1e-6) continue;
+    let need = P.offset.length();
+    for (const R of plan) {
+      const rel = new THREE.Vector3(); let x = R;   // R's travel relative to P, through its chain of rides
+      for (let n = 0; x && x !== P && n < plan.length; x = x.parent && plan[bodies.indexOf(x.parent)], n++) rel.add(x.offset);
+      if (x !== P) continue;
+      need = Math.max(need, top - span(R.i, d)[0] - rel.dot(d));
+    }
+    P.offset.setLength(need);
+  }
   // no collisions, judged pair by pair on relative motion (a part riding on its pocket's body moves with
   // it): seen from body Q, body P travels along P.abs - Q.abs; if that path runs into Q within the travel,
   // P takes the clearest of its candidates whose whole travel is clear of everyone. None clear, it keeps
@@ -219,10 +262,16 @@ export function explodeOffsets(bodies, centre) {
     const c0 = clearance(P, P.abs);
     if (c0 >= 0) continue;
     let best = null, far = null;
+    const want = P.fallback ? new THREE.Vector3() : P.dir.clone().normalize();   // plain radial is no rule: no pull
     for (const d of P.cands) for (const ride of P.parent ? [true, false] : [false]) {   // riding, or alone if the ride is what collides
       const len = P.len(d), abs = d.clone().multiplyScalar(len); if (ride) abs.add(parentAbs(P));
-      const score = clearance(P, abs) + 1e-3 * d.dot(P.radial) + (ride ? 1e-6 : 0);   // clearest; ties toward the radial, then the ride
-      const c = { d, score, ride, len, gap: score + 2 * len };   // gap: how far it could go before hitting
+      // clearest; ties toward what the rules wanted (a lens along its thread), then the shorter trip (a part boxed in
+      // under a wall slid 27 mm along its board toward the radial), then the radial, then the ride. Capped: Infinity
+      // plus a tie-break is Infinity, and the first axis in the list won (a button above the board went sideways).
+      const clear = Math.min(clearance(P, abs), 1e6), score = clear + 1e-3 * d.dot(want) - 1e-6 * len + 1e-8 * d.dot(P.radial) + (ride ? 1e-10 : 0);
+      // gap: how far it could go before hitting. ponytail: the radial term is a knife edge kept as it was (a screw under
+      // a sweeping sub-board stays out along its axis by it); a proper fix sequences the sweep
+      const c = { d, score, ride, len, gap: clear + 1e-3 * d.dot(P.radial) + 2 * len };
       if (!best || score > best.score) best = c;
       if (!far || c.gap > far.gap) far = c;
     }
