@@ -150,10 +150,13 @@ select.ghost:hover { opacity: 0.55; }
 .mlabel { position: absolute; pointer-events: auto; cursor: pointer; transform: translate(-50%, -140%); background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--signal-red); padding: 1px 6px; font-size: var(--fs-12); white-space: nowrap; }
 /* markup, shared by both viewports */
 /* loading bar across the top of the viewport: timed against the file's last load, sliding when unknown */
-.progress { position: absolute; left: 0; top: 0; right: 0; height: 3px; background: var(--rule); z-index: 3; overflow: hidden; }
+/* What the app is waiting on, in the middle of the viewport: a file loading, a drawing, a Claude session's build. */
+.center-msgs { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(320px, calc(100% - 32px)); display: flex; flex-direction: column; gap: var(--sp-2); z-index: 3; pointer-events: none; }
+.progress { background: var(--paper); border: var(--bw-hair) solid var(--ink); padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); font-size: var(--fs-12); text-align: center; overflow-wrap: anywhere; }
 .progress[hidden] { display: none; }
-.progress > div { height: 100%; width: 0; background: var(--ink); transition: width 0.15s linear; }
-.progress.guess > div { width: 30%; transition: none; animation: progress-slide 1.2s linear infinite; }
+.progress .track { height: 3px; background: var(--rule); overflow: hidden; }
+.progress .track > div { height: 100%; width: 0; background: var(--ink); transition: width 0.15s linear; }
+.progress.guess .track > div { width: 30%; transition: none; animation: progress-slide 1.2s linear infinite; }
 @keyframes progress-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 .markup-tools { position: absolute; right: var(--sp-3); top: var(--sp-3); display: flex; gap: var(--sp-1); z-index: 2; }
 .markup-tools button { font-size: var(--fs-12); padding: 4px 8px; background: var(--paper); }

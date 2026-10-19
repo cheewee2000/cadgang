@@ -47,16 +47,17 @@ function say(text, isError = false, keep = false) {
 const LOAD_KEY = 'cadgang-load-ms';
 const loadTimes = (() => { try { return JSON.parse(localStorage.getItem(LOAD_KEY) || '{}'); } catch { return {}; } })();
 let progressTimer = null;
-function progressStart(name) {
-  const el = $('#progress'), bar = el.firstElementChild, est = loadTimes[name], t0 = performance.now();
+function progressStart(name, label = `loading ${name}…`) {
+  const el = $('#progress'), bar = el.querySelector('.track > div'), est = loadTimes[name], t0 = performance.now();
+  el.querySelector('span').textContent = label;
   el.hidden = false; el.classList.toggle('guess', !est); bar.style.width = '0%';
   clearInterval(progressTimer);
   if (est) progressTimer = setInterval(() => { bar.style.width = `${Math.min(95, 100 * (performance.now() - t0) / est)}%`; }, 100);
 }
 function progressEnd(name, ms) {
   clearInterval(progressTimer);
-  const el = $('#progress'); el.classList.remove('guess'); el.firstElementChild.style.width = '100%';
-  setTimeout(() => { el.hidden = true; el.firstElementChild.style.width = '0%'; }, 300);
+  const el = $('#progress'), bar = el.querySelector('.track > div'); el.classList.remove('guess'); bar.style.width = '100%';
+  setTimeout(() => { el.hidden = true; bar.style.width = '0%'; }, 300);
   if (name && ms) { loadTimes[name] = ms; try { localStorage.setItem(LOAD_KEY, JSON.stringify(loadTimes)); } catch {} }
 }
 
@@ -353,7 +354,10 @@ function solveExplode() {
   applyExplode();
   say(`explode vectors solved in ${Math.round(performance.now() - t0)} ms`);
 }
-$('#solveBtn').addEventListener('click', () => { say('solving explode vectors…'); setTimeout(solveExplode, 30); });
+$('#solveBtn').addEventListener('click', () => {
+  say('solving explode vectors…'); progressStart('explode', 'solving explode vectors…');
+  setTimeout(() => { const t = performance.now(); try { solveExplode(); } finally { progressEnd('explode', performance.now() - t); } }, 30);
+});
 // For a headless drive or a console: what the solver decided.
 window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, axis: m.userData.axis ?? null, pull: m.userData.pull == null ? null : +m.userData.pull.toFixed(2) }));
 /** Body ticks in model order (a group tree renders them out of order). */
@@ -987,13 +991,15 @@ $('#drawBtn').addEventListener('click', async () => {
   say('drawing requested — paste the copied prompt into Claude Code and answer its questions');
 });
 async function makeDrawing(spec) {
-  say('rendering drawing…');
+  say('rendering drawing…'); progressStart('drawing', 'rendering the drawing…');
+  await new Promise((r) => setTimeout(r, 30));   // paint the box before the render takes the thread
   try {
     const html = renderDrawing(spec, { renderer, scene, model, bbox, measure, hide: [grid, markup.group].filter(Boolean), restore: () => { resize(); renderer.setSize(viewport.clientWidth, viewport.clientHeight); } });
     const r = await api('/drawing/result', { method: 'POST', body: { html, subject } });
     say(`drawing saved: ${r.path}`);
     window.open('api/view/drawing');
-  } catch (e) { say(`drawing failed: ${e.message}`, true); api('/drawing/result', { method: 'POST', body: { error: e.message } }).catch(() => {}); }
+    progressEnd();
+  } catch (e) { progressEnd(); say(`drawing failed: ${e.message}`, true); api('/drawing/result', { method: 'POST', body: { error: e.message } }).catch(() => {}); }
 }
 // Only the Mac shell can register file associations; the button exists only inside it.
 $('#defaultBtn').hidden = !window.cadgangDesktop;
@@ -1137,6 +1143,16 @@ function loadMarkup() {
   if (!subject) return;
   api(`/markup?subject=${encodeURIComponent(subject)}`).then((d) => { markup.load(d.markups); commit(); }).catch(() => {});
 }
+// The server is working for someone else (a Claude session building cells): say so where the user is looking,
+// since a load in this tab waits behind it. Only past 400 ms, so quick requests never flash it.
+let busyTimer = null;
+function showBusy(what) {
+  clearTimeout(busyTimer);
+  const el = $('#busy');
+  if (!what) { el.hidden = true; return; }
+  el.querySelector('span').textContent = what;
+  busyTimer = setTimeout(() => { el.hidden = false; }, 400);
+}
 let snapshotTimer = null;
 /** Post what is on screen; coalesced, since a stroke is many change events. */
 function postSnapshot() {
@@ -1168,6 +1184,7 @@ document.addEventListener('visibilitychange', focus);
     const msg = JSON.parse(ev.data);
     if (msg.type === 'hello' && msg.version) { if (pageVersion && pageVersion !== msg.version) location.reload(); pageVersion = msg.version; }
     if (msg.type === 'snapshot_request') postSnapshot();
+    if (msg.type === 'busy') showBusy(msg.what);
     if (msg.type === 'markup_changed' && msg.subject === subject) loadMarkup();
     if (msg.type === 'open' && msg.paths?.length) window.cadgangOpen(msg.paths);   // pushed from MCP
     if (msg.type === 'drawing' && msg.spec) makeDrawing(msg.spec);

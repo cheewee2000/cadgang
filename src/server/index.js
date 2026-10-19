@@ -122,9 +122,13 @@ const appRoutes = cellRoutes(cells, project);
 // document, exports and history, so two sessions never write into each other's project. The app's
 // pages send no header and work in the app's project.
 const sessions = new Map();   // folder → routes
+// A session's build holds the one thread, and every tab's load waits behind it: the tabs say why.
+let working = 0;
+function busy(d, what) { working += d; if (d > 0 && working === 1) broadcast({ type: 'busy', what }); if (!working) broadcast({ type: 'busy', what: null }); }
 app.use('/api/cells', (req, res, next) => {
   const h = req.get('x-cadgang-project');
   const dir = h && path.resolve(h);
+  if (dir && !req.query.wait) { busy(+1, `Claude (${path.basename(dir)}) is building…`); res.once('close', () => busy(-1)); }
   if (!dir || dir === project.dir || !fs.existsSync(dir)) { setImportRoot(project.dir || process.cwd()); return appRoutes(req, res, next); }
   if (!sessions.has(dir)) sessions.set(dir, cellRoutes(new CellDocument(path.join(dir, 'cadgang', 'cells.json')), { dir }));
   // ponytail: importStep reads one global root, set per request; two sessions evaluating in the same tick could cross. Pass the root down if that bites.
