@@ -2,9 +2,9 @@
 
 A CAD viewer and markup tool. Open a STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, GLB, FBX or DXF file, cut it, measure it, draw on it. The markups are anchored on the model and Claude Code can see them over MCP, so "the edge I circled" means something. Runs as a web page or as a Mac app that updates itself.
 
-[![CADgang on the Wink camera enclosure: explode, section, markup, measure](docs/demo.jpg)](docs/demo.mp4)
+https://github.com/user-attachments/assets/f583641c-d38d-479c-90d7-e1cd38e5bf87
 
-*The Mac app on the Wink camera enclosure (3½ min, click to play).*
+*The Mac app on the Wink camera enclosure: explode, section, markup, measure.*
 
 Try it: [experiments.cwandt.com/cadgang](https://www.experiments.cwandt.com/cadgang/) — drop a file on the page or press ⌘O. The hosted copy cannot open paths on your disk; the Mac app and a local `npm start` can.
 
