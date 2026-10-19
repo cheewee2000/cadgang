@@ -165,8 +165,8 @@ select.ghost:hover { opacity: 0.55; }
 .markup-sep { width: var(--bw-hair); background: var(--rule); margin: 0 var(--sp-1); }
 .note-input { position: absolute; transform: translate(-50%, calc(-100% - 12px)); background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--signal-red); padding: 1px 6px; font: inherit; font-size: var(--fs-12); white-space: nowrap; pointer-events: none; }
 /* A tag for an arrow or note: screen-space, upright, one size at any zoom. Placed by markup.js (transform) */
-.note-label { position: absolute; left: 0; top: 0; max-width: 220px; box-sizing: border-box; background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--rule); border-left: 3px solid var(--tag, var(--signal-red)); padding: 4px 8px; font: inherit; font-size: var(--fs-12); line-height: 16px; overflow-wrap: anywhere; pointer-events: none; box-shadow: 0 1px 6px rgba(0,0,0,.12); will-change: transform; }
-.note-input { pointer-events: auto; width: 180px; outline: none; border-radius: 0; }
+.note-label { position: absolute; left: 0; top: 0; max-width: 220px; box-sizing: border-box; background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--rule); border-left: 3px solid var(--tag, var(--signal-red)); padding: 4px 8px; font: inherit; font-size: var(--fs-12); line-height: 16px; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; box-shadow: 0 1px 6px rgba(0,0,0,.12); will-change: transform; }
+.note-input { pointer-events: auto; width: 180px; outline: none; border-radius: 0; white-space: pre-wrap; resize: none; overflow: hidden; line-height: 16px; box-sizing: border-box; }
 .note-label[hidden] { display: none; }
 /* body list */
 /* HUD clusters over the viewport: section + bodies top-left, view/render buttons bottom-left */

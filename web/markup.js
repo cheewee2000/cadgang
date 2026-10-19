@@ -264,7 +264,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (!hit) return;
     e.preventDefault(); e.stopPropagation();
     startNote(toWorld(hit.item, hit.item.points[0]), e, hit.item);
-    noteInput.value = hit.item.text; noteInput.select();
+    noteInput.value = hit.item.text; noteInput.select(); noteInput.dispatchEvent(new Event('input'));
     noteInput.style.left = `${hit.x + hit.w / 2}px`; noteInput.style.top = `${hit.y + hit.h + 12}px`;   // over its own tag
     noteInput.style.width = `${Math.max(180, hit.w)}px`;
     hit.el.style.visibility = 'hidden';
@@ -273,9 +273,12 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   /** Note input at p; with `item`, the text goes on that item (an arrow) instead of a new note. */
   function startNote(p, e, item = null, body = undefined) {   // p in world space
     noteInput?.remove();
-    const el = document.createElement('input');
+    const el = document.createElement('textarea');   // Enter saves, Shift+Enter starts a new line
     el.className = 'note-input';
-    el.placeholder = 'note… (Enter)';
+    el.placeholder = 'note… (Enter saves, Shift+Enter for a new line)';
+    el.rows = 1;
+    const grow = () => { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`; };
+    el.addEventListener('input', grow);
     const s = toScreen(p);
     el.style.left = `${s.x}px`; el.style.top = `${s.y}px`;
     layer.appendChild(el);
@@ -294,7 +297,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       }
       el.remove(); noteInput = null; rebuild();
     };
-    el.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') done(true); else if (ev.key === 'Escape') done(false); ev.stopPropagation(); });
+    el.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); done(true); } else if (ev.key === 'Escape') done(false); ev.stopPropagation(); });
     el.addEventListener('blur', () => done(true));
   }
 
@@ -353,12 +356,14 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     for (const t of tags) {
       const x = t.x * k, w = t.w * k;
       const rows = [];   // the same wrap the tag has: words to the tag's width
-      let row = '';
-      for (const word of t.text.split(/\s+/)) {
-        const next = row ? `${row} ${word}` : word;
-        if (row && ctx.measureText(next).width > w - 2 * pad - 3 * k) { rows.push(row); row = word; } else row = next;
+      for (const para of t.text.split('\n')) {
+        let row = '';
+        for (const word of para.split(/\s+/).filter(Boolean)) {
+          const next = row ? `${row} ${word}` : word;
+          if (row && ctx.measureText(next).width > w - 2 * pad - 3 * k) { rows.push(row); row = word; } else row = next;
+        }
+        rows.push(row);
       }
-      rows.push(row);
       const h = Math.max(t.h * k, rows.length * line + 8 * k), y = t.y * k + (t.h * k - h) / 2;   // as tall as its text needs
       ctx.fillStyle = '#ffffff'; ctx.fillRect(x, y, w, h);
       ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = k; ctx.strokeRect(x, y, w, h);
