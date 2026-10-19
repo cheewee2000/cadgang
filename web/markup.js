@@ -254,6 +254,22 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     rebuild();
   }, { capture: true });
 
+  // Double-click a tag (or the dot it hangs on) to edit its text in place. Only with no tool chosen: with
+  // one, a double-click is two marks.
+  canvas.addEventListener('dblclick', (e) => {
+    if (tool || noteInput) return;
+    const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    const hit = [...tags].reverse().find((t) => x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h)
+      || tags.find((t) => t.item.points.some((q) => { const s = toScreen(toWorld(t.item, q)); return Math.hypot(s.x - x, s.y - y) < 12; }));
+    if (!hit) return;
+    e.preventDefault(); e.stopPropagation();
+    startNote(toWorld(hit.item, hit.item.points[0]), e, hit.item);
+    noteInput.value = hit.item.text; noteInput.select();
+    noteInput.style.left = `${hit.x + hit.w / 2}px`; noteInput.style.top = `${hit.y + hit.h + 12}px`;   // over its own tag
+    noteInput.style.width = `${Math.max(180, hit.w)}px`;
+    hit.el.style.visibility = 'hidden';
+  });
+
   /** Note input at p; with `item`, the text goes on that item (an arrow) instead of a new note. */
   function startNote(p, e, item = null, body = undefined) {   // p in world space
     noteInput?.remove();
