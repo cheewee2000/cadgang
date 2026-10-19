@@ -44,7 +44,14 @@ final class PathTracer: NSObject, MTKViewDelegate {
         u.sunCol = SIMD4(2.6, 2.5, 2.35, 0)
         u.skyTop = SIMD4(0.55, 0.57, 0.62, 0)
         u.skyBot = SIMD4(0.22, 0.21, 0.2, 0)
+        // A background tab or a minimised window stops tracing and picks up where it left off when it shows again.
+        NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main) { [weak self] n in
+            guard let self, n.object as? NSWindow === self.view.window, self.shown else { return }
+            self.view.isPaused = self.accel == nil || self.u.info.x >= Self.maxSamples
+        }
     }
+
+    private var shown: Bool { view.window?.occlusionState.contains(.visible) ?? false }
 
     func stop() { view.isHidden = true; view.isPaused = true; accel = nil; vtx = nil; idx = nil; tri = nil; mats = nil }
 
@@ -105,7 +112,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         restart()
     }
 
-    private func restart() { u.info.x = 0; view.isPaused = accel == nil }
+    private func restart() { u.info.x = 0; view.isPaused = accel == nil || !shown }
 
     private func basis(aspect: Float) {
         func v(_ k: String) -> SIMD3<Float> { let a = (cam[k] as? [Double]) ?? [0, 0, 0]; return SIMD3(Float(a[0]), Float(a[1]), Float(a[2])) }
@@ -119,6 +126,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     func mtkView(_ v: MTKView, drawableSizeWillChange size: CGSize) { restart() }
 
     func draw(in v: MTKView) {
+        if !shown { v.isPaused = true; return }
         guard let drawable = v.currentDrawable, let cb = queue.makeCommandBuffer(), encode(into: drawable.texture, cb) else { return }
         cb.present(drawable); cb.commit()
         if u.info.x >= Self.maxSamples { v.isPaused = true }   // converged: stop spending the GPU
