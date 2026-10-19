@@ -196,7 +196,7 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
   const toScreen = (p) => { const r = canvas.getBoundingClientRect(); const v = p.clone().project(getCamera()); return { x: (v.x + 1) / 2 * r.width, y: (1 - v.y) / 2 * r.height, z: v.z }; };
   const local = (e) => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
   const solids = () => model.children.filter((o) => o.visible && !o.isLine);
-  const kept = (h) => Number.isFinite(h.distance) && (!h.object.material.clippingPlanes?.length || h.object.material.clippingPlanes.every((pl) => pl.distanceToPoint(h.point) >= 0));
+  const kept = (h) => Number.isFinite(h.distance) && (![].concat(h.object.material)[0].clippingPlanes?.length || [].concat(h.object.material)[0].clippingPlanes.every((pl) => pl.distanceToPoint(h.point) >= 0));
   /** Is this world point in view, or behind a surface? (what the eye sees is what may be picked) */
   function unoccluded(p) {
     const r = canvas.getBoundingClientRect(), q = toScreen(p);

@@ -10,3 +10,4 @@ dist/
 /cadgang/
 mac/Sparkle/
 bin/
+.playwright-cli/

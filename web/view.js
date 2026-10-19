@@ -15,6 +15,7 @@ import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ThreeMFLoader } from 'three/addons/loaders/3MFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { attachOrbitInput } from './orbitinput.js';
@@ -100,17 +101,23 @@ function styleMesh(m) {
     m.material.clippingPlanes = section.axis && bbox ? [section.plane] : [];
     return;
   }
-  const mat = ui.look === 'materials' ? materialFor(THREE, m) : PRESETS[ui.look]();
-  if (ui.color && mat.color) mat.color.copy(partColor(i));
-  // the file's own colour (a STEP part's material) on the solid looks; COLOR still overrides it
-  else if (m.userData.color && SOLID_LOOKS.has(ui.look)) mat.color.setRGB(...m.userData.color, THREE.SRGBColorSpace);
-  mat.side = section.axis && bbox ? THREE.FrontSide : THREE.DoubleSide;
-  mat.flatShading = !!m.userData.flat;
-  mat.wireframe = ui.wire;
-  mat.clippingPlanes = section.axis && bbox ? [section.plane] : [];
-  m.material?.dispose();
-  m.material = mat;
+  // one material per finish: a body from a multi-material glTF mesh keeps a group per finish (userData.groups)
+  const mats = (m.userData.groups ?? [m.userData]).map((src) => {
+    const mat = ui.look === 'materials' ? materialFor(THREE, m, src) : PRESETS[ui.look]();
+    if (ui.color && mat.color) mat.color.copy(partColor(i));
+    // the file's own colour (a STEP part's material) on the solid looks; COLOR still overrides it
+    else if (src.color && SOLID_LOOKS.has(ui.look)) mat.color.setRGB(...src.color, THREE.SRGBColorSpace);
+    if (!ui.color && src.pbr && SOLID_LOOKS.has(ui.look)) Object.assign(mat, src.pbr);
+    mat.side = section.axis && bbox ? THREE.FrontSide : THREE.DoubleSide;
+    mat.flatShading = !!m.userData.flat;
+    mat.wireframe = ui.wire;
+    mat.clippingPlanes = section.axis && bbox ? [section.plane] : [];
+    return mat;
+  });
+  for (const x of [].concat(m.material ?? [])) x.dispose();
+  m.material = m.userData.groups ? mats : mats[0];
 }
+const eachMat = (m, f) => { for (const x of [].concat(m.material)) f(x); };
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x2f5d8a, transparent: true, opacity: 0.85 });
 const model = new THREE.Group();     // meshes
 const edges = new THREE.Group();     // their edge overlays
@@ -121,7 +128,7 @@ let sources = [];   // what each open file loaded as: [{name, cad, buffer}] (CAD
 
 function clearModel() {
   for (const g of [model, edges]) {
-    for (const o of g.children) { o.geometry?.dispose(); if (o.material !== edgeMaterial) o.material?.dispose?.(); }
+    for (const o of g.children) { o.geometry?.dispose(); if (o.material !== edgeMaterial) for (const x of [].concat(o.material ?? [])) x.dispose?.(); }
     g.clear();
   }
   bbox = null;
@@ -174,7 +181,7 @@ function faceBorderEdges(pos, idx, faces) {
   return new Float32Array(out);
 }
 
-function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', path = [], color = null } = {}) {
+function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', path = [], color = null, pbr = null, groups = null } = {}) {
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
   const m = new THREE.Mesh(geo);
   m.userData.flat = flat;
@@ -182,6 +189,8 @@ function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', pa
   m.userData.name = name || `body ${model.children.length + 1}`;
   m.userData.path = path;     // the STEP assembly groups above it, outermost first
   m.userData.color = color;   // the file's colour for it [r, g, b] 0..1, or null
+  m.userData.pbr = pbr;       // the file's roughness/metalness, or null
+  m.userData.groups = groups; // [{color, pbr}] per geometry group: one body, several finishes (glTF multi-material mesh)
   m.userData.faces = faces;   // B-rep face ranges, when the importer knew them: picked by measure
   model.add(m);
   styleMesh(m);               // after add: the part colour is its index in the model
@@ -799,7 +808,7 @@ function buildCaps() {
     if (m.userData.cap) { m.remove(m.userData.cap); m.userData.cap.material.dispose(); m.userData.cap = null; }
     if (m.isLine) return;
     const on = !!section.axis && !!bbox;
-    m.material.side = on ? THREE.FrontSide : THREE.DoubleSide;
+    eachMat(m, (x) => { x.side = on ? THREE.FrontSide : THREE.DoubleSide; });
     if (!on) return;
     const cap = new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ color: capColor(i), side: THREE.BackSide, clippingPlanes: [section.plane],
       polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
@@ -819,7 +828,7 @@ function setupSection() {
   section.axis = axis;
   $('#sectPos').disabled = $('#sectFlip').disabled = !axis;
   const planes = axis && bbox ? [section.plane] : [];
-  for (const m of model.children) m.material.clippingPlanes = planes;
+  for (const m of model.children) eachMat(m, (x) => { x.clippingPlanes = planes; });
   edgeMaterial.clippingPlanes = planes; // edges follow the cut, or they float over the cap
   updateSection();
   buildCaps();
@@ -843,10 +852,24 @@ const loaders = {
   gltf: () => new GLTFLoader(), glb: () => new GLTFLoader(), '3mf': () => new ThreeMFLoader(), fbx: () => new FBXLoader(),
 };
 
-function collectGeometries(obj, out = []) {
+function collectGeometries(obj, assoc = null, out = []) {
   obj.updateMatrixWorld(true);
+  // keep the file's part name and its material's colour, roughness and metalness (glTF carries them)
+  const look = (mat) => ({ color: mat?.color ? mat.color.getRGB(new THREE.Color(), THREE.SRGBColorSpace).toArray() : null,
+    pbr: mat?.isMeshStandardMaterial ? { roughness: mat.roughness, metalness: mat.metalness } : null });
+  const geoOf = (o) => o.geometry.clone().applyMatrix4(o.matrixWorld);
+  const done = new Set();
   obj.traverse((o) => {
-    if (o.isMesh) { const g = o.geometry.clone().applyMatrix4(o.matrixWorld); out.push(g); }
+    // a glTF mesh with several primitives (one per material) loads as a Group of meshes: it is ONE body, a group per finish
+    const prims = assoc?.get(o)?.meshes !== undefined && o.isGroup ? o.children.filter((c) => c.isMesh) : null;
+    if (prims?.length > 1) {
+      const geos = prims.map((c) => { done.add(c); const g = geoOf(c); for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k); return g; });
+      const geo = mergeGeometries(geos.map((g) => (g.index ? g : g.setIndex([...Array(g.attributes.position.count).keys()]))), true);
+      if (geo) { out.push({ geo, name: o.name || undefined, groups: prims.map((c) => look(c.material)) }); return; }
+      for (const c of prims) done.delete(c);
+    }
+    if (!o.isMesh || done.has(o)) return;
+    out.push({ geo: geoOf(o), name: o.name || undefined, ...look([].concat(o.material)[0]) });
   });
   return out;
 }
@@ -862,10 +885,10 @@ async function parseMesh(ext, buffer, name) {
   const loader = loaders[ext]();
   if (ext === 'stl') return [{ geo: loader.parse(buffer), flat: true }];
   if (ext === 'ply') return [{ geo: loader.parse(buffer) }];
-  if (ext === 'obj') return collectGeometries(loader.parse(new TextDecoder().decode(buffer))).map((geo) => ({ geo }));
-  if (ext === '3mf' || ext === 'fbx') return collectGeometries(loader.parse(buffer, '')).map((geo) => ({ geo }));
+  if (ext === 'obj') return collectGeometries(loader.parse(new TextDecoder().decode(buffer)));
+  if (ext === '3mf' || ext === 'fbx') return collectGeometries(loader.parse(buffer, ''));
   const gltf = await new Promise((ok, bad) => loader.parse(buffer, '', ok, bad));
-  return collectGeometries(gltf.scene).map((geo) => ({ geo }));
+  return collectGeometries(gltf.scene, gltf.parser.associations);
 }
 
 function parseCad(buffer) {
@@ -1287,12 +1310,14 @@ function nativeScene() {
       v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld); verts.set([v.x, v.y, v.z], (vo + i) * 6);
       v.fromBufferAttribute(nrm, i).applyMatrix3(nm).normalize(); verts.set([v.x, v.y, v.z], (vo + i) * 6 + 3);
     }
-    if ((m.material.transmission ?? 0) > 0.5) inset(verts, vo, pos.count, inGlass);
+    const ms = [].concat(m.material), base = mats.length;
+    if (ms.some((x) => (x.transmission ?? 0) > 0.5)) inset(verts, vo, pos.count, inGlass);
     const n = (g.index?.count ?? pos.count);
     for (let i = 0; i < n; i++) idx[to * 3 + i] = vo + (g.index ? g.index.getX(i) : i);
-    tri.fill(mi, to, to + n / 3);
-    const mat = m.material, c = mat.color ?? new THREE.Color(0xb9b8b3);
-    mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5]);
+    // a body with a material per group (several finishes) sends one material per group
+    if (ms.length > 1) for (const gr of g.groups) tri.fill(base + gr.materialIndex, to + gr.start / 3, to + Math.min(gr.start + gr.count, n) / 3);
+    else tri.fill(base, to, to + n / 3);
+    for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5]); }
     vo += pos.count; to += n / 3;
   });
   const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff);

@@ -75,11 +75,14 @@ export function pickMaterial(m, key) {
 }
 
 /** A three.js material for a body under the MATERIALS look. */
-export function materialFor(THREE, m) {
+export function materialFor(THREE, m, src = m.userData) {
+  // a file with real materials (glTF: colour + roughness/metalness, per group on a multi-finish body) beats the name guess; a pick beats both
+  if (src.pbr && src.color && !picks[m.userData.file]?.[m.userData.name])
+    return new THREE.MeshPhysicalMaterial({ ...src.pbr, color: new THREE.Color().setRGB(...src.color, THREE.SRGBColorSpace) });
   const d = MATERIALS[materialOf(m)];
   const mat = new THREE.MeshPhysicalMaterial({ color: d.color, metalness: d.metal, roughness: d.rough });
   if (d.trans) Object.assign(mat, { transmission: 1, ior: d.ior, thickness: 0 });   // thin-walled in the live view: a thickness bent what is behind it per triangle (shattered look); the Metal render refracts for real
   // Plastic, anodizing, ceramic and epoxy are whatever colour the file says.
-  if ((d.fileColor || d === MATERIALS.plastic || d === MATERIALS.gloss) && m.userData.color) mat.color.setRGB(...m.userData.color, THREE.SRGBColorSpace);
+  if ((d.fileColor || d === MATERIALS.plastic || d === MATERIALS.gloss) && src.color) mat.color.setRGB(...src.color, THREE.SRGBColorSpace);
   return mat;
 }
