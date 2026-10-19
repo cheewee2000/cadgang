@@ -1,5 +1,6 @@
 /**
- * Trackpad-first camera input, shared by every viewport.
+ * Camera input from a trackpad or a mouse wheel, shared by every viewport.
+ *   mouse wheel     zoom about the pointer, as SolidWorks does
  *   scroll          rotate (two fingers = turn the part)
  *   shift + scroll  pan
  *   pinch / ⌥scroll zoom (Chrome sends a pinch as a wheel event with ctrlKey;
@@ -10,8 +11,16 @@
  * Dragging keeps whatever the page already does (orbit / right-drag pan).
  */
 export function attachOrbitInput(el, { orbit, camera, getCamera = () => camera, THREE, hitAt, yawSign = 1, isFlat = () => false }) {
+  // A mouse wheel and a trackpad both send wheel events. A wheel notch comes in
+  // lines, or as a multiple of 120 legacy units with no sideways part; a trackpad
+  // starts with small pixel deltas. Classify the first event of a burst and keep
+  // that answer until the burst ends, so a trackpad fling never flips into zoom.
+  let wheelMouse = false, lastWheel = 0;
   el.addEventListener('wheel', (e) => {
     e.preventDefault();
+    if (e.timeStamp - lastWheel > 250) wheelMouse = e.deltaMode !== 0 || (!e.deltaX && !!e.wheelDeltaY && e.wheelDeltaY % 120 === 0);
+    lastWheel = e.timeStamp;
+    if (wheelMouse && !e.ctrlKey) { zoomAt(e, Math.exp(-Math.sign(e.deltaY) * 0.15)); return; }
     if (e.ctrlKey || e.altKey) { orbit.dist *= Math.exp(e.deltaY * 0.01); return; }
     if (e.shiftKey || isFlat()) {
       const k = orbit.dist * 0.0015;
@@ -24,6 +33,18 @@ export function attachOrbitInput(el, { orbit, camera, getCamera = () => camera, 
     orbit.yaw += yawSign * e.deltaX * 0.005;
     orbit.pitch -= e.deltaY * 0.005;
   }, { passive: false });
+
+  // Zoom by factor k (<1 closer) keeping the point under the pointer where it is on screen.
+  function zoomAt(e, k) {
+    const cam = getCamera();
+    const r = el.getBoundingClientRect();
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), cam);
+    const facing = new THREE.Plane().setFromNormalAndCoplanarPoint(cam.getWorldDirection(new THREE.Vector3()), orbit.target);
+    const p = hitAt(e) ?? ray.ray.intersectPlane(facing, new THREE.Vector3());
+    if (p) orbit.target.lerp(p, 1 - k);
+    orbit.dist *= k;
+  }
 
   // WebKit (Safari, the Mac app's WKWebView) pinch: scale is cumulative since gesturestart.
   let gestureDist = 0, gestureSteps = 0;

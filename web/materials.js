@@ -62,15 +62,17 @@ const GUESS = [
 // The body's own name decides first; its groups only fill in, and a group named "PCB" holds the
 // parts on the board, not more board.
 const guess = (text, skip) => GUESS.find(([re, k]) => k !== skip && re.test(text))?.[1];
-export const guessMaterial = (name, path = []) => guess(name) ?? guess(path.join(' '), 'pcb') ?? 'plastic';
+// The file's own material name ("Steel - Satin", a STEP's fill style) says it outright, before any name.
+export const guessMaterial = (name, path = [], material = '') => (material ? guess(material) : undefined) ?? guess(name) ?? guess(path.join(' '), 'pcb') ?? 'plastic';
 
 const KEY = 'cadgang-materials';
 let picks = {};
 try { picks = JSON.parse(localStorage.getItem(KEY)) || {}; } catch {}
 /** The material key for a body: the user's pick for it in this file, else the guess. */
-export const materialOf = (m) => picks[m.userData.file]?.[m.userData.name] ?? guessMaterial(m.userData.name, m.userData.path);
+export const materialOf = (m) => picks[m.userData.file]?.[m.userData.name] ?? guessMaterial(m.userData.name, m.userData.path, m.userData.material);
 export function pickMaterial(m, key) {
-  (picks[m.userData.file] ??= {})[m.userData.name] = key;
+  if (key) (picks[m.userData.file] ??= {})[m.userData.name] = key;
+  else delete picks[m.userData.file]?.[m.userData.name];   // back to the guess
   try { localStorage.setItem(KEY, JSON.stringify(picks)); } catch {}
 }
 
