@@ -1101,18 +1101,6 @@ function driveJoint(d, dx, dy, alt) {
   setJointValue(j, 'value', j.value + THREE.MathUtils.clamp(deg, -45, 45));
 }
 
-// JOINTS (in the markup bar): you note the parts — "screw", "hinge", "slides on the rail" — and Claude reads the
-// notes (cadgang_joints), makes the joints and checks them. This copies the prompt; the page tells Claude what bodies there are.
-$('#jointsAsk').addEventListener('click', async () => {
-  if (!model.children.length) return say('open a file first', true);
-  postBodies();
-  const prompt = 'Read my notes in CADgang and make the joints they describe: call cadgang_joints, add each joint with cadgang_joint, drive each one through its range and check it with cadgang_screen, then tell me what you made.';
-  const shell = window.webkit?.messageHandlers?.cadgang;
-  if (shell) shell.postMessage({ cmd: 'copy', text: prompt });
-  else try { await navigator.clipboard.writeText(prompt); } catch {}
-  say('prompt copied — paste it into Claude Code; it reads your notes and sets up the joints');
-});
-
 // MODE: the part under the pointer does one thing at a time. Explode: drag slides it out, the menu sets its
 // explode axis. Joint: drag moves it on its joint, the menu adds joints, explode is off. Joints keep their pose in both.
 function setMode(mode) {

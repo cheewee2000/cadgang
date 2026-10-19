@@ -244,7 +244,7 @@ footer > * { white-space: nowrap; }
 
 /* Mode: explode and joint tools are never on at once. The explode controls keep their room in joint mode so the toolbar never shifts */
 :root[data-mode="joint"] #explodeSect { visibility: hidden; }
-:root[data-mode="explode"] #joints, :root[data-mode="explode"] #jointsAsk { display: none; }
+:root[data-mode="explode"] #joints { display: none; }
 
 /* Rename a body: a pencil on hover, an inline field while editing */
 .bodies .body-edit { flex: none; opacity: 0; cursor: pointer; padding: 0 2px; }
