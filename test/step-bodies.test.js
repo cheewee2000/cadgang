@@ -42,3 +42,28 @@ test('a nested STEP assembly gives each body its group path and colour (the impo
   const names = JSON.parse(buf.subarray(buf.length - head[4]).toString('utf8'));
   assert.deepEqual(names.find((n) => n.name === by.leaf1.name).path, ['G', 'H']);
 });
+
+test('a solid styled in the file keeps its name, colour and material', async () => {
+  const { stepSolidStyles } = await import('../src/core/stepstyle.js');
+  const step = `ISO-10303-21;
+DATA;
+#1=ADVANCED_BREP_SHAPE_REPRESENTATION('',(#2,#3),#9);
+#2=MANIFOLD_SOLID_BREP('Case front',#8);
+#3=MANIFOLD_SOLID_BREP('Lens',#8);
+#4=STYLED_ITEM('',(#5),#2);
+#5=PRESENTATION_STYLE_ASSIGNMENT((#6));
+#6=SURFACE_STYLE_USAGE(.BOTH.,#7);
+#7=SURFACE_SIDE_STYLE('',(#10,#13));
+#10=SURFACE_STYLE_FILL_AREA(#11);
+#11=FILL_AREA_STYLE('Steel - Satin',(#12));
+#12=FILL_AREA_STYLE_COLOUR('Steel - Satin',#14);
+#13=SURFACE_STYLE_TRANSPARENT(0.25);
+#14=COLOUR_RGB('Steel - Satin',0.6,0.5,0.4);
+ENDSEC;
+END-ISO-10303-21;
+`;
+  assert.deepEqual(stepSolidStyles(step).solids, [
+    { name: 'Case front', color: [0.6, 0.5, 0.4], opacity: 0.75, material: 'Steel - Satin' },
+    { name: 'Lens', color: null, opacity: 1, material: '' },
+  ]);
+});

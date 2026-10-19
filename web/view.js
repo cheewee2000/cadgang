@@ -92,6 +92,13 @@ const PRESETS = {
   materials: null,   // per body, from what it is made of: materialFor (materials.js)
 };
 const SOLID_LOOKS = new Set(['shaded', 'metal', 'plastic']);
+// Selection (click a body or a folder), see-through bodies and the user's colours: styleMesh reads all three.
+const selection = new Set();
+// A colour the user gave a body, kept per file by body name (like the material picks); the solid looks and MATERIALS show it.
+const TINT_KEY = 'cadgang-tints';
+let tints = {};
+try { tints = JSON.parse(localStorage.getItem(TINT_KEY)) || {}; } catch {}
+const saveTints = () => { try { localStorage.setItem(TINT_KEY, JSON.stringify(tints)); } catch {} };
 // One hue per body or layer when COLOR is on; golden-ratio spacing keeps any count apart.
 const partColor = (i) => new THREE.Color().setHSL((i * 0.618034) % 1, 0.6, 0.5);
 function styleMesh(m) {
@@ -108,6 +115,10 @@ function styleMesh(m) {
     // the file's own colour (a STEP part's material) on the solid looks; COLOR still overrides it
     else if (src.color && SOLID_LOOKS.has(ui.look)) mat.color.setRGB(...src.color, THREE.SRGBColorSpace);
     if (!ui.color && src.pbr && SOLID_LOOKS.has(ui.look)) Object.assign(mat, src.pbr);
+    if (!ui.color && m.userData.tint && mat.color && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.color.setRGB(...m.userData.tint, THREE.SRGBColorSpace);
+    if (m.userData.opacity < 1 && SOLID_LOOKS.has(ui.look)) Object.assign(mat, { transparent: true, opacity: m.userData.opacity, depthWrite: false });
+    if (m.userData.ghost) Object.assign(mat, { transparent: true, opacity: Math.min(mat.opacity, 0.15), depthWrite: false, transmission: 0 });
+    if (selection.has(m) && mat.emissive) mat.emissive.setHex(0x2f5d8a).multiplyScalar(0.45);
     mat.side = section.axis && bbox ? THREE.FrontSide : THREE.DoubleSide;
     mat.flatShading = !!m.userData.flat;
     mat.wireframe = ui.wire;
@@ -116,6 +127,7 @@ function styleMesh(m) {
   });
   for (const x of [].concat(m.material ?? [])) x.dispose();
   m.material = m.userData.groups ? mats : mats[0];
+  m.renderOrder = m.userData.ghost ? 2 : 0;   // see-through bodies draw after the solid ones
 }
 const eachMat = (m, f) => { for (const x of [].concat(m.material)) f(x); };
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x2f5d8a, transparent: true, opacity: 0.85 });
@@ -136,6 +148,7 @@ function clearModel() {
   rot.identity();
   setRender(false);
   ui.flat = false; $('#sideBtn').hidden = true;
+  selection.clear(); selFolder = null; treeRoot = null; bodyMenu.hidden = true;
   $('#bodies').replaceChildren(); $('#bodies').hidden = true;
   $('#explode').value = 0;
 }
@@ -181,7 +194,7 @@ function faceBorderEdges(pos, idx, faces) {
   return new Float32Array(out);
 }
 
-function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', path = [], color = null, pbr = null, groups = null } = {}) {
+function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', path = [], color = null, pbr = null, groups = null, material = '', opacity = 1 } = {}) {
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
   const m = new THREE.Mesh(geo);
   m.userData.flat = flat;
@@ -191,6 +204,9 @@ function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', pa
   m.userData.color = color;   // the file's colour for it [r, g, b] 0..1, or null
   m.userData.pbr = pbr;       // the file's roughness/metalness, or null
   m.userData.groups = groups; // [{color, pbr}] per geometry group: one body, several finishes (glTF multi-material mesh)
+  m.userData.material = material;   // the file's own material name ("Steel - Satin"), shown after the body's name
+  m.userData.opacity = opacity;     // the file's transparency (a STEP's SURFACE_STYLE_TRANSPARENT)
+  m.userData.tint = tints[file]?.[m.userData.name] ?? null;   // the user's colour for it, kept from last time
   m.userData.faces = faces;   // B-rep face ranges, when the importer knew them: picked by measure
   model.add(m);
   styleMesh(m);               // after add: the part colour is its index in the model
@@ -253,13 +269,35 @@ function listBodies() {
   $('#resetBtn').hidden = model.children.length < 2;
   if (model.children.length > 1 && tris <= 300000) solveExplode();
   // Rows nest under the file's assembly groups (STEP): a group row folds, ticks all it holds, and solos on a click.
-  const root = { kids: new Map(), bodies: [] };
+  const root = { name: '', kids: new Map(), bodies: [], parent: null };
   for (const m of model.children) {
     let node = root;
-    for (const g of m.userData.path ?? []) { if (!node.kids.has(g)) node.kids.set(g, { kids: new Map(), bodies: [] }); node = node.kids.get(g); }
+    for (const g of m.userData.path ?? []) { if (!node.kids.has(g)) node.kids.set(g, { name: g, kids: new Map(), bodies: [], parent: node }); node = node.kids.get(g); }
     node.bodies.push(m);
   }
+  // Like items: a crowded group gathers three or more bodies of one stem (every copy of one capacitor)
+  // into a group of their own; names that still repeat in a group get _1, _2… so each row is its own.
+  (function tidy(node) {
+    node.kids.forEach(tidy);
+    if (node.bodies.length > 12) {
+      const byStem = new Map();
+      for (const m of node.bodies) { const k = stem(m.userData.name); if (!byStem.has(k)) byStem.set(k, []); byStem.get(k).push(m); }
+      for (const [k, group] of byStem) {
+        if (!k || group.length < 3 || group.length === node.bodies.length || node.kids.has(k)) continue;
+        node.kids.set(k, { name: k, kids: new Map(), bodies: group, parent: node });
+        node.bodies = node.bodies.filter((m) => !group.includes(m));
+      }
+    }
+    const seen = new Map(), n = new Map();
+    for (const m of node.bodies) seen.set(m.userData.name, (seen.get(m.userData.name) ?? 0) + 1);
+    for (const m of node.bodies) {
+      m.userData.node = node;
+      m.userData.num = seen.get(m.userData.name) > 1 ? n.set(m.userData.name, (n.get(m.userData.name) ?? 0) + 1).get(m.userData.name) : 0;
+    }
+  })(root);
+  treeRoot = root;
   const under = (node) => [...node.bodies, ...[...node.kids.values()].flatMap(under)];
+  const see = (onclick) => Object.assign(document.createElement('button'), { className: 'ghost see', textContent: '◐', title: 'See-through (T)', onclick: (e) => { e.preventDefault(); onclick(); } });
   const render = (node, into, depth) => {
     for (const [g, kid] of node.kids) {
       const box = document.createElement('div'); box.className = 'group';
@@ -274,9 +312,10 @@ function listBodies() {
       cb.addEventListener('change', () => { for (const m of members) setBodyVisible(m, cb.checked); syncRows(); });
       cb._members = members;
       const nm = document.createElement('span'); nm.textContent = `${g} (${members.length})`;
-      nm.title = 'Click: only this group · Shift-click: all bodies';
-      nm.addEventListener('click', (e) => { e.preventDefault(); for (const o of model.children) setBodyVisible(o, e.shiftKey || members.includes(o)); syncRows(); });
-      row.append(fold, cb, nm);
+      nm.title = 'Click: select the part · Shift-click: add to the selection';
+      nm.addEventListener('click', (e) => { e.preventDefault(); select(members, { add: e.shiftKey, folder: kid }); showBodyMenu(e.clientX, e.clientY); });
+      row.append(fold, cb, nm, see(() => { const on = !members.every((m) => m.userData.ghost); for (const m of members) setBodyGhost(m, on); syncRows(); }));
+      kid.row = row; row._members = members;
       box.append(row, inner);
       into.appendChild(box);
       render(kid, inner, depth + 1);
@@ -287,13 +326,10 @@ function listBodies() {
       const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'body-cb'; cb.checked = m.visible;
       cb._body = m;
       cb.addEventListener('change', () => { setBodyVisible(m, cb.checked); syncRows(); });
-      const nm = document.createElement('span'); nm.textContent = m.userData.name.replace(/_part$/, '');   // cadquery's leaf suffix
-      nm.title = 'Click: only this body · Shift-click: all bodies';
-      nm.addEventListener('click', (e) => {
-        e.preventDefault();
-        for (const o of model.children) setBodyVisible(o, e.shiftKey || o === m);
-        syncRows();
-      });
+      const nm = document.createElement('span'); nm.textContent = labelOf(m);
+      nm.title = `${labelOf(m)}\nClick: select · Shift-click: add to the selection`;
+      nm.addEventListener('click', (e) => { e.preventDefault(); select([m], { add: e.shiftKey }); showBodyMenu(e.clientX, e.clientY); });
+      m.userData.row = row;
       row.addEventListener('pointerenter', () => highlightBody(m));
       row.addEventListener('pointerleave', () => highlightBody(null));
       if (root.kids.size) row.append(Object.assign(document.createElement('span'), { className: 'fold-gap' }));   // aligns with the groups' +/−
@@ -301,7 +337,7 @@ function listBodies() {
       for (const [k, d] of Object.entries(MATERIALS)) pick.append(new Option(d.label, k));
       pick.value = materialOf(m);
       pick.addEventListener('change', () => { pickMaterial(m, pick.value); styleMesh(m); rerender(); });
-      row.append(cb, nm, pick);
+      row.append(cb, nm, pick, see(() => { setBodyGhost(m, !m.userData.ghost); syncRows(); }));
       into.appendChild(row);
     }
   };
@@ -378,7 +414,16 @@ window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name
 const bodyBoxes = () => { const by = new Map([...$('#bodies').querySelectorAll('input.body-cb')].map((cb) => [cb._body, cb])); return model.children.map((m) => by.get(m)).filter(Boolean); };
 /** Ticks follow the bodies: a group is ticked when all of it shows, half when some does. */
 function syncRows() {
-  for (const cb of $('#bodies').querySelectorAll('input.body-cb')) cb.checked = cb._body.visible;
+  for (const cb of $('#bodies').querySelectorAll('input.body-cb')) {
+    const m = cb._body, row = cb.closest('label');
+    cb.checked = m.visible;
+    row.classList.toggle('ghosted', !!m.userData.ghost);
+    row.classList.toggle('sel', selection.has(m));
+  }
+  for (const row of $('#bodies').querySelectorAll('label.group-row')) {
+    row.classList.toggle('ghosted', row._members.every((m) => m.userData.ghost));
+    row.classList.toggle('sel', row._members.every((m) => selection.has(m)));
+  }
   for (const cb of $('#bodies').querySelectorAll('input.group-cb')) {
     const on = cb._members.filter((m) => m.visible).length;
     cb.checked = on === cb._members.length; cb.indeterminate = on > 0 && on < cb._members.length;
@@ -420,8 +465,119 @@ function highlightBody(m) {
 function setBodyVisible(m, on) {
   m.visible = on;
   if (m.userData.edges) m.userData.edges.visible = on;
+  if (!on && selection.delete(m)) styleMesh(m);
   measure.invalidate();
 }
+function setBodyGhost(m, on) {
+  if (m.isLine || !!m.userData.ghost === on) return;
+  m.userData.ghost = on;
+  styleMesh(m);
+  buildCaps();
+}
+
+// ---------------------------------------------------------------- selection
+//
+// Click a body, in the view or the list, to select it; click a group to select the part. Selected
+// bodies tint, their rows light up, and a small menu hides them, ghosts them, shows them alone, or
+// gives them a material and a colour. U widens the selection to the part around it, then the
+// assembly. Clicks in the view pass through see-through bodies to what is inside.
+
+let selFolder = null, treeRoot = null;   // the group the selection is, when it is one; the list's tree
+const bodyMenu = Object.assign(document.createElement('div'), { id: 'bodyMenu', hidden: true });
+document.body.appendChild(bodyMenu);
+const stem = (n) => String(n).replace(/(\s*\(\d+\)|[_\s-]\d+)$/, '');   // "CAP_3" → "CAP", "Lead (2)" → "Lead"
+/** A row reads "name_n · material": the body's name, its number when the name repeats in its group, the file's material. */
+function labelOf(m) {
+  const base = m.userData.name.replace(/_part$/, '') + (m.userData.num ? `_${m.userData.num}` : '');   // _part: cadquery's leaf suffix
+  return m.userData.material && m.userData.material !== base ? `${base} · ${m.userData.material}` : base;
+}
+/** The body under the pointer: visible, on the kept side of a section, solid ones before see-through ones. */
+function bodyAt(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const hits = raycaster.intersectObjects(model.children.filter((m) => m.visible && m.isMesh), false)
+    .filter((h) => !section.axis || section.plane.distanceToPoint(h.point) >= -1e-6);
+  return (hits.find((h) => !h.object.userData.ghost) ?? hits[0])?.object ?? null;
+}
+function select(ms, { add = false, folder = null } = {}) {
+  const before = new Set(selection);
+  if (!add) selection.clear();
+  for (const m of ms) if (add && ms.length === 1 && before.has(m)) selection.delete(m); else selection.add(m);
+  selFolder = add ? null : folder;
+  for (const m of new Set([...before, ...selection])) styleMesh(m);
+  if (!selection.size) bodyMenu.hidden = true;
+  syncRows();
+  // open the list down to the first selected row and bring it into view
+  const row = selFolder?.row ?? [...selection][0]?.userData.row;
+  for (let g = row?.parentElement.closest('.group-body'); g; g = g.parentElement.closest('.group-body')) {
+    g.hidden = false;
+    const fold = g.parentElement.querySelector(':scope > .group-row .fold');
+    if (fold) { fold.textContent = '−'; fold.title = 'Fold'; }
+  }
+  row?.scrollIntoView({ block: 'nearest' });
+}
+const sel = () => [...selection];
+const under = (node) => [...node.bodies, ...[...node.kids.values()].flatMap(under)];
+/** U: the part around the selection, then the assembly around that. */
+function selectUp() {
+  const first = sel()[0];
+  const node = selFolder ? selFolder.parent : first?.userData.node;
+  if (node && node !== treeRoot) select(under(node), { folder: node });
+}
+const BODY_CMDS = [
+  { key: 'h', label: 'Hide', run: () => { for (const m of sel()) setBodyVisible(m, false); syncRows(); } },
+  { key: 't', label: 'See-through', run: () => { const on = !sel().every((m) => m.userData.ghost); for (const m of sel()) setBodyGhost(m, on); syncRows(); }, on: () => selection.size && sel().every((m) => m.userData.ghost) },
+  { key: 's', label: 'Show only these', run: () => { if (!selection.size) return; for (const o of model.children) setBodyVisible(o, selection.has(o)); syncRows(); } },
+  { key: 'u', label: 'Select the part around', run: selectUp },
+  { key: 'h', shift: true, label: 'Show all', run: () => { for (const o of model.children) { setBodyVisible(o, true); setBodyGhost(o, false); } syncRows(); } },
+];
+const hexOf = (rgb) => `#${new THREE.Color().setRGB(...rgb, THREE.SRGBColorSpace).getHexString(THREE.SRGBColorSpace)}`;
+const rgbOf = (hex) => { const o = {}; new THREE.Color().setStyle(hex, THREE.SRGBColorSpace).getRGB(o, THREE.SRGBColorSpace); return [o.r, o.g, o.b].map((v) => +v.toFixed(3)); };
+const shownColor = (m) => m.userData.tint ?? m.userData.color ?? m.userData.groups?.[0]?.color ?? [0.73, 0.72, 0.7];
+/** The user's colour for these bodies (null: back to the file's). */
+function setTint(ms, rgb) {
+  for (const m of ms) {
+    m.userData.tint = rgb;
+    const f = (tints[m.userData.file] ??= {});
+    if (rgb) f[m.userData.name] = rgb; else delete f[m.userData.name];
+    styleMesh(m);
+  }
+  saveTints();
+}
+function showBodyMenu(x, y) {
+  if (!selection.size) return;
+  const ms = sel(), one = ms.length === 1 ? ms[0] : null;
+  const title = Object.assign(document.createElement('div'), { className: 'hd',
+    textContent: selFolder ? `${selFolder.name} · ${ms.length} bodies` : one ? labelOf(one) : `${ms.length} bodies` });
+  // what it is made of (the MATERIALS look) and its colour (every solid look)
+  const mat = Object.assign(document.createElement('select'), { className: 'ghost', title: 'What it is made of (MATERIALS look)' });
+  mat.append(new Option('Material: guess', ''), ...Object.entries(MATERIALS).map(([k, d]) => new Option(d.label, k)));
+  const now = new Set(ms.map(materialOf));
+  mat.value = now.size === 1 ? [...now][0] : '';
+  mat.addEventListener('change', () => {
+    for (const m of ms) pickMaterial(m, mat.value || null);
+    if (ui.look !== 'materials') { ui.look = document.documentElement.dataset.look = $('#look').value = 'materials'; for (const m of model.children) styleMesh(m); }
+    else for (const m of ms) styleMesh(m);
+    rerender();
+  });
+  const color = Object.assign(document.createElement('input'), { type: 'color', value: hexOf(shownColor(ms[0])), title: 'Colour' });
+  color.addEventListener('input', () => { setTint(ms, rgbOf(color.value)); rerender(); });
+  const reset = Object.assign(document.createElement('button'), { className: 'ghost', textContent: '↺', title: "The file's colour" });
+  reset.addEventListener('click', () => { setTint(ms, null); color.value = hexOf(shownColor(ms[0])); rerender(); commit(); });
+  const appear = Object.assign(document.createElement('div'), { className: 'appear' });
+  appear.append(mat, color, reset);
+  bodyMenu.replaceChildren(title, ...BODY_CMDS.map((c) => {
+    const b = document.createElement('button');
+    b.className = 'ghost' + (c.on?.() ? ' on' : '');
+    b.append(Object.assign(document.createElement('span'), { textContent: c.label }), Object.assign(document.createElement('kbd'), { textContent: keyLabel(c) }));
+    b.addEventListener('click', () => { c.run(); commit(); if (c.key === 'u') showBodyMenu(x, y); else bodyMenu.hidden = true; });
+    return b;
+  }), appear);
+  bodyMenu.hidden = false;
+  bodyMenu.style.left = `${Math.min(x + 12, innerWidth - bodyMenu.offsetWidth - 8)}px`;
+  bodyMenu.style.top = `${Math.min(y + 12, innerHeight - bodyMenu.offsetHeight - 8)}px`;
+}
+document.addEventListener('pointerdown', (e) => { if (!bodyMenu.contains(e.target) && e.target !== renderer.domElement && !e.target.closest?.('#bodies')) bodyMenu.hidden = true; });
 // A body's explode vector at full slider: the solver's offset, or along the axis the
 // user chose for it (`${sign}${axis}`, right-click menu), at least a body-length
 // long so a part the solver left put still moves. Every part travels the slider's fraction of its
@@ -663,6 +819,7 @@ const pair = () => { const [a, b] = [...touches.values()]; return { d: Math.hypo
 for (const t of ['gesturestart', 'gesturechange', 'gestureend'])   // WebKit's own pinch would zoom a second time
   renderer.domElement.addEventListener(t, (e) => { if (touches.size) { e.preventDefault(); e.stopImmediatePropagation(); } }, { capture: true });
 renderer.domElement.addEventListener('pointerdown', (e) => {
+  bodyMenu.hidden = true;
   if (pickAxis) {   // picking an explode direction: left takes the face under the pointer, anything else backs out
     if (e.button === 0) { const h = faceAt(e); if (h) setPartAxis(pickAxis.m, h.normal); }
     endPickAxis();
@@ -673,7 +830,10 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
     renderer.domElement.setPointerCapture(e.pointerId);
     if (touches.size > 1) { drag = null; return; }
   }
-  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey, downX: e.clientX, downY: e.clientY, click: e.button === 0 };
+  // SolidWorks mouse: middle drag rotates, ctrl+middle pans, shift+middle zooms (left on empty space rotates too).
+  if (e.button === 1) e.preventDefault();
+  const zoom = e.button === 1 && e.shiftKey;
+  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, zoom, pan: !zoom && (e.button === 2 || e.shiftKey || (e.button === 1 && e.ctrlKey)), downX: e.clientX, downY: e.clientY, click: e.button === 0 };
   if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
   else if (e.button === 0 && !e.shiftKey && !measure.on && e.pointerType !== 'touch') {
     const hit = partAt(e);   // a part under the mouse slides along its explode axis; empty space orbits
@@ -729,16 +889,22 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     applyExplode();
     return;
   }
+  if (drag.zoom) { orbit.dist *= Math.exp(dy * 0.005); return; }   // shift+middle: drag up comes closer
   if (drag.pan || ui.flat) {
     pan(dx, dy);
   } else {
-    orbit.yaw += (e.pointerType === 'touch' ? -dx : dx) * 0.006;   // a finger drags the model with it; a mouse drags the camera
+    orbit.yaw -= dx * 0.006;   // finger or mouse, the model follows: drag left and its front turns left
     orbit.pitch += dy * 0.006;
   }
 });
 renderer.domElement.addEventListener('pointerup', (e) => {
   const still = drag && Math.hypot(e.clientX - drag.downX, e.clientY - drag.downY) < 4;
   if (drag?.click && measure.on && still) measure.click(e);
+  else if (drag?.click && still && !drag.sect && !ui.flat && !$('[data-tool].on')) {
+    const m = bodyAt(e);
+    select(m ? [m] : [], { add: e.shiftKey });
+    showBodyMenu(e.clientX, e.clientY);
+  }
   if (e.button === 2 && still) showMenu(e.clientX, e.clientY, partAt(e)?.body);
   if (drag?.sect || drag?.part) commit();
   drag = null;
@@ -814,7 +980,7 @@ function buildCaps() {
     if (m.isLine) return;
     const on = !!section.axis && !!bbox;
     eachMat(m, (x) => { x.side = on ? THREE.FrontSide : THREE.DoubleSide; });
-    if (!on) return;
+    if (!on || m.userData.ghost) return;   // a see-through body shows no cut face
     const cap = new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ color: capColor(i), side: THREE.BackSide, clippingPlanes: [section.plane],
       polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
     cap.renderOrder = 1;
@@ -863,6 +1029,8 @@ function collectGeometries(obj, assoc = null, out = []) {
   const look = (mat) => ({ color: mat?.color ? mat.color.getRGB(new THREE.Color(), THREE.SRGBColorSpace).toArray() : null,
     pbr: mat?.isMeshStandardMaterial ? { roughness: mat.roughness, metalness: mat.metalness } : null });
   const geoOf = (o) => o.geometry.clone().applyMatrix4(o.matrixWorld);
+  // the named nodes above a body, outermost first: the tree's folders (as a STEP's assembly path)
+  const pathOf = (o) => { const p = []; for (let a = o.parent; a && a !== obj; a = a.parent) if (a.name && a.name !== p[0]) p.unshift(a.name); return p; };
   const done = new Set();
   obj.traverse((o) => {
     // a glTF mesh with several primitives (one per material) loads as a Group of meshes: it is ONE body, a group per finish
@@ -870,11 +1038,12 @@ function collectGeometries(obj, assoc = null, out = []) {
     if (prims?.length > 1) {
       const geos = prims.map((c) => { done.add(c); const g = geoOf(c); for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k); return g; });
       const geo = mergeGeometries(geos.map((g) => (g.index ? g : g.setIndex([...Array(g.attributes.position.count).keys()]))), true);
-      if (geo) { out.push({ geo, name: o.name || undefined, groups: prims.map((c) => look(c.material)) }); return; }
+      if (geo) { out.push({ geo, name: o.name || undefined, path: pathOf(o), groups: prims.map((c) => look(c.material)) }); return; }
       for (const c of prims) done.delete(c);
     }
     if (!o.isMesh || done.has(o)) return;
-    out.push({ geo: geoOf(o), name: o.name || undefined, ...look([].concat(o.material)[0]) });
+    const mat = [].concat(o.material)[0];
+    out.push({ geo: geoOf(o), name: o.name || undefined, path: pathOf(o), material: mat?.name ?? '', ...look(mat) });
   });
   return out;
 }
@@ -916,7 +1085,7 @@ function parseCad(buffer) {
     if (sub.nrm) geo.setAttribute('normal', new THREE.BufferAttribute(sub.nrm, 3));
     geo.setIndex(new THREE.BufferAttribute(sub.idx, 1));
     const n = typeof names[b] === 'string' ? { name: names[b] } : names[b];   // older servers send bare names
-    parts.push({ geo, edgeLines: faceBorderEdges(sub.pos, sub.idx, own), faces: own, name: n.name, path: n.path ?? [], color: n.color ?? null });
+    parts.push({ geo, edgeLines: faceBorderEdges(sub.pos, sub.idx, own), faces: own, name: n.name, path: n.path ?? [], color: n.color ?? null, material: n.material ?? '', opacity: n.opacity ?? 1 });
   }
   return parts;
 }
@@ -943,8 +1112,11 @@ function loadFailed(name, e) {
 }
 
 /** Open from bytes (drop / file picker). Several files stack into one scene. */
+// Each open takes a ticket; an older one still loading (a reload behind a file change) drops its
+// result instead of stacking it onto the newer one.
+let loadTicket = 0;
 async function openBuffers(files) {
-  const t0 = performance.now();
+  const t0 = performance.now(), ticket = ++loadTicket;
   clearModel();
   subject = files.map((f) => f.name).join('|');   // bytes have no path: markups attach by name
   announce(); renderTabs();
@@ -957,10 +1129,11 @@ async function openBuffers(files) {
       const cad = CAD_EXT.test(name);
       const buf = cad ? await fetchBuffer(`api/view/tessellate?name=${encodeURIComponent(name)}`, { method: 'POST', body: buffer }) : buffer;
       const parts = cad ? parseCad(buf) : await parseMesh(ext, buf, name);
+      if (ticket !== loadTicket) return;   // the newer load owns the progress bar
       sources.push({ name, cad, buffer: buf });
       for (const p of parts) addPart(p, name);
       shown++; label = name; progressEnd(name, performance.now() - tf);
-    } catch (e) { progressEnd(); loadFailed(name, e); return; }
+    } catch (e) { if (ticket === loadTicket) { progressEnd(); loadFailed(name, e); } return; }
   }
   if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0));
 }
@@ -973,7 +1146,7 @@ window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
   if (!keep && model.children.length && paths.join('|') !== subject
       && window.open(`${location.pathname}?open=${encodeURIComponent(paths.join('|'))}`)) return;
   const sameFile = paths.join('|') === subject;   // the camera stays only for a reload of the file on screen
-  const t0 = performance.now();
+  const t0 = performance.now(), ticket = ++loadTicket;
   clearModel();
   subject = paths.join('|');   // markups attach to the file by path
   announce(); renderTabs();
@@ -989,10 +1162,11 @@ window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
       const cad = CAD_EXT.test(name);
       const buf = await fetchBuffer(cad ? `api/view/tessellate?${q}` : `api/view/file?${q}`, cad ? { method: 'POST' } : undefined);
       const parts = cad ? parseCad(buf) : await parseMesh(name.toLowerCase().split('.').pop(), buf, name);
+      if (ticket !== loadTicket) return;   // the newer load owns the progress bar
       sources.push({ name, cad, buffer: buf });
       for (const part of parts) addPart(part, name);
       shown++; label = name; progressEnd(name, performance.now() - tf);
-    } catch (e) { progressEnd(); loadFailed(name, e); return; }
+    } catch (e) { if (ticket === loadTicket) { progressEnd(); loadFailed(name, e); } return; }
   }
   if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0), keep && sameFile);
 };
@@ -1489,6 +1663,8 @@ const CMDS = [
   { key: 'l', label: 'Next look', btn: '#look', run: () => { const s = $('#look'); s.selectedIndex = (s.selectedIndex + 1) % s.options.length; s.dispatchEvent(new Event('change', { bubbles: true })); } },
   { key: 'm', label: 'Measure', run: () => setMeasure(!measure.on), btn: '#measureBtn', on: () => measure.on },
   { sep: true },
+  ...BODY_CMDS.map((c) => ({ ...c, label: { h: 'Hide selected', t: 'Selected see-through', s: 'Show only selected', u: 'Select the part around' }[c.shift ? '' : c.key] ?? c.label })),
+  { sep: true },
   { key: 'b', label: 'Flip drawing over', btn: '#sideBtn', run: () => { orbit.pitch = -orbit.pitch; } },
   { key: '[', label: 'Turn left 90°', run: () => { orbit.yaw -= Math.PI / 2; } },
   { key: ']', label: 'Turn right 90°', run: () => { orbit.yaw += Math.PI / 2; } },
@@ -1499,7 +1675,7 @@ const CMDS = [
   { key: '0', label: 'Explode all / none', btn: '#explode', run: () => setExplode(+$('#explode').value ? 0 : 100), on: () => +$('#explode').value > 0 },
   { key: '=', label: 'Explode more', run: () => setExplode(+$('#explode').value + 10) },
   { key: '-', label: 'Explode less', run: () => setExplode(+$('#explode').value - 10) },
-  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (pickAxis) { endPickAxis(); return; } if (measure.cancel()) return; setSectionAxis(''); setMeasure(false); } },
+  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (pickAxis) { endPickAxis(); return; } if (measure.cancel()) return; if (selection.size) { select([]); return; } setSectionAxis(''); setMeasure(false); } },
   { sep: true },
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },
@@ -1518,7 +1694,7 @@ window.addEventListener('keydown', (e) => {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const c = CMDS.find((c) => c.key === key && !!c.meta === (e.metaKey || e.ctrlKey) && !!c.shift === e.shiftKey);
   if (!c) return;
-  e.preventDefault(); hideMenu(); c.run(); commit();
+  e.preventDefault(); hideMenu(); bodyMenu.hidden = true; c.run(); commit();
 });
 
 // --- undo: a snapshot of the view state after every action; ⌘Z walks back.
@@ -1527,7 +1703,7 @@ const history = { list: [], i: -1 };
 function snap() {
   return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value, rot: rotArr(),
-    bodies: model.children.map((m) => m.visible), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3)]),
+    bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3)]),
     markup: markup.items, dims: measure.dims });
 }
 function commit() {
@@ -1556,7 +1732,11 @@ function apply(s) {
   $('#sectPos').value = st.section.pos; section.flip = st.section.flip; setSectionAxis(st.section.axis);
   model.children.forEach((m, i) => { const [axis, pull] = st.parts?.[i] ?? [null, null]; m.userData.axis = axis || undefined; m.userData.pull = pull ?? undefined; });
   $('#explode').value = st.explode; applyExplode();
-  model.children.forEach((m, i) => setBodyVisible(m, st.bodies[i] ?? true));
+  model.children.forEach((m, i) => {
+    setBodyVisible(m, st.bodies[i] ?? true); setBodyGhost(m, !!st.ghosts?.[i]);
+    const t = st.tints?.[i] ?? null;
+    if (JSON.stringify(m.userData.tint ?? null) !== JSON.stringify(t)) setTint([m], t);
+  });
   syncRows();
   if (JSON.stringify(markup.items) !== JSON.stringify(st.markup)) { markup.load(st.markup); markupChanged(st.markup); }
   if (JSON.stringify(measure.dims) !== JSON.stringify(st.dims ?? [])) measure.load(st.dims ?? []);
