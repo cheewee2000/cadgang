@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
 import { cylinderFit } from './measure.js';
 
 /**
@@ -72,7 +73,10 @@ export function explodeOffsets(bodies, centre) {
   });
   // Rays test front faces only, whatever material the viewer draws the bodies with (double-sided
   // shading would make every wall hit from both sides): probe meshes over the same geometry.
-  const probe = bodies.map((m) => new THREE.Mesh(m.geometry));
+  // A BVH per body (indirect: the index, and so the B-rep face ranges, stay as they are). Without one every ray
+  // walked every triangle: a 200k-triangle STL opened with a 90-part STEP took over three minutes.
+  for (const m of bodies) m.geometry.boundsTree ??= new MeshBVH(m.geometry, { indirect: true });
+  const probe = bodies.map((m) => Object.assign(new THREE.Mesh(m.geometry), { raycast: acceleratedRaycast }));
   const extOf = (half, v) => Math.abs(v.x) * half.x + Math.abs(v.y) * half.y + Math.abs(v.z) * half.z;   // half-extent along unit v
   // Probe body i's travel along d: a ray from each of its sampled surface points, front faces only, the
   // nearest hit as the gap to the first thing it would run into. One ray from the centre saw through
@@ -98,7 +102,7 @@ export function explodeOffsets(bodies, centre) {
   };
   // Contact probes, double-sided: an outward ray from just under a face meets a back face first when that face sits
   // inside another body (a head in its countersink, a thread in its tap drill), a front face within a touch when it rests on one.
-  const probe2 = bodies.map((m) => new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })));
+  const probe2 = bodies.map((m) => Object.assign(new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })), { raycast: acceleratedRaycast }));
   // The body a pin's shoulder bears on as it leaves along d: its faces looking back (n·d < -0.3) that rest on or sit in a
   // body other than the housing. A screw rides the lid under its head, not the standoff it threads into — riding the
   // standoff, which leaves the other way, it would sink with the board instead of coming out of the lid.
