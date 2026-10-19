@@ -27,6 +27,7 @@ import { createMeasure } from './measure.js';
 import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { MATERIALS, materialOf, pickMaterial, materialFor } from './materials.js';
+import { silhouetteEdges, silhouetteFor } from './silhouette.js';
 
 const $ = (s) => document.querySelector(s);
 const ui = { edges: true, wire: false, grid: true, look: 'shaded', ortho: false, flat: false, color: false }; // flat: a 2D drawing is open
@@ -121,7 +122,11 @@ function styleMesh(m) {
     if (selection.has(m) && mat.emissive) mat.emissive.setHex(0x2f5d8a).multiplyScalar(0.45);
     mat.side = section.axis && bbox ? THREE.FrontSide : THREE.DoubleSide;
     mat.flatShading = !!m.userData.flat;
-    mat.wireframe = ui.wire;
+    // WIRE is a CAD wireframe: the model's real edges (a B-rep's face borders, a mesh's creases) with the
+    // surfaces left out, not every triangle; a body too big for an edge overlay falls back to its triangles.
+    const lines = ui.wire && !!m.userData.edges;
+    mat.wireframe = ui.wire && !lines;
+    if (lines) Object.assign(mat, { colorWrite: false, depthWrite: false });   // still there to pick, hover and measure
     mat.clippingPlanes = section.axis && bbox ? [section.plane] : [];
     return mat;
   });
@@ -140,7 +145,7 @@ let sources = [];   // what each open file loaded as: [{name, cad, buffer}] (CAD
 
 function clearModel() {
   for (const g of [model, edges]) {
-    for (const o of g.children) { o.geometry?.dispose(); if (o.material !== edgeMaterial) for (const x of [].concat(o.material ?? [])) x.dispose?.(); }
+    for (const o of g.children) { o.geometry?.dispose(); o.userData.sil?.line?.geometry.dispose(); if (o.material !== edgeMaterial) for (const x of [].concat(o.material ?? [])) x.dispose?.(); }
     g.clear();
   }
   bbox = null;
@@ -222,6 +227,7 @@ function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', pa
     l.renderOrder = 1;
     edges.add(l);
     m.userData.edges = l;
+    if (ui.wire) styleMesh(m);   // styled before it had edges: now the wireframe can be them
   }
 }
 
@@ -750,7 +756,7 @@ function finishLoad(name, ms, keep = false) {
   // A flat drawing is read from above and handled like paper: pan, turn in quarters, flip over.
   ui.flat = size.z < 1e-9; $('#sideBtn').hidden = !ui.flat;
   if (!keep) { if (ui.flat) setView('3'); fit(); }   // a reload of a changed file keeps the camera
-  edges.visible = ui.edges;
+  edges.visible = ui.edges || ui.wire;   // the wireframe is the edges
   say(dups ? `${name} in ${ms} ms · ${dups}` : `${name} in ${ms} ms`);
   loadParts();
   loadMarkup();
@@ -1217,7 +1223,7 @@ $('#fileInput').addEventListener('change', async (e) => { if (e.target.files.len
 function toggle(name, btn) {
   ui[name] = !ui[name];
   $(btn).classList.toggle('on', ui[name]);
-  edges.visible = ui.edges;
+  edges.visible = ui.edges || ui.wire;   // the wireframe is the edges
   if (grid) grid.visible = ui.grid;
   for (const m of model.children) styleMesh(m);
   paintRows();
@@ -1540,6 +1546,45 @@ function resize() {
   }
 }
 new ResizeObserver(resize).observe(viewport);
+// WIRE draws a curved surface's outline where it turns away from the eye, as SolidWorks does
+// (silhouette.js). A body's candidate edges are found the first time the wireframe shows it; the
+// outline is redone only when the eye moves relative to the body (orbit, explode, a turn).
+const silEye = new THREE.Vector3(), silDir = new THREE.Vector3(), silInv = new THREE.Matrix4();
+function updateSilhouettes() {
+  for (const m of model.children) {
+    if (!m.isMesh) continue;
+    const show = ui.wire && m.visible && !!m.userData.edges;
+    let sil = m.userData.sil;
+    if (!show) { if (sil?.line) sil.line.visible = false; continue; }
+    if (!sil) {
+      const found = silhouetteEdges(m.geometry, m.userData.faces?.length ? { faces: m.userData.faces } : { creases: true });
+      sil = m.userData.sil = { found, key: '' };
+      if (found) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(found.pos.length), 3).setUsage(THREE.DynamicDrawUsage));
+        sil.line = new THREE.LineSegments(g, edgeMaterial);
+        sil.line.raycast = () => {};   // never a pick, measure or markup target
+        sil.line.frustumCulled = false;   // its points change every view: a bounds check would go stale
+        sil.line.renderOrder = 1;
+        m.add(sil.line);
+      }
+    }
+    if (!sil.line) continue;
+    sil.line.visible = true;
+    m.updateMatrixWorld();
+    silInv.copy(m.matrixWorld).invert();
+    silEye.copy(camera.position).applyMatrix4(silInv);
+    if (ui.ortho) silDir.copy(camera.getWorldDirection(new THREE.Vector3())).transformDirection(silInv);
+    const key = ui.ortho ? `o${silDir.x.toFixed(5)},${silDir.y.toFixed(5)},${silDir.z.toFixed(5)}` : `p${silEye.x.toFixed(4)},${silEye.y.toFixed(4)},${silEye.z.toFixed(4)}`;
+    if (key === sil.key) continue;
+    sil.key = key;
+    const attr = sil.line.geometry.getAttribute('position');
+    const n = silhouetteFor(sil.found, silEye, ui.ortho ? silDir : null, attr.array);
+    attr.needsUpdate = true;
+    sil.line.geometry.setDrawRange(0, n / 3);
+  }
+}
+
 // MATERIALS needs something for metal and glass to reflect in the live view: a soft studio room.
 let roomEnv = null;
 (function loop() {
@@ -1552,6 +1597,7 @@ let roomEnv = null;
     }
   }
   applyCamera();
+  updateSilhouettes();
   // The ground goes as soon as it would hide the model: seen from under it (camera below it, or an ortho view
   // looking up, whose rays start below it). The grid, and the WebGL render's floor; the Metal render drops its own.
   const above = (z) => (ui.ortho ? camera.getWorldDirection(new THREE.Vector3()).z < 0 : camera.position.z >= z);
