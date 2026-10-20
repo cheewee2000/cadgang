@@ -690,8 +690,43 @@ function applyExplode() {
   }
   measure.invalidate();
   saveParts();
+  drawJointLinks();
 }
 $('#explode').addEventListener('input', applyExplode);
+
+// JOINT LINKS: for a moment after a joint is made, and while the pointer is on the Joints panel, each joint
+// shows what it joins: a line from the moving part's centre to the joint, an arrow along its axis, and a line
+// on to the part that carries it (none to the ground). Drawn over everything, redrawn as parts move.
+const jointLinks = new THREE.Group();
+jointLinks.renderOrder = 6;
+scene.add(jointLinks);
+let linksUntil = 0, linksHover = false, linksTimer = null;
+function showJointLinks(ms) {
+  linksUntil = performance.now() + ms;
+  clearTimeout(linksTimer); linksTimer = setTimeout(drawJointLinks, ms + 20);
+  drawJointLinks();
+}
+function drawJointLinks() {
+  for (const c of [...jointLinks.children]) { jointLinks.remove(c); c.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); }); }
+  if (!joints.length || !(linksHover || performance.now() < linksUntil)) return;
+  const size = bbox ? bbox.getSize(new THREE.Vector3()).length() : 100;
+  const mat = () => Object.assign(new THREE.LineDashedMaterial({ color: 0xd11d1d, dashSize: size * 0.012, gapSize: size * 0.008, depthTest: false, transparent: true }));
+  const centre = (m) => new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3());
+  for (const j of joints) {
+    const m = bodyOfKey(j.body), p = j.parent && bodyOfKey(j.parent);
+    if (!m) continue;
+    const F = poses.frames?.get(j.id) || IDENT, base = m.userData.exPos ?? new THREE.Vector3();
+    const o = new THREE.Vector3(...j.origin).applyMatrix4(F).add(base), n = new THREE.Vector3(...j.axis).transformDirection(F);
+    const pts = [centre(m), o, ...(p ? [centre(p)] : [])];
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat());
+    line.computeLineDistances(); line.renderOrder = 6;
+    const len = size * 0.12, arrow = new THREE.ArrowHelper(n, o, len, 0xd11d1d, len * 0.25, len * 0.12);
+    arrow.line.material.depthTest = arrow.cone.material.depthTest = false; arrow.renderOrder = 6;
+    jointLinks.add(line, arrow);
+  }
+}
+$('#joints').addEventListener('pointerenter', () => { linksHover = true; drawJointLinks(); });
+$('#joints').addEventListener('pointerleave', () => { linksHover = false; drawJointLinks(); });
 
 // ROTATE turns the whole model about the origin, a step at a time. The turn is baked into every body's
 // geometry, so the grid, section axes, views and floor read the new way up; what rides on the model turns
@@ -1053,6 +1088,7 @@ function addJoint(m, type, a, parent = null, align = null) {
   });
   setJoints([...joints, j]);   // a body's joints stack: this one rides on the ones it already has
   lastJoint = j.id;
+  showJointLinks(3000);
   commit();
   say(type === 'fixed' ? `${nameOf(m)} rides on ${parent ? nameOf(parent) : 'the ground'}` : `${nameOf(m)}: ${type} joint — drag the part, or use its slider`);
 }
@@ -1062,8 +1098,7 @@ function addJoint(m, type, a, parent = null, align = null) {
 // shank, a bore, a pin, a ball), else along the first face's normal; the menu offers the type the faces
 // suggest first. The arrow shows what a click would take. The parts stay where they are (Fusion's as-built joint).
 let pickJoint = null;   // { first: { m, a } } once the moving part's face is in
-function startPickJoint() {
-  if (ui.mode !== 'joint') setMode('joint');
+function startPickJoint() {   // in either mode: an exploded assembly stays exploded, its faces easier to reach
   hideMenu();
   pickJoint = {};
   renderer.domElement.classList.add('picking');
@@ -1188,6 +1223,7 @@ function setMode(mode) {
   ui.mode = mode;
   document.documentElement.dataset.mode = mode;
   for (const b of document.querySelectorAll('[data-mode]')) b.classList.toggle('on', b.dataset.mode === mode);
+  renderJoints();
   endPickAxis(); endPickJoint();
   applyExplode();
   say(mode === 'joint' ? 'joint mode: drag a jointed part to move it · ⌘-drag sets its offset · New joint (N) joins two parts' : 'explode mode: drag a part to slide it out · right-click a part for its explode axis');
@@ -1197,10 +1233,10 @@ $('#newJointBtn').addEventListener('click', () => startPickJoint());
 document.documentElement.dataset.mode = ui.mode;
 
 // The panel: one row per joint, a slider to drive it, its parent and limits; how to make and move them under.
-const JOINT_HINTS = 'New joint (N): click a face on the part that moves, then one on the part it moves on (empty space: the ground), then the motion.\nDrag a part: drive its joint. ⌥-drag: turn a planar one. ⌘-drag: its offset along the axis.\nFlip turns a snapped part over. A part can have several joints: each rides on the ones before it, and a drag drives the one you last moved.';
+const JOINT_HINTS = 'New joint (N): click a face on the part that moves, then one on the part it moves on (empty space: the ground), then the motion.\nIn Joint mode (J), drag a part: drive its joint. ⌥-drag: turn a planar one. ⌘-drag: its offset along the axis.\nPoint at this panel to see what each joint joins.\nFlip turns a snapped part over. A part can have several joints: each rides on the ones before it, and a drag drives the one you last moved.';
 function renderJoints() {
   const el = $('#joints');
-  el.hidden = false;   // shown in Joint mode (CSS hides it in Explode), with the hints even before the first joint
+  el.hidden = !joints.length && ui.mode !== 'joint';   // the joints in either mode; in Joint mode the hints even before the first one
   const div = (className, textContent) => Object.assign(document.createElement('div'), { className, textContent });
   el.replaceChildren(div('joints-head', 'Joints'), ...joints.map(jointRow), div('joints-hint', JOINT_HINTS));
 }
@@ -2065,7 +2101,7 @@ async function openShare(id) {
   } catch (e) { progressEnd(); loadFailed('shared view', e); }
 }
 // For headless drives: the scene objects behind the page.
-window.__view = { selected, selectBodies, bodiesInWindow, model, section, orbit, ui, measure, rt, THREE, get joints() { return joints; }, get poses() { return poses; }, addJoint, setJointValue, faceAxis, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
+window.__view = { selected, selectBodies, bodiesInWindow, model, section, orbit, ui, measure, rt, THREE, get joints() { return joints; }, get poses() { return poses; }, jointLinks, addJoint, setJointValue, faceAxis, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
   project: (x, y, z) => { const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3(x, y, z).project(camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; } };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
@@ -2207,6 +2243,7 @@ function partCmds(m) {
     ...(ui.mode === 'joint' ? jointCmds(m) : [
     { label: `Explode auto${auto}`, run: () => set(undefined), on: () => !m.userData.axis },
     { label: 'Explode direction: pick a face…', run: () => startPickAxis(m), on: () => !!m.userData.axis },
+    { label: 'New joint…', run: startPickJoint },
     { sep: true },
     ]),
   ];
