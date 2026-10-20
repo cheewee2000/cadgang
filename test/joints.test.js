@@ -97,3 +97,9 @@ test('a joint carries its snap: the align matrix comes first, then the motion', 
   assert.deepEqual(at(m, [0, 0, 0]), [2, 0, 10]);
   assert.equal(normalizeJoint({ align: [1, 2] }).align, null);   // anything but 16 numbers is no snap
 });
+
+test('an offset moves any joint along its axis, on top of its motion and past its limits', () => {
+  assert.deepEqual(at(jointMatrix(J({ type: 'revolute', axis: [0, 0, 1], offset: 3, value: 90 })), [1, 0, 0]), [0, 1, 3]);
+  assert.deepEqual(at(jointMatrix(J({ type: 'slider', axis: [1, 0, 0], value: 2, max: 2, offset: 5 })), [0, 0, 0]), [7, 0, 0]);
+  assert.deepEqual(at(jointMatrix(J({ type: 'fixed', axis: [0, 1, 0], offset: -4 })), [0, 0, 0]), [0, -4, 0]);
+});

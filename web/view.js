@@ -850,8 +850,8 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
   else if (e.button === 0 && !e.shiftKey && !measure.on && e.pointerType !== 'touch') {
     const hit = partAt(e);   // a part under the mouse slides along its explode axis; empty space orbits
-    const j = ui.mode === 'joint' && hit && drivingJoint(hit.body);
-    if (ui.mode === 'joint') { if (j) drag.joint = { j, m: bodyOfKey(j.body), hit: hit.body, local: hit.point.clone().applyMatrix4(hit.body.matrixWorld.clone().invert()) }; }   // joint mode: a jointed part turns or slides on its joint, anything else orbits
+    const j = ui.mode === 'joint' && hit && (e.metaKey ? jointOf(hit.body) : drivingJoint(hit.body));   // ⌘: the part's own joint offset, even on a rigid one
+    if (ui.mode === 'joint') { if (j && !(e.metaKey && j.type === 'ball')) drag.joint = { j, offset: e.metaKey, m: bodyOfKey(j.body), hit: hit.body, local: hit.point.clone().applyMatrix4(hit.body.matrixWorld.clone().invert()) }; }   // joint mode: a jointed part turns or slides on its joint, anything else orbits
     else if (hit) { const v = explodeVec(hit.body); if (moves(hit.body, v)) drag.part = { m: hit.body, full: +$('#explode').value >= 100, ...screenAxis(hit.point, v.normalize()) }; }
   }
   renderer.domElement.setPointerCapture(e.pointerId);
@@ -914,7 +914,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     updateSection();
     return;
   }
-  if (drag.joint) { driveJoint(drag.joint, dx, dy, e.altKey); return; }
+  if (drag.joint) { driveJoint(drag.joint, dx, dy, e.altKey); return; }   // ⌘ was read at the press
   if (drag.part) {
     const m = drag.part.m, max = maxTravel(m), S = stageCount();
     const d = Math.max(0, max * stageFrac(m, +$('#explode').value / 100) + dx * drag.part.sx + dy * drag.part.sy);
@@ -1079,7 +1079,7 @@ function pickJointFace(e) {
   const types = [suggest, ...['revolute', 'slider', 'screw', 'cylindrical', 'planar', 'ball', 'fixed'].filter((t) => t !== suggest)];
   showItems(e.clientX, e.clientY, [
     { head: `${nameOf(m)} on ${parent ? nameOf(parent) : 'the ground'}` },
-    ...types.map((t) => ({ label: t === 'fixed' ? 'Rigid' : JOINT_LABEL[t], on: () => t === suggest, run: () => addJoint(m, t, t === 'fixed' ? null : a, parent, align) })),
+    ...types.map((t) => ({ label: t === 'fixed' ? 'Rigid' : JOINT_LABEL[t], on: () => t === suggest, run: () => addJoint(m, t, a, parent, align) })),   // a rigid joint keeps the face too: its offset goes along it
   ]);
 }
 // Where the moving part goes, as Fusion snaps it: its face's centre onto the other's, a flat face turned to
@@ -1148,6 +1148,7 @@ function driveJoint(d, dx, dy, alt) {
     return;
   }
   const P = d.local.clone().applyMatrix4(d.hit.matrixWorld);   // the grabbed point, where it is now
+  if (d.offset) { const { sx, sy } = screenAxis(P, n); setJointValue(j, 'offset', j.offset + dx * sx + dy * sy); return; }   // ⌘-drag: along the axis, past the motion
   if (j.type === 'planar' && !alt) {   // slides under the pointer: the screen move undone through the plane's x and y (⌥ turns it)
     const [u, v] = planeAxes(j.axis).map((a) => a.transformDirection(Wp));
     const px = (dir) => { const r = renderer.domElement.getBoundingClientRect(), a = P.clone().project(camera), b = P.clone().add(dir).project(camera); return [(b.x - a.x) * r.width / 2, -(b.y - a.y) * r.height / 2]; };
@@ -1179,7 +1180,7 @@ function setMode(mode) {
   for (const b of document.querySelectorAll('[data-mode]')) b.classList.toggle('on', b.dataset.mode === mode);
   endPickAxis(); endPickJoint();
   applyExplode();
-  say(mode === 'joint' ? 'joint mode: drag a jointed part to move it · New joint (N) joins two parts' : 'explode mode: drag a part to slide it out · right-click a part for its explode axis');
+  say(mode === 'joint' ? 'joint mode: drag a jointed part to move it · ⌘-drag sets its offset · New joint (N) joins two parts' : 'explode mode: drag a part to slide it out · right-click a part for its explode axis');
 }
 for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('click', () => setMode(b.dataset.mode));
 $('#newJointBtn').addEventListener('click', () => startPickJoint());
@@ -1219,7 +1220,8 @@ function jointRow(j) {
     }
   } else if (j.type !== 'fixed') drive('value', false);
   if (j.type === 'cylindrical') drive('value2', true);
-  if (j.type === 'planar') for (const [key, ax] of [['value2', 'x'], ['value3', 'y'], ['offset', 'offset']]) { drive(key, true); row.lastChild.prepend(mk('span', { textContent: ax })); }
+  if (j.type === 'planar') for (const [key, ax] of [['value2', 'x'], ['value3', 'y']]) { drive(key, true); row.lastChild.prepend(mk('span', { textContent: ax })); }
+  if (j.type !== 'ball') { drive('offset', true); row.lastChild.prepend(mk('span', { textContent: 'offset', title: '⌘-drag the part to set it' })); }
   const opt = (field, label, props = {}) => {
     const i = mk('input', { type: 'number', step: 'any', className: 'jv', value: j[field] ?? '', ...props });
     const take = () => {   // as you type: the joint always holds what the field shows, so a save never misses it

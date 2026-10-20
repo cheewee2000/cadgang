@@ -13,10 +13,11 @@ import * as THREE from 'three';
  *   cylindrical  turns `value` degrees and slides `value2` mm, independently
  *   ball         turns freely about the point `origin`: `rot` is the turn as Euler angles [x, y, z] in degrees
  *   planar       slides on the plane through `origin` with normal `axis` and turns about that normal:
- *                `value` degrees, `value2` / `value3` mm along the plane's own x / y (planeAxes), and
- *                `offset` mm off the plane along the normal (a gap, or a part lifted off its seat)
+ *                `value` degrees, `value2` / `value3` mm along the plane's own x / y (planeAxes)
  *   fixed        rides with its parent, nothing of its own
  *
+ * `offset` (every type but ball) moves the body that many mm along the axis, as Fusion's joint offset: a
+ * gap under a part on a face, a pin pushed further into its hole. It is not limited by min/max.
  * `align` (16 numbers, column-major, or null) is where the joint first put the body, as Fusion's joint
  * snaps the moving part onto the other: its picked face onto the parent's. The motion comes after it.
  * `body` and `parent` are part keys (`name#n`); a null parent is the ground. Origin and axis are in the
@@ -79,8 +80,8 @@ function motion(j) {
   }
   const n = new THREE.Vector3(...j.axis).normalize(), o = new THREE.Vector3(...j.origin);
   const angle = turns(j.type) ? THREE.MathUtils.degToRad(j.value) : 0;
-  const slide = j.type === 'slider' ? j.value : j.type === 'cylindrical' ? j.value2 : j.type === 'screw' ? (j.pitch * j.value) / 360 : j.type === 'planar' ? j.offset : 0;
-  const t = n.clone().multiplyScalar(slide);
+  const slide = j.type === 'slider' ? j.value : j.type === 'cylindrical' ? j.value2 : j.type === 'screw' ? (j.pitch * j.value) / 360 : 0;
+  const t = n.clone().multiplyScalar(slide + j.offset);
   if (j.type === 'planar') { const [u, v] = planeAxes(j.axis); t.addScaledVector(u, j.value2).addScaledVector(v, j.value3); }
   const m = new THREE.Matrix4().makeTranslation(t.x, t.y, t.z);
   if (angle) {
