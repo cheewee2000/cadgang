@@ -706,13 +706,43 @@ function showJointLinks(ms) {
   clearTimeout(linksTimer); linksTimer = setTimeout(drawJointLinks, ms + 20);
   drawJointLinks();
 }
+// LIMITS: a joint that moves on one value (a slider's travel, a turn) also shows that value's range: a dashed
+// track along the axis or round it, with a handle at min and at max (solid when set, faint when free). Drag a
+// handle to set that limit, double-click it to free it. In Joint mode the joint last driven keeps them showing.
+const LIMITED = { slider: 'lin', revolute: 'ang', screw: 'ang', cylindrical: 'ang', planar: 'ang' };
+let limitHandles = [];   // [{ j, which, p: world point }] as drawn
+let lastJoint = null;   // the joint last made or driven: its limits stay up in Joint mode, a drag on its part drives it
+function limitFrame(j, m, F, base, size) {   // the joint's axis now, and for a turn the arm its angle 0 points along
+  const o = new THREE.Vector3(...j.origin).applyMatrix4(F).add(base), n = new THREE.Vector3(...j.axis).transformDirection(F).normalize();
+  if (LIMITED[j.type] !== 'ang') return { o, n };
+  const c = m.geometry.boundingBox.getCenter(new THREE.Vector3());
+  if (j.align) c.applyMatrix4(new THREE.Matrix4().fromArray(j.align));
+  const arm = c.applyMatrix4(F).add(base).sub(o); arm.addScaledVector(n, -arm.dot(n));
+  const r = Math.max(arm.length(), size * 0.06);
+  return { o, n, r, d0: arm.lengthSq() > 1e-9 ? arm.normalize() : planeAxes(n.toArray())[0] };
+}
+// Where the handles sit: the limits, and for a free end of a turn 270° from the other (a full ±360° would put
+// both on one spot); a free end of a travel at the panel slider's span.
+function limitRange(j, size) {
+  if (LIMITED[j.type] !== 'ang') return valueRange(j, size);
+  const lo = j.min ?? (j.max != null ? j.max - 270 : j.value - 135);
+  return [lo, j.max ?? lo + 270];
+}
+function limitPoint(j, f, v) {
+  if (!f.d0) return f.o.clone().addScaledVector(f.n, v);
+  const p = f.o.clone().addScaledVector(f.d0.clone().applyAxisAngle(f.n, THREE.MathUtils.degToRad(v)), f.r);
+  return j.type === 'screw' ? p.addScaledVector(f.n, (j.pitch * v) / 360) : p;
+}
 function drawJointLinks() {
   for (const c of [...jointLinks.children]) { jointLinks.remove(c); c.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); }); }
-  if (!joints.length || !(linksHover || performance.now() < linksUntil)) return;
+  limitHandles = [];
+  const all = linksHover || performance.now() < linksUntil;
+  const shown = all ? joints : ui.mode === 'joint' ? joints.filter((j) => j.id === lastJoint) : [];
+  if (!shown.length) return;
   const size = bbox ? bbox.getSize(new THREE.Vector3()).length() : 100;
   const mat = () => Object.assign(new THREE.LineDashedMaterial({ color: 0xd11d1d, dashSize: size * 0.012, gapSize: size * 0.008, depthTest: false, transparent: true }));
   const centre = (m) => new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3());
-  for (const j of joints) {
+  for (const j of shown) {
     const m = bodyOfKey(j.body), p = j.parent && bodyOfKey(j.parent);
     if (!m) continue;
     const F = poses.frames?.get(j.id) || IDENT, base = m.userData.exPos ?? new THREE.Vector3();
@@ -723,7 +753,56 @@ function drawJointLinks() {
     const len = size * 0.12, arrow = new THREE.ArrowHelper(n, o, len, 0xd11d1d, len * 0.25, len * 0.12);
     arrow.line.material.depthTest = arrow.cone.material.depthTest = false; arrow.renderOrder = 6;
     jointLinks.add(line, arrow);
+    if (!LIMITED[j.type]) continue;
+    const f = limitFrame(j, m, F, base, size), [lo, hi] = limitRange(j, size);
+    const steps = f.d0 ? Math.min(384, Math.ceil(Math.abs(hi - lo) / 5)) : 1;
+    const track = new THREE.Line(new THREE.BufferGeometry().setFromPoints(Array.from({ length: steps + 1 }, (_, i) => limitPoint(j, f, lo + ((hi - lo) * i) / steps))), mat());
+    track.computeLineDistances(); track.renderOrder = 6;
+    jointLinks.add(track);
+    for (const which of ['min', 'max']) {
+      const pt = limitPoint(j, f, which === 'min' ? lo : hi);
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(size * 0.012, 12, 8), new THREE.MeshBasicMaterial({ color: 0xd11d1d, depthTest: false, transparent: true, opacity: j[which] == null ? 0.35 : 1 }));
+      dot.position.copy(pt); dot.renderOrder = 7;
+      jointLinks.add(dot);
+      limitHandles.push({ j, which, p: pt });
+    }
   }
+}
+function limitAt(e) {   // the handle within 10 px of the pointer, nearest first
+  const r = renderer.domElement.getBoundingClientRect();
+  let best = null, bd = 10;
+  for (const h of limitHandles) {
+    const s = h.p.clone().project(camera), d = Math.hypot(r.left + (s.x + 1) / 2 * r.width - e.clientX, r.top + (1 - s.y) / 2 * r.height - e.clientY);
+    if (s.z < 1 && d < bd) { bd = d; best = h; }
+  }
+  return best;
+}
+function dragLimit(e, h) {   // the pointer's ray onto the joint's axis (a travel) or its plane (a turn)
+  const { j, which } = h, m = bodyOfKey(j.body);
+  if (!m) return;
+  const size = bbox ? bbox.getSize(new THREE.Vector3()).length() : 100;
+  const f = limitFrame(j, m, poses.frames?.get(j.id) || IDENT, m.userData.exPos ?? new THREE.Vector3(), size);
+  const r = renderer.domElement.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const { origin: ro, direction: rd } = raycaster.ray;
+  let v;
+  if (!f.d0) {   // the closest point on the axis line to the ray
+    const w = ro.clone().sub(f.o), b = f.n.dot(rd), den = 1 - b * b;
+    if (den < 1e-6) return;
+    v = (f.n.dot(w) - b * rd.dot(w)) / den;
+  } else {
+    const p = raycaster.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(f.n, f.o), new THREE.Vector3());
+    if (!p) return;
+    const a = p.sub(f.o);
+    const deg = THREE.MathUtils.radToDeg(Math.atan2(f.d0.clone().cross(a).dot(f.n), f.d0.dot(a)));
+    const was = limitRange(j, size)[which === 'min' ? 0 : 1];
+    v = deg + 360 * Math.round((was - deg) / 360);   // the turn nearest the one it had: a screw's limit can be turns away
+  }
+  v = Math.round(v * 10) / 10;
+  if (which === 'min' && j.max != null) v = Math.min(v, j.max);
+  if (which === 'max' && j.min != null) v = Math.max(v, j.min);
+  j[which] = v; j.value = clampValue(j, j.value); lastJoint = j.id;
+  syncJointRow(j); applyExplode(); saveJoints();
 }
 $('#joints').addEventListener('pointerenter', () => { linksHover = true; drawJointLinks(); });
 $('#joints').addEventListener('pointerleave', () => { linksHover = false; drawJointLinks(); });
@@ -869,6 +948,8 @@ for (const t of ['gesturestart', 'gesturechange', 'gestureend'])   // WebKit's o
   renderer.domElement.addEventListener(t, (e) => { if (touches.size) { e.preventDefault(); e.stopImmediatePropagation(); } }, { capture: true });
 renderer.domElement.addEventListener('pointerdown', (e) => {
   if (pickJoint) { e.stopPropagation(); if (e.button === 0) pickJointFace(e); else endPickJoint(); return; }   // a new joint: left takes faces, anything else backs out (and the click that opens its type menu must not reach the document, which closes menus)
+  const lim = e.button === 0 && limitAt(e);
+  if (lim) { drag = { id: e.pointerId, x: e.clientX, y: e.clientY, downX: e.clientX, downY: e.clientY, limit: lim }; renderer.domElement.setPointerCapture(e.pointerId); return; }
   if (pickAxis) {   // picking an explode direction: left takes the face under the pointer, anything else backs out
     if (e.button === 0) { const h = faceAt(e); if (h) setPartAxis(pickAxis.m, h.normal); }
     endPickAxis();
@@ -926,10 +1007,11 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     if (measure.on) { measure.hover(e); return; }
     const p = e.pointerType !== 'touch' ? partAt(e) : null;
     hoverBody($('[data-tool].on') ? null : p?.body ?? null);   // no tool chosen: the body under the mouse and its row light up
-    renderer.domElement.classList.toggle('oncap', onCap(e) || !!p);
+    renderer.domElement.classList.toggle('oncap', onCap(e) || !!p || !!limitAt(e));
     return;
   }
   if (drag.id !== e.pointerId) return;
+  if (drag.limit) { dragLimit(e, drag.limit); return; }
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.x = e.clientX; drag.y = e.clientY;
   if (drag.marquee) {
@@ -979,13 +1061,15 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     selectBodies(p ? [p.body] : [], 'set');
   }
   if (e.button === 2 && still) showMenu(e.clientX, e.clientY, partAt(e)?.body);
-  if (drag?.sect || drag?.part || drag?.joint) commit();
+  if (drag?.limit) renderJoints();   // the min/max fields take the dragged limit
+  if (drag?.sect || drag?.part || drag?.joint || drag?.limit) commit();
   drag = null;
   touches.delete(e.pointerId);
 });
 renderer.domElement.addEventListener('pointerleave', () => hoverBody(null));
 renderer.domElement.addEventListener('pointercancel', (e) => { drag = null; touches.delete(e.pointerId); });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+renderer.domElement.addEventListener('dblclick', (e) => { const h = limitAt(e); if (h) { h.j[h.which] = null; renderJoints(); applyExplode(); saveJoints(); commit(); } });   // a limit's handle, double-clicked: free again
 const raycaster = new THREE.Raycaster();
 function hitAt(e) {
   const r = renderer.domElement.getBoundingClientRect();
@@ -1049,7 +1133,6 @@ function bodyKeys() {   // partKey for every body at once
 }
 const jointsOf = (key) => joints.filter((j) => j.body === key);
 // A body's joint for ⌘-drag and the menu: the one last driven (a slider, a field, a drag), else its first.
-let lastJoint = null;
 const jointOf = (m) => { const list = joints.length ? jointsOf(bodyKeys().get(m)) : []; return list.find((j) => j.id === lastJoint) ?? list[0]; };
 // The joint a drag on this body moves: its last-driven one that can move, else its first that can, or, for a
 // body that only rides on another (a lens fixed in its cell, a claw on the housing), the first up its chain.
@@ -1233,7 +1316,7 @@ $('#newJointBtn').addEventListener('click', () => startPickJoint());
 document.documentElement.dataset.mode = ui.mode;
 
 // The panel: one row per joint, a slider to drive it, its parent and limits; how to make and move them under.
-const JOINT_HINTS = 'New joint (N): click a face on the part that moves, then one on the part it moves on (empty space: the ground), then the motion.\nIn Joint mode (J), drag a part: drive its joint. ⌥-drag: turn a planar one. ⌘-drag: its offset along the axis.\nPoint at this panel to see what each joint joins.\nFlip turns a snapped part over. A part can have several joints: each rides on the ones before it, and a drag drives the one you last moved.';
+const JOINT_HINTS = 'New joint (N): click a face on the part that moves, then one on the part it moves on (empty space: the ground), then the motion.\nIn Joint mode (J), drag a part: drive its joint. ⌥-drag: turn a planar one. ⌘-drag: its offset along the axis.\nPoint at this panel to see what each joint joins. Drag the dots at the ends of a joint’s dashed track to set its min and max; double-click one to free it.\nFlip turns a snapped part over. A part can have several joints: each rides on the ones before it, and a drag drives the one you last moved.';
 function renderJoints() {
   const el = $('#joints');
   el.hidden = !joints.length && ui.mode !== 'joint';   // the joints in either mode; in Joint mode the hints even before the first one
@@ -2101,7 +2184,7 @@ async function openShare(id) {
   } catch (e) { progressEnd(); loadFailed('shared view', e); }
 }
 // For headless drives: the scene objects behind the page.
-window.__view = { selected, selectBodies, bodiesInWindow, model, section, orbit, ui, measure, rt, THREE, get joints() { return joints; }, get poses() { return poses; }, jointLinks, addJoint, setJointValue, faceAxis, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
+window.__view = { selected, selectBodies, bodiesInWindow, model, section, orbit, ui, measure, rt, THREE, get joints() { return joints; }, get poses() { return poses; }, jointLinks, get limitHandles() { return limitHandles; }, addJoint, setJointValue, faceAxis, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
   project: (x, y, z) => { const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3(x, y, z).project(camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; } };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
