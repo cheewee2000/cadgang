@@ -1186,11 +1186,13 @@ for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('cl
 $('#newJointBtn').addEventListener('click', () => startPickJoint());
 document.documentElement.dataset.mode = ui.mode;
 
-// The panel: one row per joint, a slider to drive it, its parent and limits.
+// The panel: one row per joint, a slider to drive it, its parent and limits; how to make and move them under.
+const JOINT_HINTS = 'New joint (N): click a face on the part that moves, then one on the part it moves on (empty space: the ground), then the motion.\nDrag a part: drive its joint. ⌥-drag: turn a planar one. ⌘-drag: its offset along the axis.\nFlip turns a snapped part over.';
 function renderJoints() {
   const el = $('#joints');
-  el.hidden = !joints.length;
-  el.replaceChildren(...(joints.length ? [Object.assign(document.createElement('div'), { className: 'joints-head', textContent: 'Joints' }), ...joints.map(jointRow)] : []));
+  el.hidden = false;   // shown in Joint mode (CSS hides it in Explode), with the hints even before the first joint
+  const div = (className, textContent) => Object.assign(document.createElement('div'), { className, textContent });
+  el.replaceChildren(div('joints-head', 'Joints'), ...joints.map(jointRow), div('joints-hint', JOINT_HINTS));
 }
 function jointRow(j) {
   const mk = (tag, props, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };

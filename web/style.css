@@ -240,6 +240,7 @@ footer > * { white-space: nowrap; }
 .joints { position: relative; z-index: 2; display: flex; flex-direction: column; gap: var(--sp-2); max-height: 40%; overflow: auto; box-sizing: border-box; min-width: 120px; max-width: 70vw; background: var(--paper); border: var(--bw-hair) solid var(--rule); padding: var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); }
 .joints[hidden] { display: none; }
 .joints-head { opacity: 0.6; text-transform: uppercase; }
+.joints-hint { width: 0; min-width: 100%; opacity: 0.6; white-space: pre-line; font-size: var(--fs-12); line-height: 1.4; }
 .joint { display: flex; flex-direction: column; gap: 2px; padding-top: var(--sp-1); border-top: var(--bw-hair) solid var(--rule); }
 .joint .jl { display: flex; align-items: center; gap: var(--sp-2); }
 .joint .jname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.7; }
