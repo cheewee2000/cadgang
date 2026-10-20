@@ -833,11 +833,7 @@ const pair = () => { const [a, b] = [...touches.values()]; return { d: Math.hypo
 for (const t of ['gesturestart', 'gesturechange', 'gestureend'])   // WebKit's own pinch would zoom a second time
   renderer.domElement.addEventListener(t, (e) => { if (touches.size) { e.preventDefault(); e.stopImmediatePropagation(); } }, { capture: true });
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (pickJoint) {   // picking a joint axis: left takes the face under the pointer, anything else backs out
-    if (e.button === 0) { const h = faceAt(e); if (h) addJoint(pickJoint.m, pickJoint.type, faceAxis(h)); }
-    endPickJoint();
-    return;
-  }
+  if (pickJoint) { if (e.button === 0) pickJointFace(e); else endPickJoint(); return; }   // a new joint: left takes faces, anything else backs out
   if (pickAxis) {   // picking an explode direction: left takes the face under the pointer, anything else backs out
     if (e.button === 0) { const h = faceAt(e); if (h) setPartAxis(pickAxis.m, h.normal); }
     endPickAxis();
@@ -865,7 +861,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     const h = faceAt(e), a = h && faceAxis(h);
     axisArrow.visible = !!a;
     if (a) {   // the axis it would take, drawn where the face's own frame puts it
-      const len = 0.35 * (pickJoint.m.geometry.boundingBox?.getSize(new THREE.Vector3()).length() || 10);
+      const len = 0.35 * (h.body.geometry.boundingBox?.getSize(new THREE.Vector3()).length() || 10);
       axisArrow.position.copy(a.origin).applyMatrix4(h.body.matrixWorld);
       axisArrow.setDirection(a.axis.clone().transformDirection(h.body.matrixWorld)); axisArrow.setLength(len, len * 0.25, len * 0.12);
       axisRing.scale.setScalar(len * 0.08);
@@ -1037,30 +1033,53 @@ function setJointValue(j, key, v) {
   syncJointRow(j); applyExplode(); saveJoints();
 }
 function removeJoint(j) { joints = joints.filter((x) => x !== j); renderJoints(); applyExplode(); saveJoints(); commit(); }
-function addJoint(m, type, a) {
-  const key = bodyKeys().get(m);
+function addJoint(m, type, a, parent = null) {
+  const key = bodyKeys().get(m), parentKey = parent ? bodyKeys().get(parent) : null;
   const centre = m.geometry.boundingBox.getCenter(new THREE.Vector3());
   const j = normalizeJoint({
-    id: jointId(), type, body: key, parent: null,
-    name: `${JOINT_LABEL[type]} · ${nameOf(m)}`,
+    id: jointId(), type, body: key, parent: parentKey,
+    name: `${JOINT_LABEL[type]} · ${nameOf(m)}${parent ? ` on ${nameOf(parent)}` : ''}`,
     origin: (a ? a.origin : centre).toArray().map(r6), axis: (a ? a.axis : new THREE.Vector3(0, 0, 1)).toArray().map(r6),
     pitch: type === 'screw' ? pitchFor(a?.radius ? a.radius * 2 : 4) : 0,
   });
   setJoints([...joints.filter((x) => x.body !== key), j]);   // one joint per body
   commit();
-  say(type === 'fixed' ? `${nameOf(m)} is fixed: pick what it rides on in the Joints panel` : `${nameOf(m)}: ${type} joint — drag the part, or use its slider`);
+  say(type === 'fixed' ? `${nameOf(m)} rides on ${parent ? nameOf(parent) : 'the ground'}` : `${nameOf(m)}: ${type} joint — drag the part, or use its slider`);
 }
 
-// PICK A JOINT AXIS: from a part's right-click menu. A round face gives its own axis (a screw's shank, a
-// bore, a pin), a flat one its normal; the arrow shows what a click would take. The face may be on any body.
-let pickJoint = null;
-function startPickJoint(m, type) {
-  if (type === 'fixed') return addJoint(m, type, null);
-  pickJoint = { m, type };
+// NEW JOINT, as in Fusion: click a face on the part that moves, then a face on the part it moves on (empty
+// space: the ground), then the motion. The joint turns or slides about a round face of the two (a screw's
+// shank, a bore, a pin, a ball), else along the first face's normal; the menu offers the type the faces
+// suggest first. The arrow shows what a click would take. The parts stay where they are (Fusion's as-built joint).
+let pickJoint = null;   // { first: { m, a } } once the moving part's face is in
+function startPickJoint() {
+  if (ui.mode !== 'joint') setMode('joint');
+  hideMenu();
+  pickJoint = {};
   renderer.domElement.classList.add('picking');
-  say(`${nameOf(m)}: click ${type === 'slider' ? 'a face to slide along its normal' : type === 'ball' ? 'a sphere (or any face) to turn about its centre' : 'a round face to turn about its axis'} · Esc cancels`);
+  say('new joint: click a face on the part that moves · Esc cancels');
 }
 function endPickJoint() { pickJoint = null; axisArrow.visible = false; renderer.domElement.classList.remove('picking'); }
+function pickJointFace(e) {
+  const h = faceAt(e);
+  if (!pickJoint.first) {
+    if (!h) return say('click a face on the part that moves · Esc cancels');
+    pickJoint.first = { m: h.body, a: faceAxis(h) };
+    selectBodies([h.body], 'set');
+    return say(`${nameOf(h.body)} moves: click a face on the part it moves on, or empty space for the ground · Esc cancels`);
+  }
+  if (h?.body === pickJoint.first.m) return say('click a face on another part, or empty space for the ground');
+  const { m, a: a1 } = pickJoint.first, parent = h?.body ?? null, a2 = h && faceAxis(h);
+  const round = (a) => a && a.kind !== 'plane';
+  const a = round(a1) ? a1 : round(a2) ? a2 : a1;
+  const suggest = a.kind === 'sphere' ? 'ball' : a.kind === 'cyl' ? 'revolute' : 'slider';
+  endPickJoint();
+  const types = [suggest, ...['revolute', 'slider', 'screw', 'cylindrical', 'ball', 'fixed'].filter((t) => t !== suggest)];
+  showItems(e.clientX, e.clientY, [
+    { head: `${nameOf(m)} on ${parent ? nameOf(parent) : 'the ground'}` },
+    ...types.map((t) => ({ label: t === 'fixed' ? 'Rigid' : JOINT_LABEL[t], on: () => t === suggest, run: () => addJoint(m, t, t === 'fixed' ? null : a, parent) })),
+  ]);
+}
 let axisMemo = null;   // the last face fitted: the pointer stays on one face for many moves
 function faceAxis(h) {   // { kind, origin, axis, radius? } in the geometry's own (rest) frame
   const m = h.body, f = m.userData.faces?.find((f) => h.faceIndex >= f.first && h.faceIndex < f.first + f.count);
@@ -1137,9 +1156,10 @@ function setMode(mode) {
   for (const b of document.querySelectorAll('[data-mode]')) b.classList.toggle('on', b.dataset.mode === mode);
   endPickAxis(); endPickJoint();
   applyExplode();
-  say(mode === 'joint' ? 'joint mode: drag a jointed part to move it · right-click a part to add a joint' : 'explode mode: drag a part to slide it out · right-click a part for its explode axis');
+  say(mode === 'joint' ? 'joint mode: drag a jointed part to move it · New joint (N) joins two parts' : 'explode mode: drag a part to slide it out · right-click a part for its explode axis');
 }
 for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('click', () => setMode(b.dataset.mode));
+$('#newJointBtn').addEventListener('click', () => startPickJoint());
 document.documentElement.dataset.mode = ui.mode;
 
 // The panel: one row per joint, a slider to drive it, its parent and limits.
@@ -2041,6 +2061,7 @@ const CMDS = [
   ...['x', 'y', 'z'].map((a) => ({ key: a, label: `Section ${a.toUpperCase()}`, btn: `[data-sect="${a}"]`, run: () => setSectionAxis(section.axis === a ? '' : a), on: () => section.axis === a })),
   { key: 'i', label: 'Invert section', btn: '#sectFlip', run: () => { if (section.axis) { section.flip *= -1; updateSection(); } } },
   { sep: true },
+  { key: 'n', label: 'New joint', btn: '#newJointBtn', run: () => startPickJoint() },
   { key: 'j', label: 'Joint / explode mode', btn: '[data-mode="joint"]', run: () => setMode(ui.mode === 'joint' ? 'explode' : 'joint'), on: () => ui.mode === 'joint' },
   { key: '0', label: 'Explode all / none', btn: '#explode', run: () => setExplode(+$('#explode').value ? 0 : 100), on: () => +$('#explode').value > 0 },
   { key: '=', label: 'Explode more', run: () => setExplode(+$('#explode').value + 10) },
@@ -2125,7 +2146,7 @@ document.body.appendChild(menu);
 // Right-clicked on a body: its explode axis first (Auto = the solver's, with the way it went).
 function jointCmds(m) {
   return [
-    ...['revolute', 'slider', 'screw', 'cylindrical', 'ball', 'fixed'].map((t) => ({ label: `Joint: ${JOINT_LABEL[t].toLowerCase()}${t === 'fixed' ? '' : '…'}`, run: () => startPickJoint(m, t), on: () => jointOf(m)?.type === t })),
+    { label: 'New joint…', run: startPickJoint },
     ...(jointOf(m) ? [{ label: 'Remove joint', run: () => removeJoint(jointOf(m)) }] : []),
     { sep: true },
   ];
@@ -2145,8 +2166,9 @@ function partCmds(m) {
     ]),
   ];
 }
-function showMenu(x, y, part) {
-  menu.replaceChildren(...[...partCmds(part), ...CMDS.filter((c) => !(ui.mode === 'joint' && /^Explode/.test(c.label)))].map((c) => {
+function showMenu(x, y, part) { showItems(x, y, [...partCmds(part), ...CMDS.filter((c) => !(ui.mode === 'joint' && /^Explode/.test(c.label)))]); }
+function showItems(x, y, items) {
+  menu.replaceChildren(...items.map((c) => {
     if (c.sep) return document.createElement('hr');
     if (c.head) return Object.assign(document.createElement('div'), { className: 'hd', textContent: c.head });
     const b = document.createElement('button');
