@@ -92,13 +92,12 @@ export function pack(m) {
  *   POST    /api/view/open {paths}      tell every open page to open these files (the MCP tool)
  *   GET|PUT /api/view/parts?subject=    per-file explode axes and maxima, by body name
  */
-/** The one file in a multipart/form-data body (what Share to web sends; ponytail: one part, no streaming). */
+/** The one file in a multipart/form-data body (what a shared-link upload sends; ponytail: one part, no streaming). */
 function multipartFile(buf, ctype) {
   const b = Buffer.from('--' + /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(ctype).slice(1).find(Boolean));
   const start = buf.indexOf('\r\n\r\n', buf.indexOf(b)) + 4;
   return buf.subarray(start, buf.indexOf(Buffer.concat([Buffer.from('\r\n'), b]), start));
 }
-const SHARE_HOST = process.env.CADGANG_SHARE_HOST || 'https://www.experiments.cwandt.com/cadgang';
 const SHARE_KEY_FILE = path.join(os.homedir(), '.cadgang', 'share_key');
 const shareKey = () => { try { return fsSync.readFileSync(SHARE_KEY_FILE, 'utf8').trim(); } catch { return process.env.CADGANG_SHARE_KEY || ''; } };
 
@@ -306,7 +305,7 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     } catch (e) { next(e); }
   });
 
-  // Save project: the page's bundle (same layout as Share to web) written to a .cadgang file chosen
+  // Save project: the page's bundle (same layout as a shared link) written to a .cadgang file chosen
   // by the shell's Save panel. Local paths only, like reading them; written beside the target and
   // renamed in, so a crash mid-save never leaves a half project over a good one.
   r.put('/project', express.raw({ type: () => true, limit: '2gb' }), async (req, res, next) => {
@@ -322,30 +321,7 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     } catch (e) { next(e); }
   });
 
-  // Share to web: a frozen copy of the view (the page's bundle: u32 header length, header JSON, then
-  // each file's bytes) stored on the VPS under an unguessable id; anyone with the link opens it in a
-  // browser and gets the whole viewer, starting from the shared view. The Mac app's server forwards
-  // the bundle with the share key (~/.cadgang/share_key on both machines); the page never sees it.
-  r.post('/share', express.raw({ type: () => true, limit: '1gb' }), async (req, res, next) => {
-    try {
-      if (!mayReadLocal(req)) throw Object.assign(new Error('Sharing starts from the Mac app'), { status: 403 });
-      const key = shareKey();
-      if (!key) throw Object.assign(new Error(`No share key: put it in ${SHARE_KEY_FILE}`), { status: 500 });
-      // DreamHost's ModSecurity refuses plain bodies over 2.5 MB (and flags small binary ones as attacks),
-      // and its proxy drops multipart ones over ~5 MB: the bundle goes up as 1 MB file parts.
-      const CHUNK = 1 << 20, of = Math.max(1, Math.ceil(req.body.length / CHUNK));
-      let id = '';
-      for (let part = 0; part < of; part++) {
-        const form = new FormData();
-        form.append('part', new Blob([req.body.subarray(part * CHUNK, (part + 1) * CHUNK)], { type: 'application/octet-stream' }), 'part.bin');
-        const up = await fetch(`${SHARE_HOST}/api/view/share/store?part=${part}&of=${of}${id ? `&id=${id}` : ''}`, { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form });
-        const d = await up.json().catch(() => ({}));
-        if (!up.ok) throw Object.assign(new Error(d.error || `share host: HTTP ${up.status} on part ${part + 1} of ${of}`), { status: 502 });
-        id = d.id;
-      }
-      res.json({ id, url: `${SHARE_HOST}/view?share=${id}` });
-    } catch (e) { next(e); }
-  });
+  // Shared links: bundles stored on the VPS under an unguessable id (the app no longer uploads them).
   r.post('/share/store', express.raw({ type: () => true, limit: '8mb' }), async (req, res, next) => {
     try {
       const key = shareKey(), got = String(req.headers.authorization || '').replace(/^Bearer /, '');

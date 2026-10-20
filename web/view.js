@@ -127,7 +127,7 @@ scene.add(model, edges);
 let grid = null;
 let bbox = null;
 let joints = [];   // see JOINTS: the bodies that move on an axis
-let sources = [];   // what each open file loaded as: [{name, cad, buffer}] (CAD tessellated), for Share to web
+let sources = [];   // what each open file loaded as: [{name, cad, buffer}] (CAD tessellated), for project files
 
 function clearModel() {
   for (const g of [model, edges]) {
@@ -706,7 +706,7 @@ function bakeRot(q) {
   for (const m of model.children) {
     for (const g of [m.geometry, m.userData.edges?.geometry]) {
       if (!g) continue;
-      for (const a of [g.attributes.position, g.attributes.normal]) if (a && sources.some((f) => f.buffer === a.array.buffer)) a.array = a.array.slice();   // never turn the bytes Share to web sends
+      for (const a of [g.attributes.position, g.attributes.normal]) if (a && sources.some((f) => f.buffer === a.array.buffer)) a.array = a.array.slice();   // never turn the bytes a project file saves
       g.applyMatrix4(M); g.computeBoundingBox();
     }
     m.userData.offset?.applyQuaternion(d);
@@ -1852,30 +1852,13 @@ fetch('api/health').then((r) => r.json()).then((h) => {
     : navigator.clipboard.writeText(link).then(() => say(`copied ${link}`), () => say(link)));
 }).catch(() => {});
 // ------------------------------------------------------------------- share
-// The share icon opens a menu: SHARE TO WEB uploads a frozen copy of this view (meshes + view state)
-// and copies its link; SHARE TO IPAD is the old iPad button. A shared link (?share=<id>) opens the
-// whole viewer from that view; its visitors orbit, cut, explode and mark up (markup is shared by
-// everyone with the link), but cannot open, save or share files.
+// The share icon opens a menu holding SHARE TO IPAD. Share to web is gone from the app (outside users
+// have no share host); a shared link (?share=<id>) on the VPS still opens the whole viewer from that view.
 const shareMenu = $('#shareMenu');
 $('#shareBtn').addEventListener('click', (e) => { e.stopPropagation(); shareMenu.hidden = !shareMenu.hidden; });
 document.addEventListener('click', () => { shareMenu.hidden = true; });
-$('#shareWeb').addEventListener('click', shareWeb);
-async function shareWeb() {
-  if (!sources.length) return say('open a file first', true);
-  say('sharing…');
-  const bundle = packBundle();
-  try {
-    const res = await fetch('api/view/share', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bundle });
-    const d = await res.json();
-    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
-    const shell = window.webkit?.messageHandlers?.cadgang;
-    if (shell) shell.postMessage({ cmd: 'copy', text: d.url });
-    else await navigator.clipboard.writeText(d.url).catch(() => {});
-    say(`link copied: ${d.url}`, false, true);
-  } catch (e) { say(`share failed: ${e.message}`, true); }
-}
-// A bundle is u32 header length, header JSON, then each source file's bytes: what Share to web uploads
-// and what a .cadgang project file holds. The header carries the view state (snap()), camera, theme and
+// A bundle is u32 header length, header JSON, then each source file's bytes: what a .cadgang project
+// file holds. The header carries the view state (snap()), camera, theme and
 // materials, so unpacking it puts back everything the page was showing.
 function packBundle(extra = {}) {
   const head = new TextEncoder().encode(JSON.stringify({
