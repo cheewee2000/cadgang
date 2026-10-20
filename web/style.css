@@ -127,6 +127,7 @@ footer {
 .drop-hint { font-size: var(--fs-12); }
 #viewport.dragover { outline: var(--bw-bold) solid var(--ink); outline-offset: -2px; }
 button.ghost.on { border-color: var(--ink); }
+#orthoBtn.on { border-color: #fff; box-shadow: 0 0 0 1px #fff, 0 0 0 2px var(--ink); }   /* ORTHO on: a white stroke, so the flat view is never mistaken for perspective */
 /* the preset dropdown dresses as a toolbar button */
 select.ghost {
   appearance: none; -webkit-appearance: none; cursor: pointer;
@@ -207,7 +208,9 @@ select.ghost:hover { opacity: 0.55; }
 .planes-menu input.name { flex: 1; font: inherit; border: 0; border-bottom: var(--bw-hair) solid var(--rule); background: none; color: var(--ink); }
 .planes-menu hr { border: 0; border-top: var(--bw-hair) solid var(--rule); margin: 2px 0; width: 100%; }
 /* view cube, lower right of the viewport (Bambu Studio's): faces, edges and corners pick a view; the button fits */
-.viewcube { position: absolute; right: var(--sp-3); bottom: var(--sp-3); z-index: 3; display: flex; align-items: flex-end; gap: var(--sp-1); pointer-events: none; }
+.hud-br { left: auto; right: var(--sp-3); bottom: var(--sp-3); flex-direction: column; align-items: flex-end; gap: var(--sp-2); pointer-events: none; }   /* view cube over the section bar */
+.hud-br > .sect { pointer-events: auto; background: var(--paper); }
+.viewcube { z-index: 3; display: flex; align-items: flex-end; gap: var(--sp-1); pointer-events: none; }
 .viewcube[hidden] { display: none; }
 .viewcube canvas { pointer-events: auto; cursor: pointer; width: 112px; height: 112px; }
 .viewcube-fit { pointer-events: auto; width: 34px; height: 34px; padding: 5px; border-radius: 50%; background: var(--paper); border: var(--bw-hair) solid var(--rule); color: var(--ink); display: flex; align-items: center; justify-content: center; margin-bottom: 4px; }
@@ -253,6 +256,7 @@ select.ghost:hover { opacity: 0.55; }
 #measures { flex: 1 1 auto; min-width: 0; }
 footer .foot-tools { display: flex; align-items: center; gap: var(--sp-1); }
 footer button.ghost { font-size: var(--fs-12); padding: 4px 8px; }
+footer select.ghost { font-size: var(--fs-12); padding: 6px 18px 6px 8px; height: auto; background-position: right 5px center; }   /* mm / in: the size of the buttons beside it */
 #stats { flex: 0 0 auto; text-align: right; color: var(--ink-soft); text-transform: uppercase; letter-spacing: var(--ls-label); font-variant-numeric: tabular-nums; }
 .status { color: var(--ink-soft); font-size: var(--fs-12); min-width: 84px; max-width: 40vw; text-align: right; text-transform: uppercase; letter-spacing: var(--ls-label); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 footer > * { white-space: nowrap; }

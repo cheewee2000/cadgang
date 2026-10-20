@@ -1,8 +1,10 @@
 /**
- * Reference planes, as SolidWorks has them: Front, Top and Right through the model's origin, each
+ * Reference planes, as SolidWorks has them: Front, Top and Right through the model's centre, each
  * on or off, and planes of your own: offset from one of those by a distance, or lying on a face you
  * click. A plane draws as a see-through square a little larger than the model, outlined, its name at
- * the corner. Kept per file in this browser.
+ * the corner. Front, Top, Right and the planes offset from them follow the model's centre, so they
+ * move when its parts are dragged or exploded; a plane made on a face stays where the face was.
+ * Kept per file in this browser.
  *
  * Model frame: Z up. Front is the XZ plane (seen from the front, normal −Y), Top the XY plane (+Z),
  * Right the YZ plane (+X).
@@ -63,13 +65,21 @@ export function createPlanes({ THREE, scene, getBox, getSubject, onChange = () =
     return g;
   }
   const quads = [];   // the visible planes' squares: what hit() tests
+  let lastCentre = '';
   function render() {
     quads.length = 0;
     for (const o of [...group.children]) { group.remove(o); o.traverse((x) => { x.geometry?.dispose(); x.material?.map?.dispose(); x.material?.dispose(); }); }
     const box = getBox();
     if (!box) return;
-    for (const [k, b] of Object.entries(BASE)) if (state.on[k]) group.add(planeMesh(b.name, [0, 0, 0], V3(b.normal), b.up, box));
-    for (const p of state.custom) if (p.on !== false) group.add(planeMesh(p.name, p.point, V3(p.normal).normalize(), p.up, box));
+    const c = box.getCenter(new THREE.Vector3());
+    lastCentre = c.toArray().map((v) => +v.toFixed(4)).join();
+    for (const [k, b] of Object.entries(BASE)) if (state.on[k]) group.add(planeMesh(b.name, c.toArray(), V3(b.normal), b.up, box));
+    for (const p of state.custom) {
+      if (p.on === false) continue;
+      const n = V3(p.normal).normalize();
+      const at = p.base ? c.clone().addScaledVector(n, p.offset).toArray() : p.point;   // offset planes ride the centre too
+      group.add(planeMesh(p.name, at, n, p.up, box));
+    }
   }
 
   // ----------------------------------------------------------------- making planes
@@ -78,10 +88,11 @@ export function createPlanes({ THREE, scene, getBox, getSubject, onChange = () =
     state.custom.push({ id: Math.random().toString(36).slice(2, 9), name: name || `Plane ${n}`, point: point.map((v) => +v.toFixed(4)), normal: normal.map((v) => +v.toFixed(6)), ...(up && { up }), on: true });
     save(); render(); paint();
   }
-  /** A plane parallel to Front, Top or Right, `d` mm along its normal. */
+  /** A plane parallel to Front, Top or Right, `d` mm along its normal from the model's centre. */
   function offset(base, d) {
-    const b = BASE[base], n = V3(b.normal);
-    add(`${b.name} ${d >= 0 ? '+' : '−'}${Math.abs(d)} mm`, n.clone().multiplyScalar(d).toArray(), b.normal, b.up);
+    const b = BASE[base];
+    state.custom.push({ id: Math.random().toString(36).slice(2, 9), name: `${b.name} ${d >= 0 ? '+' : '−'}${Math.abs(d)} mm`, base, offset: d, normal: b.normal, up: b.up, on: true });
+    save(); render(); paint();
   }
 
   // ----------------------------------------------------------------- the menu
@@ -134,6 +145,13 @@ export function createPlanes({ THREE, scene, getBox, getSubject, onChange = () =
 
   return {
     el: wrap, load, render,
+    /** Each frame: when the model's centre has moved (a part dragged, the explode slider), redraw. */
+    follow() {
+      if (!group.children.length && !state.custom.length && !Object.values(state.on).some(Boolean)) return;
+      const box = getBox(); if (!box) return;
+      const k = box.getCenter(new THREE.Vector3()).toArray().map((v) => +v.toFixed(4)).join();
+      if (k !== lastCentre) render();
+    },
     /** The nearest visible plane along a ray: { point, normal, distance }, or null. Markups draw on planes. */
     hit(raycaster) {
       const h = raycaster.intersectObjects(quads, false)[0];

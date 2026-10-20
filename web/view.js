@@ -34,7 +34,7 @@ import { createPlanes } from './planes.js';
 import { turnAbout as turnOrbit, yawPitchOf, offsetOf } from './orbitmath.js';
 
 const $ = (s) => document.querySelector(s);
-const ui = { edges: true, wire: false, grid: true, look: 'shaded', ortho: false, flat: false, color: false }; // flat: a 2D drawing is open
+const ui = { edges: true, wire: false, grid: true, ruler: false, units: 'mm', look: 'shaded', ortho: false, flat: false, color: false }; // flat: a 2D drawing is open
 const section = { plane: new THREE.Plane(new THREE.Vector3(0, 0, -1), 0), axis: '', flip: 1 };
 const CAD_EXT = /\.(step|stp|iges|igs|brep)$/i;
 
@@ -664,7 +664,7 @@ const partKey = (m) => { const all = model.children; return `${m.userData.name}#
 let partsReady = false, partsSaved = '{}', partsTimer = null;
 function partsState() {
   const out = {};
-  for (const m of model.children) if (m.userData.axis || m.userData.pull != null) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null };
+  for (const m of model.children) if (m.userData.axis || m.userData.pull != null || m.userData.moved) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null, ...(m.userData.moved && { moved: m.userData.moved.toArray().map((v) => +v.toFixed(4)) }) };
   if (rot.w < 1 - 1e-9) out['@rot'] = rotArr();   // the axes and marks above are in this turned frame
   return out;
 }
@@ -683,7 +683,7 @@ function loadParts() {
     if (s !== subject) return;
     const r = d.parts?.['@rot'];
     if (r) { bakeRot(new THREE.Quaternion().fromArray(r)); history.list = []; history.i = -1; queueMicrotask(commit); }   // undo never goes back past the saved turn
-    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; } }
+    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; m.userData.moved = p.moved ? new THREE.Vector3(...p.moved) : undefined; } }
     partsSaved = JSON.stringify(partsState()); partsReady = true;
     applyExplode();
   }).catch(() => { partsReady = true; });
@@ -698,6 +698,7 @@ function applyExplode() {
     const dist = maxTravel(m) * k;
     m.position.copy(v).multiplyScalar(len ? dist / len : 0);
     if (m.userData.parent) m.position.add(place(m.userData.parent));
+    if (m.userData.moved) m.position.add(m.userData.moved);   // where it was dragged on the grid
     if (m.userData.edges) m.userData.edges.position.copy(m.position);
     return m.position;
   };
@@ -788,18 +789,81 @@ function finishLoad(name, ms, keep = false) {
   postSnapshot();
 }
 
+// Units for the grid and the ruler: mm, or inches (the grid then steps in ⅛, ¼, ½, 1 … inches).
+const UNIT_MM = { mm: 1, in: 25.4 };
+let gridStep = 0;   // the grid's spacing in mm: what ⇧ snaps a dragged part to
+const fmtLen = (mm) => (ui.units === 'in' ? `${(mm / 25.4).toFixed(3)} in` : `${mm.toFixed(2)} mm`);
+
+// RULER: the grid's scale along its front (X) and left (Y) edges, counting from 0 at the corner, in
+// the chosen unit: a tick on every grid line, a longer one with its number every few (about ten an edge).
+let ruler = null;
+function placeRuler(gridStepMM, gridDivs, x0, y0, z) {
+  if (ruler) { scene.remove(ruler); ruler.traverse((o) => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); }); ruler = null; }
+  // A tick on every grid line; a number about ten times an edge (mm), or at every inch (in: every
+  // other ½" line, or every few inches on a big grid).
+  const unit = UNIT_MM[ui.units], extent = gridStepMM * gridDivs;
+  const stepU = gridStepMM / unit, stepMM = gridStepMM, divs = gridDivs;
+  const perInch = ui.units === 'in' ? Math.round(1 / stepU) : 0;
+  const every = perInch ? perInch * Math.max(1, Math.ceil(divs / perInch / 12)) : Math.max(1, Math.ceil(divs / 10));
+  const ink = document.documentElement.dataset.theme === 'dark' ? '#d8d8d4' : '#55544f';
+  const g = new THREE.Group(), segs = [], span = extent;
+  const dec = Math.max(0, Math.min(4, Math.ceil(-Math.log10(stepU * every) + 1e-9)));
+  const th = stepMM * Math.min(every, 4) * 0.13;   // label height: small, a fraction of the labelled spacing
+  const label = (text, x, y, align) => {
+    const c = document.createElement('canvas'), ctx = c.getContext('2d'), px = 36;
+    ctx.font = `${px}px "Space Mono", monospace`;
+    c.width = Math.ceil(ctx.measureText(text).width + 8); c.height = px + 8;
+    ctx.font = `${px}px "Space Mono", monospace`; ctx.fillStyle = ink; ctx.textBaseline = 'middle'; ctx.textAlign = 'center'; ctx.fillText(text, c.width / 2, c.height / 2);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true }));
+    const w = th * c.width / c.height;
+    sp.scale.set(w, th, 1);
+    sp.position.set(align === 'right' ? x - w / 2 : x, y, z); sp.renderOrder = 3;
+    g.add(sp);
+  };
+  segs.push(x0, y0, z, x0 + span, y0, z, x0, y0, z, x0, y0 + span, z);   // the two edges
+  for (let i = 0; i <= divs; i++) {
+    const major = i % every === 0, len = th * (major ? 0.9 : 0.45);
+    const x = x0 + i * stepMM, y = y0 + i * stepMM;
+    segs.push(x, y0, z, x, y0 - len, z, x0, y, z, x0 - len, y, z);
+    if (!major) continue;
+    const v = (i * stepU).toFixed(dec);
+    label(v, x, y0 - len - th * 0.7);                       // under the front edge
+    if (i) label(v, x0 - len - th * 0.25, y, 'right');       // left of the left edge (0 once, at the corner)
+  }
+  label(ui.units, x0 + span + th * 1.2, y0 - th * 0.9 - th * 0.7);
+  const lines = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(segs, 3)), new THREE.LineBasicMaterial({ color: ink }));
+  lines.renderOrder = 3;
+  g.add(lines);
+  g.traverse((o) => { o.raycast = () => {}; });   // never a pick
+  g.visible = ui.ruler;
+  scene.add(ruler = g);
+}
+
 function placeGrid() {
   if (grid) { scene.remove(grid); grid.geometry.dispose(); grid = null; }
-  if (!bbox) return;
+  if (!bbox) { if (ruler) { scene.remove(ruler); ruler = null; } return; }
   const size = bbox.getSize(new THREE.Vector3());
   const span = Math.max(size.x, size.y) * 2 || 100;
-  const step = Math.pow(10, Math.floor(Math.log10(span / 10)));
-  const divs = Math.max(2, Math.round(span / step));
+  // inches: a line every ½" and a darker one every inch (a whole number of inches, so they line up);
+  // a very large model steps in whole inches instead. mm: a power of ten, as always.
+  const inch = ui.units === 'in', PER_INCH = 2;
+  const sub = inch && span / (25.4 / PER_INCH) <= 400;
+  const step = inch ? (sub ? 25.4 / PER_INCH : 25.4) : Math.pow(10, Math.floor(Math.log10(span / 10)));
+  gridStep = step;
+  let divs = Math.max(2, Math.round(span / step));
+  if (sub) divs = Math.max(PER_INCH, Math.ceil(divs / PER_INCH) * PER_INCH);
   grid = new THREE.GridHelper(divs * step, divs, 0xbdbdbd, 0xe3e3e3);
+  if (sub) {   // the inch lines, over the halves (a child: it rides the grid's turn and place)
+    const major = new THREE.GridHelper(divs * step, divs / PER_INCH, 0xa9a9a6, 0xa9a9a6);
+    major.position.y = 1e-4 * step;
+    grid.add(major);
+  }
   grid.rotation.x = Math.PI / 2;            // the part's Z is up
   grid.position.set((bbox.min.x + bbox.max.x) / 2, (bbox.min.y + bbox.max.y) / 2, bbox.min.z - step * 0.01); // a hair under a flat drawing
   grid.visible = ui.grid;
   scene.add(grid);
+  placeRuler(step, divs, grid.position.x - divs * step / 2, grid.position.y - divs * step / 2, grid.position.z);
 }
 
 // ------------------------------------------------------------------- camera
@@ -878,7 +942,15 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
     const hit = partAt(e);
     if (hit) { const v = explodeVec(hit.body); if (moves(hit.body, v)) drag.part = { m: hit.body, ...screenAxis(hit.point, v.normalize()) }; }
   }
-  if (!drag.pan && !drag.sect && !drag.part && !ui.flat) drag.pivot = hitAt(e);   // orbit about what was pressed on
+  // a selected part, pressed on: drag it across the grid (Bambu's Prepare); ⇧ snaps to grid steps
+  if (e.button === 0 && !e.altKey && !drag.sect && !drag.part && !measure.on && !ui.flat && e.pointerType !== 'touch' && selection.size) {
+    const m = bodyAt(e);
+    if (m && selection.has(m)) {
+      const h = hitAt(e);
+      if (h) drag.move = { bodies: sel(), plane: new THREE.Plane(new THREE.Vector3(0, 0, 1), -h.z), from: h.clone(), start: sel().map((b) => b.userData.moved?.clone() ?? new THREE.Vector3()) };
+    }
+  }
+  if (!drag.pan && !drag.sect && !drag.part && !drag.move && !ui.flat) drag.pivot = hitAt(e);   // orbit about what was pressed on
   renderer.domElement.setPointerCapture(e.pointerId);
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
@@ -929,6 +1001,18 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     applyExplode();
     return;
   }
+  if (drag.move) {   // slide the selection in the grid's plane, under the pointer
+    const r = renderer.domElement.getBoundingClientRect();
+    raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+    const q = raycaster.ray.intersectPlane(drag.move.plane, new THREE.Vector3());
+    if (!q) return;
+    const d = q.sub(drag.move.from); d.z = 0;
+    if (e.shiftKey && gridStep) { d.x = Math.round(d.x / gridStep) * gridStep; d.y = Math.round(d.y / gridStep) * gridStep; }
+    drag.move.bodies.forEach((m, i) => { m.userData.moved = drag.move.start[i].clone().add(d); });
+    applyExplode();
+    say(`moved ${fmtLen(d.x)}, ${fmtLen(d.y)}`);
+    return;
+  }
   if (drag.pan || ui.flat) {
     pan(dx, dy);
   } else {
@@ -944,7 +1028,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     showBodyMenu(e.clientX, e.clientY);
   }
   if (e.button === 2 && still) showMenu(e.clientX, e.clientY, partAt(e)?.body);
-  if (drag?.sect || drag?.part) commit();
+  if (drag?.sect || drag?.part || drag?.move) commit();
   drag = null;
   touches.delete(e.pointerId);
 });
@@ -1261,6 +1345,13 @@ function toggle(name, btn) {
   paintRows();
 }
 $('#colorBtn').addEventListener('click', () => toggle('color', '#colorBtn'));
+$('#rulerBtn').addEventListener('click', () => toggle('ruler', '#rulerBtn'));
+function setUnits(u) {
+  if (!UNIT_MM[u] || u === ui.units) return;
+  ui.units = u; $('#unitsSel').value = u;
+  placeGrid();   // inches: ¼" lines, darker every inch; mm: as always
+}
+$('#unitsSel').addEventListener('change', (e) => { setUnits(e.target.value); commit(); });
 $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
 $('#gridBtn').addEventListener('click', () => toggle('grid', '#gridBtn'));
@@ -1658,7 +1749,9 @@ function stepViewTween() {
 // Reference planes (Front / Top / Right on and off, and your own), next to Section (planes.js).
 let pickPlane = null;   // set while a new plane waits for its face
 const planes = createPlanes({
-  THREE, scene, getBox: () => bbox, getSubject: () => subject,
+  THREE, scene, getSubject: () => subject,
+  // the bodies where they are now (dragged, exploded): their own boxes, not their overlays
+  getBox: () => { if (!bbox) return null; const b = new THREE.Box3(); for (const m of model.children) { m.updateMatrixWorld(); if (m.geometry.boundingBox) b.union(m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld)); } return b.isEmpty() ? bbox : b; },
   pickFace: (done) => { pickPlane = done; renderer.domElement.classList.add('picking'); say('click a face for the new plane · Esc cancels'); },
 });
 const planesRow = Object.assign(document.createElement('div'), { className: 'hud-row' });   // Planes and Add an image, one line under Section
@@ -1668,8 +1761,14 @@ planesRow.append(planes.el);
 const imageBtn = Object.assign(document.createElement('button'), { className: 'ghost add-image', textContent: 'Add an image', title: 'Put a PNG or JPEG on a surface: choose it, then click a face (drag to size it)' });
 imageBtn.dataset.tool = 'image';
 imageBtn.addEventListener('click', () => markup.setTool('image'));
-planesRow.append(imageBtn);
+const imageBox = Object.assign(document.createElement('span'), { className: 'sect' });   // the Planes box's size and line
+imageBox.append(imageBtn);
+planesRow.append(imageBox);
 const viewCube = createViewCube({ THREE, container: viewport, getCamera: () => camera, onView: lookFrom, onFit: () => { fit(); commit(); } });
+// Lower right: the view cube, and the section bar under it.
+const hudBR = Object.assign(document.createElement('div'), { className: 'hud hud-br' });
+viewport.append(hudBR);
+hudBR.append(viewCube.el, $('#sectAxis'));
 
 // MATERIALS needs something for metal and glass to reflect in the live view: a soft studio room.
 let roomEnv = null;
@@ -1683,12 +1782,14 @@ let roomEnv = null;
     }
   }
   stepViewTween();
+  planes.follow();
   applyCamera();
   updateSilhouettes();
   // The ground goes as soon as it would hide the model: seen from under it (camera below it, or an ortho view
   // looking up, whose rays start below it). The grid, and the WebGL render's floor; the Metal render drops its own.
   const above = (z) => (ui.ortho ? camera.getWorldDirection(new THREE.Vector3()).z < 0 : camera.position.z >= z);
   if (grid) grid.visible = ui.grid && above(grid.position.z);
+  if (ruler) ruler.visible = ui.ruler && !!grid && above(grid.position.z);
   if (rt.on && !NATIVE && rt.floor && rt.floor.visible !== above(rt.floor.position.z)) { rt.floor.visible = !rt.floor.visible; syncRender(); }
   if (sky.visible) { sky.position.copy(orbit.target); sky.scale.setScalar(orbit.dist * 50); sky.material.uniforms.center.value.copy(orbit.target); }
   if (rt.on && NATIVE) nativeCam(); else if (rt.pt && rt.on) renderSample(); else renderer.render(scene, camera);
@@ -1792,6 +1893,7 @@ const CMDS = [
   { key: 'e', label: 'Edges', run: () => toggle('edges', '#edgesBtn'), btn: '#edgesBtn', on: () => ui.edges },
   { key: 'w', label: 'Wireframe', run: () => toggle('wire', '#wireBtn'), btn: '#wireBtn', on: () => ui.wire },
   { key: 'g', label: 'Grid', run: () => toggle('grid', '#gridBtn'), btn: '#gridBtn', on: () => ui.grid },
+  { key: 'g', shift: true, label: 'Ruler', run: () => toggle('ruler', '#rulerBtn'), btn: '#rulerBtn', on: () => ui.ruler },
   { key: 'c', label: 'Color parts', run: () => toggle('color', '#colorBtn'), btn: '#colorBtn', on: () => ui.color },
   { key: 'k', label: 'Render (global illumination)', run: () => setRender(!rt.on), btn: '#renderBtn', on: () => rt.on },
   { key: 'o', label: 'Orthographic', run: () => setOrtho(!ui.ortho), btn: '#orthoBtn', on: () => ui.ortho },
@@ -1838,9 +1940,9 @@ window.addEventListener('keydown', (e) => {
 // ponytail: whole-state JSON snapshots, not deltas — the state is a few hundred bytes.
 const history = { list: [], i: -1 };
 function snap() {
-  return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho,
+  return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value, rot: rotArr(),
-    bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3)]),
+    bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3), m.userData.moved?.toArray().map((v) => +v.toFixed(4)) ?? null]),
     markup: markup.items, dims: measure.dims });
 }
 function commit() {
@@ -1848,7 +1950,7 @@ function commit() {
   if (s === history.list[history.i]) return;
   rerender();
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, color: ui.color, ortho: ui.ortho })); } catch {}
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, color: ui.color, ortho: ui.ortho })); } catch {}
 }
 // View preferences outlive the page, like the theme. Section, explode and body
 // visibility belong to a file and start fresh with it.
@@ -1856,7 +1958,8 @@ const PREFS_KEY = 'cadgang-view';
 try {
   const p = JSON.parse(localStorage.getItem(PREFS_KEY));
   if (p?.look in PRESETS) ui.look = document.documentElement.dataset.look = $('#look').value = p.look;
-  for (const k of ['edges', 'wire', 'grid', 'color']) if (typeof p?.[k] === 'boolean' && ui[k] !== p[k]) toggle(k, `#${k}Btn`);
+  if (UNIT_MM[p?.units]) { ui.units = $('#unitsSel').value = p.units; }
+  for (const k of ['edges', 'wire', 'grid', 'ruler', 'color']) if (typeof p?.[k] === 'boolean' && ui[k] !== p[k]) toggle(k, `#${k}Btn`);
   if (p?.ortho) setOrtho(true);
 } catch {}
 function apply(s) {
@@ -1864,10 +1967,11 @@ function apply(s) {
   const r = st.rot ?? [0, 0, 0, 1];   // the state's marks, dims and axes are in its own turn: only the geometry follows
   if (bbox && JSON.stringify(r) !== JSON.stringify(rotArr())) bakeRot(new THREE.Quaternion().fromArray(r));
   if (st.look !== ui.look) { ui.look = document.documentElement.dataset.look = $('#look').value = st.look; for (const m of model.children) styleMesh(m); }
-  for (const k of ['edges', 'wire', 'grid', 'color']) if (ui[k] !== st[k]) toggle(k, `#${k}Btn`);
+  for (const k of ['edges', 'wire', 'grid', 'ruler', 'color']) if (ui[k] !== st[k]) toggle(k, `#${k}Btn`);
   if (ui.ortho !== st.ortho) setOrtho(st.ortho);
+  if (st.units && st.units !== ui.units) setUnits(st.units);
   $('#sectPos').value = st.section.pos; section.flip = st.section.flip; setSectionAxis(st.section.axis);
-  model.children.forEach((m, i) => { const [axis, pull] = st.parts?.[i] ?? [null, null]; m.userData.axis = axis || undefined; m.userData.pull = pull ?? undefined; });
+  model.children.forEach((m, i) => { const [axis, pull, moved] = st.parts?.[i] ?? [null, null, null]; m.userData.axis = axis || undefined; m.userData.pull = pull ?? undefined; m.userData.moved = moved ? new THREE.Vector3(...moved) : undefined; });
   $('#explode').value = st.explode; applyExplode();
   model.children.forEach((m, i) => {
     setBodyVisible(m, st.bodies[i] ?? true); setBodyGhost(m, !!st.ghosts?.[i]);
