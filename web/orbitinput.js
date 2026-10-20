@@ -1,8 +1,8 @@
 /**
  * Camera input from a trackpad or a mouse wheel, shared by every viewport.
  *   mouse wheel     zoom to the pointer, as Bambu Studio does
- *   scroll          rotate (two fingers = turn the part)
- *   shift + scroll  pan
+ *   scroll          pan (two fingers slide the view, as Bambu Studio's trackpad does)
+ *   shift + scroll  rotate
  *   pinch / ⌥scroll zoom to the pointer (Chrome sends a pinch as a wheel event with ctrlKey;
  *                         WebKit sends gesturestart/gesturechange with a scale)
  *   two-finger spin turn a flat drawing in 90° steps (WebKit gesture rotation)
@@ -22,7 +22,7 @@ export function attachOrbitInput(el, { orbit, camera, getCamera = () => camera, 
     lastWheel = e.timeStamp;
     if (wheelMouse && !e.ctrlKey) { zoomAt(e, Math.exp(-Math.sign(e.deltaY) * 0.15)); return; }
     if (e.ctrlKey || e.altKey) { zoomAt(e, Math.exp(Math.max(-0.5, Math.min(0.5, e.deltaY * 0.01)))); return; }   // pinch: spread comes closer
-    if (e.shiftKey || isFlat()) {
+    if (!e.shiftKey || isFlat()) {   // two fingers pan; with ⇧ they turn the part
       const k = orbit.dist * 0.0015;
       const cam = getCamera();
       const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
