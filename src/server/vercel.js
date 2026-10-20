@@ -3,7 +3,8 @@
  * (web/) plus the view's bundle, gzipped and cut into share.<n>.bin parts under Vercel's 100 MB file
  * limit, listed in share.json, in a project of theirs named cadgang-shares. The page there reads
  * share.json and puts the bundle back together (view.js openShare).
- * Visitors orbit, cut, explode and mark up; their marks stay in their own browser (no server there).
+ * Visitors orbit, cut, explode and mark up; marks are kept per link in the project's private Blob
+ * store by the one function deployed with it (vercel/api/view/markup.js), so every visitor sees them.
  * ponytail: personal-scope tokens only; pass ?teamId= on every call if team tokens are ever needed.
  */
 import fs from 'node:fs/promises';
@@ -13,7 +14,8 @@ import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { promisify } from 'node:util';
 
-const WEB = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const WEB = path.join(ROOT, 'web'), FN = path.join(ROOT, 'vercel');
 const API = 'https://api.vercel.com';
 export const PROJECT = 'cadgang-shares';
 const VERCEL_JSON = JSON.stringify({ rewrites: [{ source: '/view', destination: '/view.html' }] });
@@ -27,7 +29,7 @@ async function webFiles(dir = WEB, rel = '') {
     if (e.isDirectory()) out.push(...await webFiles(path.join(dir, e.name), r));
     else out.push({ file: r, data: await fs.readFile(path.join(dir, e.name)) });
   }
-  const page = out.find((f) => f.file === 'view.html');   // the page there has no server: it keeps its saves to itself
+  const page = out.find((f) => f.file === 'view.html');   // the page there has no app server: only its markups go anywhere
   if (page) page.data = Buffer.from(page.data.toString().replace('<head>', '<head><script>window.cadgangServerless = true</script>'));
   return out;
 }
@@ -44,6 +46,17 @@ export async function deployShare(bundle, token, { fetch = globalThis.fetch, wai
   const parts = Array.from({ length: Math.max(1, Math.ceil(gz.length / PART)) }, (_, i) => ({ file: `share.${i}.bin`, data: gz.subarray(i * PART, (i + 1) * PART) }));
   const files = [...await webFiles(), ...parts, { file: 'share.json', data: Buffer.from(JSON.stringify({ parts: parts.length, gzip: true })) }, { file: 'vercel.json', data: Buffer.from(VERCEL_JSON) }]
     .map((f) => ({ ...f, sha: crypto.createHash('sha1').update(f.data).digest('hex') }));
+  // The project and its Blob store come first: a store's credentials reach deployments made after it is connected.
+  let proj = await call(`/v9/projects/${PROJECT}`);
+  if (proj.status === 404) proj = await call('/v11/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: PROJECT, framework: null }) });
+  if (!proj.ok) throw fail(proj, 'project');
+  const env = await call(`/v9/projects/${proj.d.id}/env`);
+  if (!env.ok) throw fail(env, 'project settings');
+  if (!env.d.envs?.some((e) => /^BLOB_(READ_WRITE_TOKEN|STORE_ID)$/.test(e.key))) {
+    const st = await call('/storage/stores/blob', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `${PROJECT}-markups`, access: 'private', projectId: proj.d.id }) });
+    if (!st.ok) throw fail(st, 'markup storage');
+  }
+  files.push(...(await webFiles(FN)).map((f) => ({ ...f, sha: crypto.createHash('sha1').update(f.data).digest('hex') })));
   const create = () => call('/v13/deployments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
     name: PROJECT, projectSettings: { framework: null }, files: files.map(({ file, sha, data }) => ({ file, sha, size: data.length })),
   }) });

@@ -47,7 +47,7 @@ body { display: flex; flex-direction: column; }
 .share-dialog a { color: var(--ink); overflow-wrap: anywhere; }
 .share-dialog-btns { display: flex; gap: var(--sp-2); justify-content: flex-end; }
 /* A shared link: the viewer, without the file and share controls. */
-:root.shared #openBtn, :root.shared #newBtn, :root.shared #drawBtn, :root.shared .share, :root.shared #defaultBtn { display: none; }
+:root.shared #openBtn, :root.shared #newBtn, :root.shared #drawBtn, :root.shared .share, :root.shared #defaultBtn, :root.shared #saveBtn { display: none; }
 :root.native-render #viewport canvas { opacity: 0; }
 
 /* ------------------------------------------------------------ header */

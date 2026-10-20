@@ -1367,7 +1367,7 @@ function parseCad(buffer) {
 }
 
 async function api(path, { method = 'GET', body } = {}) {
-  if (window.cadgangServerless) { if (method === 'GET') throw new Error('no server'); return {}; }   // a Vercel share: reads fall back, saves stay in the page
+  if (window.cadgangServerless && !path.startsWith('/markup')) { if (method === 'GET') throw new Error('no server'); return {}; }   // a Vercel share keeps only its markups (vercel/api/view/markup.js)
   const res = await fetch('api/view' + path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -1926,8 +1926,8 @@ async function loadBundle(buf, { markupFromServer = false } = {}) {
   model.children.forEach((m, i) => head.materials?.[i] && pickMaterial(m, head.materials[i]));
   const st = JSON.parse(head.state);
   if (markupFromServer) {
-    const marks = await api(`/markup?subject=${encodeURIComponent(subject)}`).then((d) => d.markups).catch(() => []);
-    if (marks.length) st.markup = marks;   // later visitors' marks, not just the ones it was shared with
+    const marks = await api(`/markup?subject=${encodeURIComponent(subject)}`).then((d) => d.markups).catch(() => null);
+    if (Array.isArray(marks) && (marks.length || window.cadgangServerless)) st.markup = marks;   // on Vercel, erasing every mark sticks too   // later visitors' marks, not just the ones it was shared with
   }
   apply(JSON.stringify(st)); commit();
   if (!markupFromServer) markupChanged(markup.items);
@@ -1945,6 +1945,7 @@ let projectPath = '';   // where this window's project was last saved or opened 
 const projectName = () => ($('#fileName').textContent || 'project').replace(/\.[^.]+$/, '') + '.cadgang';
 function saveProject(asNew = false) {
   document.activeElement?.blur?.();   // a field still being typed in commits first (its change event fires on blur)
+  if (document.documentElement.classList.contains('shared')) return;   // a shared link has no Save
   if (!sources.length) return say('open a file first', true);
   const shell = window.webkit?.messageHandlers?.cadgang;
   if (shell) {

@@ -11,10 +11,12 @@ test('deployShare uploads only missing files and returns the ready link', async 
     const json = (status, d) => ({ ok: status < 300, status, json: async () => d });
     if (url.endsWith('/v13/deployments')) {
       const body = JSON.parse(init.body);
-      assert.ok(body.files.some((f) => f.file === 'share.0.bin') && body.files.some((f) => f.file === 'share.json') && body.files.some((f) => f.file === 'view.html') && body.files.some((f) => f.file === 'vercel.json'));
+      assert.ok(body.files.some((f) => f.file === 'share.0.bin') && body.files.some((f) => f.file === 'share.json') && body.files.some((f) => f.file === 'view.html') && body.files.some((f) => f.file === 'vercel.json') && body.files.some((f) => f.file === 'api/view/markup.js'));
       if (creates++ === 0) return json(400, { error: { code: 'missing_files', missing: [body.files.find((f) => f.file === 'share.0.bin').sha] } });
       return json(200, { id: 'dpl_1', url: 'cadgang-shares-abc.vercel.app', readyState: 'BUILDING' });
     }
+    if (url.endsWith('/v9/projects/cadgang-shares') && !init.method) return json(200, { id: 'prj' });
+    if (url.endsWith('/v9/projects/prj/env')) return json(200, { envs: [{ key: 'BLOB_STORE_ID' }] });   // the markup store is already there
     if (url.includes('/v2/files')) { assert.equal(init.headers['x-vercel-digest'].length, 40); return json(200, {}); }
     if (url.includes('/v9/projects/')) { assert.deepEqual(JSON.parse(init.body), { ssoProtection: null }); return json(200, {}); }
     if (url.endsWith('/v13/deployments/dpl_1')) return json(200, { id: 'dpl_1', url: 'cadgang-shares-abc.vercel.app', readyState: ++polls > 1 ? 'READY' : 'BUILDING' });
