@@ -930,7 +930,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   if (drag.pan || ui.flat) {
     pan(dx, dy);
   } else {
-    orbit.yaw += (e.pointerType === 'touch' ? -dx : dx) * 0.006;   // a finger drags the model with it; a mouse drags the camera
+    orbit.yaw -= dx * 0.006;   // the model follows the pointer, as it follows two fingers scrolling
     orbit.pitch += dy * 0.006;
   }
 });
