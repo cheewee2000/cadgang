@@ -1212,14 +1212,16 @@ function saveJoints() {
     api('/joints', { method: 'PUT', body: { subject, joints, from: clientId } }).catch(() => {});
   }, 400);
 }
+let jointsReq = 0;
 function loadJoints() {
   const s = subject;
   if (!s) return;
+  const mine = ++jointsReq;   // replies can cross when Claude drives quickly: only the newest one counts, or an old pose lands last and is saved back over the new
   api(`/joints?subject=${encodeURIComponent(s)}`).then((d) => {
-    if (s !== subject) return;
+    if (s !== subject || mine !== jointsReq) return;
     const next = (d.joints ?? []).map(normalizeJoint);
-    jointsSaved = JSON.stringify(next);
-    if (jointsSaved !== JSON.stringify(joints)) { setJoints(next); commit(); }
+    if (JSON.stringify(next) !== JSON.stringify(joints)) { setJoints(next); commit(); }
+    jointsSaved = JSON.stringify(joints);   // this is what the server holds: nothing to write back
   }).catch(() => {});
 }
 // What Claude needs to make a joint without guessing: each body's key and box, and its round faces (axis, centre, radius).
