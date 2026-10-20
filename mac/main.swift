@@ -104,9 +104,11 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         return w
     }
 
-    /// The page asked for a window (window.open): give it one. WebKit loads the request into the view we return.
+    /// The page asked for a window (window.open, target=_blank): give it one, unless it is another site
+    /// (a link like vercel.com/account/tokens), which opens in the default browser. WebKit loads the request into the view we return.
     func webView(_ w: WKWebView, createWebViewWith cfg: WKWebViewConfiguration, for nav: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        makeWindow(cfg)
+        if let u = nav.request.url, u.host != BASE.host { NSWorkspace.shared.open(u); return nil }
+        return makeWindow(cfg)
     }
 
     @objc func showCells(_ s: Any?) { web.load(URLRequest(url: BASE.appendingPathComponent("cells"))) }
