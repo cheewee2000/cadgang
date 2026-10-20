@@ -531,7 +531,8 @@ $('#selMaterial').addEventListener('change', (e) => {
 // maximum travel: twice the solver's offset, or userData.pull (world units) once a drag pushed it
 // further. Dragging a part IS the slider with that part as the handle: the whole model follows so
 // each part sits at the same fraction of its own maximum; dragged past its maximum, the part's
-// maximum grows to where it is (and the slider pins at 100). RESET forgets maxima and axes.
+// maximum grows to where it is (and the slider pins at 100). With the slider at 100, a drag moves that part
+// alone and where it is let go is its maximum, nearer or further. RESET forgets maxima and axes.
 // (v0.14.16: before, a drag pinned only that part at a fixed spot and the rest stayed put.)
 // userData.axis: a world unit vector [x, y, z] picked off a face (v0.14.10), or a `${sign}${axis}`
 // string from the old menu (still honoured when a saved view carries one).
@@ -855,7 +856,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
     const hit = partAt(e);   // a part under the mouse slides along its explode axis; empty space orbits
     const j = ui.mode === 'joint' && hit && drivingJoint(hit.body);
     if (ui.mode === 'joint') { if (j) drag.joint = { j, m: bodyOfKey(j.body), hit: hit.body, local: hit.point.clone().applyMatrix4(hit.body.matrixWorld.clone().invert()) }; }   // joint mode: a jointed part turns or slides on its joint, anything else orbits
-    else if (hit) { const v = explodeVec(hit.body); if (moves(hit.body, v)) drag.part = { m: hit.body, ...screenAxis(hit.point, v.normalize()) }; }
+    else if (hit) { const v = explodeVec(hit.body); if (moves(hit.body, v)) drag.part = { m: hit.body, full: +$('#explode').value >= 100, ...screenAxis(hit.point, v.normalize()) }; }
   }
   renderer.domElement.setPointerCapture(e.pointerId);
 });
@@ -921,6 +922,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   if (drag.part) {
     const m = drag.part.m, max = maxTravel(m), S = stageCount();
     const d = Math.max(0, max * stageFrac(m, +$('#explode').value / 100) + dx * drag.part.sx + dy * drag.part.sy);
+    if (drag.part.full) { m.userData.pull = d; applyExplode(); return; }   // fully exploded: the drag places this part alone, there is its maximum
     if (d > max) m.userData.pull = d;   // past its maximum: that is the new maximum
     const f = Math.min(1, d / maxTravel(m));
     $('#explode').value = 100 * (S < 2 ? f : ((m.userData.stage ?? 0) + f) / S);   // the part is the slider's handle, in its own slice
