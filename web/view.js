@@ -28,6 +28,7 @@ import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { MATERIALS, materialOf, pickMaterial, materialFor } from './materials.js';
 import { silhouetteEdges, silhouetteFor } from './silhouette.js';
+import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
 
 const $ = (s) => document.querySelector(s);
 const ui = { edges: true, wire: false, grid: true, look: 'shaded', ortho: false, flat: false, color: false }; // flat: a 2D drawing is open
@@ -199,9 +200,25 @@ function faceBorderEdges(pos, idx, faces) {
   return new Float32Array(out);
 }
 
+// Rays (hover, snaps, measure, picks) go through a BVH per body: a board's half-million triangles
+// took ~50 ms a ray walked one by one, and a snap checks up to a dozen. Indirect, so the index and
+// the B-rep face ranges stay as they are. Built on a body's first ray (and again after a turn
+// rewrote its geometry or the explode solver dropped it), and ahead of time just after a load.
+function bodyRaycast(raycaster, hits) {
+  const g = this.geometry, tris = (g.index ? g.index.count : g.getAttribute('position').count) / 3;
+  if (!g.boundsTree && tris > 2000) g.boundsTree = new MeshBVH(g, { indirect: true });
+  acceleratedRaycast.call(this, raycaster, hits);
+}
+function warmRays() {
+  const todo = model.children.filter((m) => m.isMesh && !m.geometry.boundsTree);
+  const step = () => { const m = todo.shift(); if (!m) return; if (m.parent && !m.geometry.boundsTree) bodyRaycast.call(m, new THREE.Raycaster(new THREE.Vector3(1e9, 1e9, 1e9), new THREE.Vector3(0, 0, 1)), []); setTimeout(step, 0); };
+  setTimeout(step, 200);   // one body per tick, after the first frame is up
+}
+
 function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', path = [], color = null, pbr = null, groups = null, material = '', opacity = 1 } = {}) {
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
   const m = new THREE.Mesh(geo);
+  m.raycast = bodyRaycast;
   m.userData.flat = flat;
   m.userData.file = file;
   m.userData.name = name || `body ${model.children.length + 1}`;
@@ -703,6 +720,9 @@ function bakeRot(q) {
       for (const a of [g.attributes.position, g.attributes.normal]) if (a && sources.some((f) => f.buffer === a.array.buffer)) a.array = a.array.slice();   // never turn the bytes Share to web sends
       g.applyMatrix4(M); g.computeBoundingBox();
     }
+    delete m.geometry.boundsTree;   // its ray tree answers for the old pose: rebuilt on the next ray
+    if (m.userData.sil?.line) { m.remove(m.userData.sil.line); m.userData.sil.line.geometry.dispose(); }
+    delete m.userData.sil;          // the silhouette candidates were in the old pose too
     m.userData.offset?.applyQuaternion(d);
   }
   rot.copy(q);
@@ -752,6 +772,7 @@ function finishLoad(name, ms, keep = false) {
   $('#drop').hidden = true; $('#loadError').textContent = '';
   placeGrid();
   const dups = listBodies();
+  warmRays();
   setupSection();
   // A flat drawing is read from above and handled like paper: pan, turn in quarters, flip over.
   ui.flat = size.z < 1e-9; $('#sideBtn').hidden = !ui.flat;
@@ -1315,6 +1336,7 @@ const markup = createMarkup({
   THREE, renderer, scene, orbit, layer: $('#markupLayer'), tools: $('#markupTools'),
   getCamera: () => camera, getTargets: () => model.children,
   onChange: (items) => { markupChanged(items); commit(); },
+  snap: { snapAt: (e) => measure.snapAt(e), showSnap: (e) => measure.showSnap(e), clearSnap: () => measure.clearSnap() },   // the arrow snaps like measure
 });
 let markupTimer = null;
 let subject = '';   // what is open: the file path(s) from the shell, or the dropped file name(s)
