@@ -36,6 +36,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   const looks = (item) => (item.done ? [DONE, item.width, DONE_ALPHA] : [item.color, item.width, 1]);
   const fatLine = (pts, mat) => new Line2(new LineGeometry().setPositions(pts.flatMap((p) => p.toArray())), mat);
   let tool = null;
+  let editId = null, imgDrag = null;   // the picture being edited (by id: the server's echo replaces items), and its drag
   let items = [];
   let current = null;
   let noteInput = null;
@@ -204,11 +205,12 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     const n = V3(item.normal ?? [0, 0, 1]), u = V3(item.up ?? [0, 1, 0]), r = u.clone().cross(n);
     const basis = new THREE.Matrix4().makeBasis(r, u, n);
     const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: item.done ? DONE_ALPHA : 1, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, side: THREE.DoubleSide });
-    const part = item !== current && item.body && byKey(item.body);   // while it is being sized: flat, the projection waits for the release
+    const moving = item === current || (imgDrag && item.id === editId);
+    const part = !moving && item.body && byKey(item.body);   // while it is placed, moved or sized: flat, the projection waits for the release
     let geo = null;
     if (part?.isMesh) {
       part.geometry.computeBoundingBox();
-      const key = `${item.id}|${w}|${part.geometry.boundingBox.min.toArray().join()}`;
+      const key = `${item.id}|${w}|${item.aspect}|${item.crop?.join()}|${item.points[0].join()}|${item.normal?.join()}|${item.up?.join()}|${part.geometry.boundingBox.min.toArray().join()}`;
       geo = decals.get(key);
       if (!geo) {
         part.updateMatrixWorld(true);
@@ -216,16 +218,85 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
         geo = new DecalGeometry(part, world, new THREE.Euler().setFromRotationMatrix(basis), new THREE.Vector3(w, h, Math.max(w, h) * 0.6));
         geo.translate(-part.position.x, -part.position.y, -part.position.z);
         if (!geo.getAttribute('position').count) { geo.dispose(); geo = null; }
-        else decals.set(key, geo);
+        else { cropUV(geo, item.crop); decals.set(key, geo); }
       }
     }
-    const mesh = geo ? new THREE.Mesh(geo, mat) : new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+    const mesh = geo ? new THREE.Mesh(geo, mat) : new THREE.Mesh(cropUV(new THREE.PlaneGeometry(w, h), item.crop), mat);
     if (!geo) { mesh.quaternion.setFromRotationMatrix(basis); mesh.position.copy(at).addScaledVector(n, w * 0.002); }
     mesh.renderOrder = 4;
     mesh.userData.keepGeo = !!geo;   // a cached decal outlives a rebuild
     mesh.userData.own = true;
-    return mesh;
+    if (item.id !== editId) return mesh;
+    // being edited: its outline, and a dot at each corner to drag for size
+    const g = new THREE.Group(); g.add(mesh);
+    const lift = n.clone().multiplyScalar(w * 0.004);
+    const cs = imageCorners(item, at).map((c) => c.add(lift));
+    g.add(fatLine([...cs, cs[0]], matFor('#2f5d8a', 2).line));
+    for (const c of cs) { const d = new THREE.Mesh(new THREE.SphereGeometry(orbit.dist * 0.004, 10, 8), matFor('#2f5d8a', 2).solid); d.position.copy(c); g.add(d); }
+    g.traverse((x) => { x.renderOrder = Math.max(x.renderOrder, 4); });
+    return g;
   }
+  /** Show only a window of the picture: crop [u0, v0, u1, v1] of the whole image (0..1, v up). */
+  function cropUV(geo, crop) {
+    if (!crop) return geo;
+    const uv = geo.getAttribute('uv');
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, crop[0] + uv.getX(i) * (crop[2] - crop[0]), crop[1] + uv.getY(i) * (crop[3] - crop[1]));
+    uv.needsUpdate = true;
+    return geo;
+  }
+  /** A picture's corners in its rest frame: centre ± half its width along its right, ± half its height along its up. */
+  function imageCorners(item, at = V3(item.points[0])) {
+    const w = item.size, h = w / (item.aspect || 1), n = V3(item.normal ?? [0, 0, 1]), u = V3(item.up ?? [0, 1, 0]), r = u.clone().cross(n);
+    return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => at.clone().addScaledVector(r, a * w / 2).addScaledVector(u, b * h / 2));
+  }
+
+  // Double-click a picture to edit it: drag it to move it (over the part's surface, or within its
+  // plane), drag a corner dot to size it; ⌫ deletes it, Esc, Enter or a click elsewhere is done.
+  const editing = () => (editId ? items.find((i) => i.id === editId) ?? null : null);
+  function imageUnder(e) {
+    raycaster.setFromCamera(ndc(e), getCamera());
+    const h = raycaster.intersectObjects(group.children, true).find((x) => x.object.userData.item?.kind === 'image' || x.object.parent?.userData.item?.kind === 'image');
+    const it = h && (h.object.userData.item ?? h.object.parent.userData.item);
+    return it ? items.find((i) => i.id === it.id) ?? null : null;
+  }
+  // Where the pointer is on the picture being edited, as Figma reads it: on a corner dot (size; with ⌘,
+  // crop), just outside a corner (rotate), on an edge's middle with ⌘ (crop that edge), inside (move).
+  const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M5 12a7 7 0 1 1 3 5.7" fill="none" stroke="white" stroke-width="4"/><path d="M5 12a7 7 0 1 1 3 5.7" fill="none" stroke="black" stroke-width="1.6"/><path d="M2 9l3 4 3-4" fill="black" stroke="white" stroke-width="1"/></svg>')}") 12 12, alias`;
+  function zoneAt(e, ed) {
+    const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    const at = V3(toWorld(ed, ed.points[0])), cs = imageCorners(ed, at), sc = cs.map((c) => toScreen(c.toArray()));
+    const ctr = toScreen(at.toArray());
+    for (let i = 0; i < 4; i++) {
+      const d = Math.hypot(sc[i].x - x, sc[i].y - y);
+      if (d < 10) return { kind: 'corner', i };
+      // just outside it: farther from the centre than the corner, and within 30 px of it
+      const out = Math.hypot(x - ctr.x, y - ctr.y) > Math.hypot(sc[i].x - ctr.x, sc[i].y - ctr.y);
+      if (d < 30 && out) return { kind: 'rotate', i };
+    }
+    if (e.metaKey) for (let i = 0; i < 4; i++) {
+      const a = sc[i], b = sc[(i + 1) % 4];
+      if (Math.hypot((a.x + b.x) / 2 - x, (a.y + b.y) / 2 - y) < 10) return { kind: 'edge', i };
+    }
+    return imageUnder(e)?.id === ed.id ? { kind: 'inside' } : null;
+  }
+  const cursorFor = (z, e) => (!z ? '' : z.kind === 'rotate' ? ROTATE_CURSOR : z.kind === 'corner' ? (e.metaKey ? 'crosshair' : 'nwse-resize') : z.kind === 'edge' ? 'crosshair' : 'move');
+  /** The picture's frame on its plane, for a drag: centre, normal, right, up, its visible rect and the whole image's. */
+  function frameOf(ed) {
+    const at = V3(toWorld(ed, ed.points[0])), n = V3(ed.normal ?? [0, 0, 1]), u = V3(ed.up ?? [0, 1, 0]), r = u.clone().cross(n);
+    const w = ed.size, h = w / (ed.aspect || 1), c = ed.crop ?? [0, 0, 1, 1];
+    const W = w / (c[2] - c[0]), H = h / (c[3] - c[1]);   // the whole image, at this scale
+    const L = -w / 2, B = -h / 2;
+    return { at, n, u, r, w, h, L, R: w / 2, B, T: h / 2, FL: L - c[0] * W, FB: B - c[1] * H, W, H };
+  }
+  const localOn = (e, f) => { const q = onPlane(e, f.at, f.n); if (!q) return null; const d = V3(q).sub(f.at); return { a: d.dot(f.r), b: d.dot(f.u) }; };
+
+  function endEdit() { if (!editId) return; editId = null; imgDrag = null; canvas.style.cursor = tool ? 'crosshair' : ''; rebuild(); }
+  canvas.addEventListener('dblclick', (e) => {
+    const it = imageUnder(e);
+    if (!it) return;
+    e.stopImmediatePropagation(); e.preventDefault();   // not the view's re-centre
+    editId = it.id; rebuild();
+  }, { capture: true });
   // The picture the IMAGE tool places next: chosen when the tool is picked, kept until another is.
   let picked = null;
   const fileInput = Object.assign(document.createElement('input'), { type: 'file', accept: 'image/png,image/jpeg' });
@@ -349,6 +420,24 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     draft = null; handle = null; hoverP = null;
     rebuild();
   }
+  // ⇧ with the pen, as in Figma: the next anchor goes horizontal, vertical or at 45° from the last one,
+  // as seen on screen (and a handle being dragged locks the same way about its anchor).
+  const STEP45 = Math.PI / 4;
+  function lockScreen(e, fromWorld) {
+    const r = canvas.getBoundingClientRect(), o = toScreen(fromWorld.toArray());
+    const dx = e.clientX - r.left - o.x, dy = e.clientY - r.top - o.y;
+    const ang = Math.round(Math.atan2(dy, dx) / STEP45) * STEP45, len = dx * Math.cos(ang) + dy * Math.sin(ang);
+    return { clientX: r.left + o.x + Math.cos(ang) * len, clientY: r.top + o.y + Math.sin(ang) * len };
+  }
+  /** Where the pen's next anchor goes for this pointer: locked with ⇧ (on the model or a plane there, else in the
+   *  plane through the last anchor facing the eye), otherwise the snap or the surface under the pointer. */
+  function penPoint(e) {
+    if (!(e.shiftKey && draft?.nodes.length)) return null;
+    const lastW = V3(toWorld(draft, draft.nodes[draft.nodes.length - 1].p)), at = lockScreen(e, lastW);
+    const p = pointAt(at);
+    if (hitBody || hitPlane) return p;
+    return onPlane(at, lastW, getCamera().getWorldDirection(new THREE.Vector3()));
+  }
   function penDown(e, p, body) {
     // on the first anchor again: close the shape
     if (draft && draft.nodes.length > 1) {
@@ -366,14 +455,22 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   }
   function penMove(e) {
     if (Math.hypot(e.clientX - handle.x, e.clientY - handle.y) < 3) return;   // a click, not a drag: a corner
-    let q = onPlane(e, handle.origin, handle.n);
-    if (!q) { const n = new THREE.Vector3(); getCamera().getWorldDirection(n); q = onPlane(e, handle.origin, n); }
+    const at = e.shiftKey ? lockScreen(e, handle.origin) : e;   // ⇧: the handle at 0°, 45°, 90°…
+    let q = onPlane(at, handle.origin, handle.n);
+    if (!q) { const n = new THREE.Vector3(); getCamera().getWorldDirection(n); q = onPlane(at, handle.origin, n); }
     if (!q) return;
     const out = V3(q).sub(handle.origin);
     handle.node.out = out.toArray().map((v) => +v.toFixed(4));
     handle.node.in = out.negate().toArray().map((v) => +v.toFixed(4));   // mirrored, as Figma's pen
     rebuild();
   }
+  window.addEventListener('keydown', (e) => {
+    if (!editId || e.target.matches?.('input,textarea')) return;
+    if (e.key === 'Backspace' || e.key === 'Delete') { items = items.filter((i) => i.id !== editId); editId = null; changed(); rebuild(); }
+    else if (e.key === 'Escape' || e.key === 'Enter') endEdit();
+    else return;
+    e.preventDefault(); e.stopImmediatePropagation();
+  }, { capture: true });
   window.addEventListener('keydown', (e) => {
     if (!draft || e.target.matches?.('input,textarea')) return;
     if (e.key === 'Enter' || e.key === 'Escape') { finishDraft(); }
@@ -411,6 +508,21 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   const mine = (e) => !!current && e.pointerId === last.id;
 
   canvas.addEventListener('pointerdown', (e) => {
+    const ed = editing();
+    if (ed && e.button === 0) {
+      const z = zoneAt(e, ed);
+      if (z) {
+        e.stopImmediatePropagation(); e.preventDefault();
+        const f = frameOf(ed), at = f.at;
+        const hit = pointAt(e);
+        const mode = z.kind === 'rotate' ? 'rotate' : z.kind === 'edge' || (z.kind === 'corner' && e.metaKey) ? 'crop' : z.kind === 'corner' ? 'size' : 'move';
+        imgDrag = { mode, zone: z, id: e.pointerId, grab: hit ? V3(hit).sub(at) : new THREE.Vector3(), f, start: localOn(e, f), crop: [...(ed.crop ?? [0, 0, 1, 1])] };
+        canvas.setPointerCapture(e.pointerId);
+        rebuild();
+        return;
+      }
+      endEdit();   // a press elsewhere ends the edit; it goes on to the view or a tool
+    }
     const using = e.button === 0 ? toolFor(e) : null;
     if (!using) return;
     if (current) { e.stopImmediatePropagation(); e.preventDefault(); return; }   // a second finger mid-stroke: neither draws nor orbits
@@ -421,11 +533,13 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       return;
     }
     let p = pointAt(e);
+    const locked = using === 'path' ? penPoint(e) : null;   // ⇧ with the pen: on the 45° lines from the last anchor
+    if (locked) p = locked;
     // an arrow's head, or a pen anchor, goes exactly on the corner, centre or edge the hover lit up (⌥: anywhere)
-    const s = (using === 'arrow' || using === 'path') && snap?.snapAt(e);
+    const s = !locked && (using === 'arrow' || using === 'path') && snap?.snapAt(e);
     if (s) p = s.toArray();
     // a mark lives on the model: pressed on nothing, the press is the view's (orbit), and no mark is made
-    if (!p || (!hitBody && !hitPlane && !s)) return;
+    if (!p || (!hitBody && !hitPlane && !s && !locked)) return;
     e.stopImmediatePropagation(); e.preventDefault();
     snap?.clearSnap();
     const body = hitBody ? { body: keyOf(hitBody) } : {};
@@ -451,10 +565,57 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   }, { capture: true });
 
   canvas.addEventListener('pointermove', (e) => {
+    if (imgDrag && e.pointerId === imgDrag.id) {
+      e.stopImmediatePropagation();
+      const ed = editing(); if (!ed) { imgDrag = null; return; }
+      const at = V3(toWorld(ed, ed.points[0])), n = V3(ed.normal ?? [0, 0, 1]);
+      if (imgDrag.mode === 'size') {
+        const q = onPlane(e, at, n); if (!q) return;
+        const d = V3(q).sub(at), u = V3(ed.up ?? [0, 1, 0]), r = u.clone().cross(n);
+        ed.size = +Math.max(Math.abs(d.dot(r)) * 2, Math.abs(d.dot(u)) * 2 * (ed.aspect || 1), orbit.dist * 0.01).toFixed(4);
+      } else if (imgDrag.mode === 'rotate') {   // about its normal, by the pointer's turn round its centre; ⇧ in 15° steps
+        const f = imgDrag.f, p = localOn(e, f); if (!p || !imgDrag.start) return;
+        let ang = Math.atan2(p.b, p.a) - Math.atan2(imgDrag.start.b, imgDrag.start.a);
+        if (e.shiftKey) ang = Math.round(ang / (Math.PI / 12)) * (Math.PI / 12);
+        ed.up = f.u.clone().applyAxisAngle(f.n, ang).toArray().map((v) => +v.toFixed(6));
+      } else if (imgDrag.mode === 'crop') {
+        // the dragged corner or edge moves, within the whole image; the rest of the picture stays on the model
+        const f = imgDrag.f, p = localOn(e, f); if (!p) return;
+        let { L, R, B, T } = f;
+        const min = Math.max(f.w, f.h) * 0.04;
+        const z = imgDrag.zone, i = z.i;   // corners 0 ↙ 1 ↘ 2 ↗ 3 ↖; edges 0 bottom, 1 right, 2 top, 3 left
+        const left = z.kind === 'corner' ? i === 0 || i === 3 : i === 3, right = z.kind === 'corner' ? i === 1 || i === 2 : i === 1;
+        const bottom = z.kind === 'corner' ? i === 0 || i === 1 : i === 0, top = z.kind === 'corner' ? i === 2 || i === 3 : i === 2;
+        if (left) L = Math.min(Math.max(p.a, f.FL), R - min);
+        if (right) R = Math.max(Math.min(p.a, f.FL + f.W), L + min);
+        if (bottom) B = Math.min(Math.max(p.b, f.FB), T - min);
+        if (top) T = Math.max(Math.min(p.b, f.FB + f.H), B + min);
+        const at = f.at.clone().addScaledVector(f.r, (L + R) / 2).addScaledVector(f.u, (B + T) / 2);
+        ed.points = [toRest(ed, at.toArray())];
+        ed.size = +(R - L).toFixed(4); ed.aspect = +((R - L) / (T - B)).toFixed(6);
+        ed.imgAspect ??= +(f.W / f.H).toFixed(6);
+        ed.crop = [(L - f.FL) / f.W, (B - f.FB) / f.H, (R - f.FL) / f.W, (T - f.FB) / f.H].map((v) => +v.toFixed(5));
+      } else if (ed.body) {   // on a part: slide over its surface, onto each face it crosses, keeping its turn
+        const p = pointAt(e); if (!p || !hitBody) return;
+        const fr = faceFrame(e);
+        ed.points = [toRest(ed, V3(p).sub(imgDrag.grab.clone().projectOnPlane(n)).toArray())];
+        if (fr) {
+          const n2 = V3(fr.normal), up = V3(ed.up ?? fr.up).projectOnPlane(n2);
+          ed.normal = fr.normal; ed.up = (up.lengthSq() > 1e-6 ? up.normalize() : V3(fr.up)).toArray().map((v) => +v.toFixed(6));
+        }
+      } else {   // on a plane: within the plane
+        const q = onPlane(e, at, n); if (!q) return;
+        ed.points = [toRest(ed, V3(q).sub(imgDrag.grab).toArray())];
+        imgDrag.grab.set(0, 0, 0);
+      }
+      rebuild();
+      return;
+    }
     if (handle && e.pointerId === handle.id) { e.stopImmediatePropagation(); penMove(e); return; }
+    if (editId && !imgDrag && !e.buttons) { const ed = editing(); if (ed) canvas.style.cursor = cursorFor(zoneAt(e, ed), e); }
     if (!current) {   // ARROW, PEN: light up the point or edge it would land on (not while the view is dragged)
       if ((tool === 'arrow' || tool === 'path') && !e.buttons && e.pointerType !== 'touch') { const lit = snap?.showSnap(e); canvas.style.cursor = lit ? 'cell' : 'crosshair'; }
-      if (draft && tool === 'path' && !e.buttons) { hoverP = snap?.snapAt(e)?.toArray() ?? pointAt(e); rebuild(); }
+      if (draft && tool === 'path' && !e.buttons) { hoverP = penPoint(e) ?? snap?.snapAt(e)?.toArray() ?? pointAt(e); rebuild(); }
       return;
     }
     if (!mine(e)) return;
@@ -489,6 +650,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   canvas.addEventListener('pointerleave', () => { if (!current) snap?.clearSnap(); });
 
   canvas.addEventListener('pointerup', (e) => {
+    if (imgDrag && e.pointerId === imgDrag.id) { e.stopImmediatePropagation(); imgDrag = null; changed(); rebuild(); return; }   // projected again, where it now is
     if (handle && e.pointerId === handle.id) { e.stopImmediatePropagation(); handle = null; rebuild(); return; }
     if (!mine(e)) return;
     e.stopImmediatePropagation();
@@ -499,6 +661,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       const item = { ...rest, at: new Date().toISOString() };
       items.push(item); changed();
       if (item.kind === 'arrow') startNote(toWorld(item, item.points[0]), e, item);   // an arrow says something: ask what, where the drag ended
+      if (item.kind === 'image') { current = null; setTool(null); return; }   // one picture per ADD AN IMAGE; double-click it to move or size it
     }
     current = null;
     rebuild();
