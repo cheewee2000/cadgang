@@ -167,7 +167,7 @@ server.registerTool(
 );
 
 // ---- joints: bodies that move on an axis (a screw that turns and advances, a hinge, a drawer)
-const JOINT_TYPES = ['revolute', 'slider', 'screw', 'cylindrical', 'ball', 'fixed'];
+const JOINT_TYPES = ['revolute', 'slider', 'screw', 'cylindrical', 'planar', 'ball', 'fixed'];
 const ISO_PITCH = [[2, 0.4], [2.5, 0.45], [3, 0.5], [4, 0.7], [5, 0.8], [6, 1], [8, 1.25], [10, 1.5], [12, 1.75], [16, 2], [20, 2.5], [24, 3]];   // metric coarse, by nominal diameter
 const isoPitch = (d) => ISO_PITCH.reduce((b, p) => (Math.abs(p[0] - d) < Math.abs(b[0] - d) ? p : b))[1];
 const unit3 = (v) => { const n = Math.hypot(...v); if (!n) throw new Error('axis must not be zero'); return v.map((x) => +(x / n).toFixed(6)); };
@@ -210,7 +210,7 @@ server.registerTool(
     title: 'Bodies, joints and the notes that ask for them',
     description: `The bodies of the file on screen, the joints between them, and the user's notes and arrows read as requests for joints.
 
-A joint lets a body move on an axis, as in Fusion 360: 'revolute' turns about an axis, 'slider' slides along it, 'screw' turns AND advances (pitch mm per turn, right-handed: a positive turn goes along +axis), 'cylindrical' turns and slides independently (value = degrees, value2 = mm), 'ball' turns freely about a point (origin) by Euler angles rot = [x, y, z] degrees (a sphere you can spin to any orientation), 'fixed' rides with its parent. Angles are degrees, lengths mm. 'parent' is the body the joint is carried by (null = ground): a nut on a bolt on a plate follows the plate; a chain works (a lens fixed to a cell that screws into a housing that hinges).
+A joint lets a body move on an axis, as in Fusion 360: 'revolute' turns about an axis, 'slider' slides along it, 'screw' turns AND advances (pitch mm per turn, right-handed: a positive turn goes along +axis), 'cylindrical' turns and slides independently (value = degrees, value2 = mm), 'planar' slides on a plane (origin, axis = its normal) and turns about the normal (value = degrees, value2 / value3 = mm along the plane's x / y, offset = mm off the plane along the normal; the plane's x is world x laid into it, or world y when the normal is near x), 'ball' turns freely about a point (origin) by Euler angles rot = [x, y, z] degrees (a sphere you can spin to any orientation), 'fixed' rides with its parent. Angles are degrees, lengths mm. 'parent' is the body the joint is carried by (null = ground): a nut on a bolt on a plate follows the plate; a chain works (a lens fixed to a cell that screws into a housing that hinges).
 
 Each body has a 'key' ("name#n", what joints refer to; it never changes), a 'label' when the user renamed it (use the label in what you say to them: it is the name they see), its box [minx,miny,minz,maxx,maxy,maxz] and its round faces ('cylinders': origin on the axis, axis, radius, length; the longest first): a screw's shank, a pin, a bore. Origins and axes are in the file's frame, the one the box is in.
 
@@ -237,7 +237,7 @@ server.registerTool(
     description: `Change the joints of the file on screen (see cadgang_joints for what they are and the body keys).
 
   - action 'add': type + body (a key, or a unique body name). For revolute/slider/screw/cylindrical with no axis and origin, the body's longest round face gives them (a screw's shank, a pin); otherwise pass both. A screw with no pitch gets the ISO metric coarse pitch for its diameter. One joint per body: adding replaces the body's joint.
-  - action 'update': id (or body) + any of value, value2, rotation, pitch, min, max, parent, name, origin, axis. This is also how you DRIVE a joint: set value (degrees, or mm for a slider; for a screw, 360 is one turn) and the part moves on the user's screen. min/max limit value (null = free).
+  - action 'update': id (or body) + any of value, value2, value3, offset, rotation, pitch, min, max, parent, name, origin, axis. This is also how you DRIVE a joint: set value (degrees, or mm for a slider; for a screw, 360 is one turn) and the part moves on the user's screen. min/max limit value (null = free).
   - action 'remove': id (or body). action 'clear': every joint.
 
 To unscrew a screw: update its joint to a large value (say 2160 = six turns at 1.5 mm pitch). Take cadgang_screen after to see it.`,
@@ -249,7 +249,8 @@ To unscrew a screw: update its joint to a large value (say 2160 = six turns at 1
       parent: z.string().nullable().optional().describe('body that carries this one; null = ground'),
       origin: z.array(z.number()).length(3).optional().describe('a point on the axis, file frame, mm'),
       axis: z.array(z.number()).length(3).optional().describe('axis direction (any length)'),
-      value: z.number().optional(), value2: z.number().optional().describe('cylindrical: the slide, mm'),
+      value: z.number().optional(), value2: z.number().optional().describe('cylindrical: the slide, mm; planar: mm along the plane x'),
+      value3: z.number().optional().describe('planar: mm along the plane y'), offset: z.number().optional().describe('planar: mm off the plane along its normal'),
       rotation: z.array(z.number()).length(3).optional().describe('ball: Euler angles [x, y, z] in degrees (the turn about origin)'),
       pitch: z.number().optional().describe('screw: mm per turn; negative = left-hand'),
       min: z.number().nullable().optional(), max: z.number().nullable().optional(),
@@ -283,7 +284,7 @@ To unscrew a screw: update its joint to a large value (say 2160 = six turns at 1
         }
         const j = {
           id: 'j' + Math.random().toString(36).slice(2, 8), name: a.name || `${a.type} · ${b.name}`, type: a.type, body: b.key, parent: body(a.parent)?.key ?? null,
-          origin: num(origin || [0, 0, 0]), axis: unit3(axis || [0, 0, 1]), rot: a.rotation ?? [0, 0, 0], value: a.value ?? 0, value2: a.value2 ?? 0,
+          origin: num(origin || [0, 0, 0]), axis: unit3(axis || [0, 0, 1]), rot: a.rotation ?? [0, 0, 0], value: a.value ?? 0, value2: a.value2 ?? 0, value3: a.value3 ?? 0, offset: a.offset ?? 0,
           pitch: a.type === 'screw' ? a.pitch ?? (radius ? isoPitch(radius * 2) : 1.5) : 0, min: a.min ?? null, max: a.max ?? null,
         };
         joints = [...joints.filter((x) => x.body !== b.key), j];
@@ -292,7 +293,7 @@ To unscrew a screw: update its joint to a large value (say 2160 = six turns at 1
         if (!j) throw new Error(`No such joint. Joints: ${joints.map((x) => `${x.id} (${x.type} ${x.body})`).join(', ') || 'none'}`);
         if (a.action === 'remove') joints = joints.filter((x) => x !== j);
         else {
-          for (const k of ['name', 'value', 'value2', 'pitch', 'min', 'max']) if (a[k] !== undefined) j[k] = a[k];
+          for (const k of ['name', 'value', 'value2', 'value3', 'offset', 'pitch', 'min', 'max']) if (a[k] !== undefined) j[k] = a[k];
           if (a.parent !== undefined) j.parent = body(a.parent)?.key ?? null;
           if (a.origin) j.origin = num(a.origin);
           if (a.axis) j.axis = unit3(a.axis);

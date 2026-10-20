@@ -12,16 +12,29 @@ import * as THREE from 'three';
  *                a positive turn about the axis goes along it; a negative pitch is a left-hand thread)
  *   cylindrical  turns `value` degrees and slides `value2` mm, independently
  *   ball         turns freely about the point `origin`: `rot` is the turn as Euler angles [x, y, z] in degrees
+ *   planar       slides on the plane through `origin` with normal `axis` and turns about that normal:
+ *                `value` degrees, `value2` / `value3` mm along the plane's own x / y (planeAxes), and
+ *                `offset` mm off the plane along the normal (a gap, or a part lifted off its seat)
  *   fixed        rides with its parent, nothing of its own
  *
+ * `align` (16 numbers, column-major, or null) is where the joint first put the body, as Fusion's joint
+ * snaps the moving part onto the other: its picked face onto the parent's. The motion comes after it.
  * `body` and `parent` are part keys (`name#n`); a null parent is the ground. Origin and axis are in the
  * file's own frame, the one the geometry is in before any explode. A joint's parent carries it: the
  * pose of a body is its parent's pose followed by its own joint, so a nut on a screw on a plate follows
  * the plate. `min`/`max` (null = free) limit `value`.
  */
-export const JOINT_TYPES = ['revolute', 'slider', 'screw', 'cylindrical', 'ball', 'fixed'];
-export const JOINT_LABEL = { revolute: 'Revolute', slider: 'Slider', screw: 'Screw', cylindrical: 'Cylindrical', ball: 'Ball', fixed: 'Fixed' };
-export const turns = (type) => type === 'revolute' || type === 'screw' || type === 'cylindrical';
+export const JOINT_TYPES = ['revolute', 'slider', 'screw', 'cylindrical', 'planar', 'ball', 'fixed'];
+export const JOINT_LABEL = { revolute: 'Revolute', slider: 'Slider', screw: 'Screw', cylindrical: 'Cylindrical', planar: 'Planar', ball: 'Ball', fixed: 'Fixed' };
+export const turns = (type) => type === 'revolute' || type === 'screw' || type === 'cylindrical' || type === 'planar';
+
+/** A plane's own x and y for its normal: world x (or y, for a normal near x) laid into the plane, then n × x. */
+export function planeAxes(n) {
+  n = new THREE.Vector3(...n).normalize();
+  const ref = Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const u = ref.addScaledVector(n, -ref.dot(n)).normalize();
+  return [u, n.clone().cross(u)];
+}
 
 // ISO metric coarse pitch by nominal diameter: a good first guess for a screw read off its shank.
 const ISO = [[2, 0.4], [2.5, 0.45], [3, 0.5], [4, 0.7], [5, 0.8], [6, 1], [8, 1.25], [10, 1.5], [12, 1.75], [16, 2], [20, 2.5], [24, 3]];
@@ -40,7 +53,8 @@ export function normalizeJoint(j) {
     id: String(j?.id ?? ''), name: String(j?.name ?? ''), type, body: String(j?.body ?? ''), parent: j?.parent ? String(j.parent) : null,
     origin: vec(j?.origin, [0, 0, 0]), axis: a.toArray().map((v) => +v.toFixed(6)),
     rot: vec(j?.rot, [0, 0, 0]),
-    value: num(j?.value, 0), value2: num(j?.value2, 0), pitch: type === 'screw' ? num(j?.pitch, 1.5) : 0,
+    align: Array.isArray(j?.align) && j.align.length === 16 && j.align.every(Number.isFinite) ? j.align.map(Number) : null,
+    value: num(j?.value, 0), value2: num(j?.value2, 0), value3: num(j?.value3, 0), offset: num(j?.offset, 0), pitch: type === 'screw' ? num(j?.pitch, 1.5) : 0,
     min: j?.min == null || j.min === '' ? null : num(j.min, null), max: j?.max == null || j.max === '' ? null : num(j.max, null),
   };
   out.value = clampValue(out, out.value);
@@ -55,14 +69,20 @@ export function clampValue(j, v) {
 
 /** The joint's motion as a matrix in the file's frame (a point at rest → where the joint has put it). */
 export function jointMatrix(j) {
+  const m = motion(j);
+  return j.align ? m.multiply(new THREE.Matrix4().fromArray(j.align)) : m;
+}
+function motion(j) {
   if (j.type === 'ball') {
     const o = new THREE.Vector3(...j.origin), q = new THREE.Quaternion().setFromEuler(new THREE.Euler(...j.rot.map(THREE.MathUtils.degToRad), 'XYZ'));
     return new THREE.Matrix4().makeTranslation(o.x, o.y, o.z).multiply(new THREE.Matrix4().makeRotationFromQuaternion(q)).multiply(new THREE.Matrix4().makeTranslation(-o.x, -o.y, -o.z));
   }
   const n = new THREE.Vector3(...j.axis).normalize(), o = new THREE.Vector3(...j.origin);
   const angle = turns(j.type) ? THREE.MathUtils.degToRad(j.value) : 0;
-  const slide = j.type === 'slider' ? j.value : j.type === 'cylindrical' ? j.value2 : j.type === 'screw' ? (j.pitch * j.value) / 360 : 0;
-  const m = new THREE.Matrix4().makeTranslation(n.x * slide, n.y * slide, n.z * slide);
+  const slide = j.type === 'slider' ? j.value : j.type === 'cylindrical' ? j.value2 : j.type === 'screw' ? (j.pitch * j.value) / 360 : j.type === 'planar' ? j.offset : 0;
+  const t = n.clone().multiplyScalar(slide);
+  if (j.type === 'planar') { const [u, v] = planeAxes(j.axis); t.addScaledVector(u, j.value2).addScaledVector(v, j.value3); }
+  const m = new THREE.Matrix4().makeTranslation(t.x, t.y, t.z);
   if (angle) {
     m.multiply(new THREE.Matrix4().makeTranslation(o.x, o.y, o.z))
       .multiply(new THREE.Matrix4().makeRotationAxis(n, angle))

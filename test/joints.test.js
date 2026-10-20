@@ -83,3 +83,17 @@ test('a ball joint turns about its centre to any orientation', () => {
   assert.deepEqual(at(both, [0, 0, 1]), [0, -1, 0]);
   assert.deepEqual(J({ type: 'ball', rot: ['x', 1, 2] }).rot, [0, 0, 0]);   // untrusted rot is ignored
 });
+
+test('a planar joint slides on its plane, turns about its normal and lifts by its offset', () => {
+  const m = jointMatrix(J({ type: 'planar', origin: [0, 0, 0], axis: [0, 0, 1], value: 90, value2: 5, value3: -2, offset: 1 }));
+  assert.deepEqual(at(m, [1, 0, 0]), [5, -1, 1]);   // turned a quarter about z (→ [0,1,0]), then +5 x, −2 y, +1 off the plane
+  const tilted = jointMatrix(J({ type: 'planar', axis: [1, 0, 0], value2: 3 }));   // a normal along x: the plane's x is world y
+  assert.deepEqual(at(tilted, [0, 0, 0]), [0, 3, 0]);
+});
+
+test('a joint carries its snap: the align matrix comes first, then the motion', () => {
+  const align = new THREE.Matrix4().makeTranslation(0, 0, 10).toArray();
+  const m = jointMatrix(J({ type: 'slider', axis: [1, 0, 0], value: 2, align }));
+  assert.deepEqual(at(m, [0, 0, 0]), [2, 0, 10]);
+  assert.equal(normalizeJoint({ align: [1, 2] }).align, null);   // anything but 16 numbers is no snap
+});

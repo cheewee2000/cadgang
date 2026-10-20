@@ -22,7 +22,7 @@ import { attachOrbitInput } from './orbitinput.js';
 import { createMarkup } from './markup.js';
 import { parseDxf } from './dxf.js';
 import { explodeOffsets, radialOffsets, cylinders } from './explode.js';
-import { normalizeJoint, solvePoses, valueRange, clampValue, pitchFor, turns, eulerOf, JOINT_LABEL } from './joints.js';
+import { normalizeJoint, solvePoses, valueRange, clampValue, pitchFor, turns, eulerOf, planeAxes, JOINT_LABEL } from './joints.js';
 import { renderDrawing } from './drawing.js';
 import { createMeasure, cylinderFit, sphereFit } from './measure.js';
 import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
@@ -1033,14 +1033,14 @@ function setJointValue(j, key, v) {
   syncJointRow(j); applyExplode(); saveJoints();
 }
 function removeJoint(j) { joints = joints.filter((x) => x !== j); renderJoints(); applyExplode(); saveJoints(); commit(); }
-function addJoint(m, type, a, parent = null) {
+function addJoint(m, type, a, parent = null, align = null) {
   const key = bodyKeys().get(m), parentKey = parent ? bodyKeys().get(parent) : null;
   const centre = m.geometry.boundingBox.getCenter(new THREE.Vector3());
   const j = normalizeJoint({
     id: jointId(), type, body: key, parent: parentKey,
     name: `${JOINT_LABEL[type]} · ${nameOf(m)}${parent ? ` on ${nameOf(parent)}` : ''}`,
     origin: (a ? a.origin : centre).toArray().map(r6), axis: (a ? a.axis : new THREE.Vector3(0, 0, 1)).toArray().map(r6),
-    pitch: type === 'screw' ? pitchFor(a?.radius ? a.radius * 2 : 4) : 0,
+    pitch: type === 'screw' ? pitchFor(a?.radius ? a.radius * 2 : 4) : 0, align: align?.toArray().map(r6) ?? null,
   });
   setJoints([...joints.filter((x) => x.body !== key), j]);   // one joint per body
   commit();
@@ -1071,15 +1071,29 @@ function pickJointFace(e) {
   if (h?.body === pickJoint.first.m) return say('click a face on another part, or empty space for the ground');
   const { m, a: a1 } = pickJoint.first, parent = h?.body ?? null, a2 = h && faceAxis(h);
   const round = (a) => a && a.kind !== 'plane';
-  const a = round(a1) ? a1 : round(a2) ? a2 : a1;
-  const suggest = a.kind === 'sphere' ? 'ball' : a.kind === 'cyl' ? 'revolute' : 'slider';
+  const align = parent ? snapFace(a1, a2) : null;
+  const a = round(a2) ? a2 : round(a1) ? moved(a1, align) : a2 ?? a1;   // the joint lives on the parent: the faces meet there
+  const flatOnFlat = a1.kind === 'plane' && a2?.kind === 'plane' && Math.abs(a1.axis.dot(a2.axis)) > 0.999;   // two faces that mate (or a face on the ground): it slides about on them
+  const suggest = a.kind === 'sphere' ? 'ball' : a.kind === 'cyl' ? 'revolute' : flatOnFlat || !parent ? 'planar' : 'slider';
   endPickJoint();
-  const types = [suggest, ...['revolute', 'slider', 'screw', 'cylindrical', 'ball', 'fixed'].filter((t) => t !== suggest)];
+  const types = [suggest, ...['revolute', 'slider', 'screw', 'cylindrical', 'planar', 'ball', 'fixed'].filter((t) => t !== suggest)];
   showItems(e.clientX, e.clientY, [
     { head: `${nameOf(m)} on ${parent ? nameOf(parent) : 'the ground'}` },
-    ...types.map((t) => ({ label: t === 'fixed' ? 'Rigid' : JOINT_LABEL[t], on: () => t === suggest, run: () => addJoint(m, t, t === 'fixed' ? null : a, parent) })),
+    ...types.map((t) => ({ label: t === 'fixed' ? 'Rigid' : JOINT_LABEL[t], on: () => t === suggest, run: () => addJoint(m, t, t === 'fixed' ? null : a, parent, align) })),
   ]);
 }
+// Where the moving part goes, as Fusion snaps it: its face's centre onto the other's, a flat face turned to
+// face the other (they touch), a round one onto the other's axis (the nearer way round). Rest frames throughout.
+function snapFace(a1, a2) {
+  let q = new THREE.Quaternion();
+  if (a1.kind !== 'sphere' && a2.kind !== 'sphere') {
+    const to = a1.kind === 'plane' && a2.kind === 'plane' ? a2.axis.clone().negate() : a2.axis.clone().multiplyScalar(Math.sign(a1.axis.dot(a2.axis)) || 1);
+    q = new THREE.Quaternion().setFromUnitVectors(a1.axis.clone().normalize(), to.normalize());
+  }
+  const o = a1.origin.clone().applyQuaternion(q);
+  return new THREE.Matrix4().makeRotationFromQuaternion(q).setPosition(a2.origin.clone().sub(o));
+}
+const moved = (a, M) => ({ ...a, origin: a.origin.clone().applyMatrix4(M ?? IDENT), axis: a.axis.clone().transformDirection(M ?? IDENT) });
 let axisMemo = null;   // the last face fitted: the pointer stays on one face for many moves
 function faceAxis(h) {   // { kind, origin, axis, radius? } in the geometry's own (rest) frame
   const m = h.body, f = m.userData.faces?.find((f) => h.faceIndex >= f.first && h.faceIndex < f.first + f.count);
@@ -1134,6 +1148,15 @@ function driveJoint(d, dx, dy, alt) {
     return;
   }
   const P = d.local.clone().applyMatrix4(d.hit.matrixWorld);   // the grabbed point, where it is now
+  if (j.type === 'planar' && !alt) {   // slides under the pointer: the screen move undone through the plane's x and y (⌥ turns it)
+    const [u, v] = planeAxes(j.axis).map((a) => a.transformDirection(Wp));
+    const px = (dir) => { const r = renderer.domElement.getBoundingClientRect(), a = P.clone().project(camera), b = P.clone().add(dir).project(camera); return [(b.x - a.x) * r.width / 2, -(b.y - a.y) * r.height / 2]; };
+    const [[ux, uy], [vx, vy]] = [px(u), px(v)], det = ux * vy - vx * uy;
+    if (Math.abs(det) < 1e-6) return;   // the plane edge-on: no way to tell x from y
+    j.value2 += (dx * vy - dy * vx) / det; j.value3 += (ux * dy - uy * dx) / det;
+    syncJointRow(j); applyExplode(); saveJoints();
+    return;
+  }
   if (j.type === 'slider' || (j.type === 'cylindrical' && alt)) {
     const { sx, sy } = screenAxis(P, n);
     setJointValue(j, j.type === 'slider' ? 'value' : 'value2', (j.type === 'slider' ? j.value : j.value2) + dx * sx + dy * sy);
@@ -1196,6 +1219,7 @@ function jointRow(j) {
     }
   } else if (j.type !== 'fixed') drive('value', false);
   if (j.type === 'cylindrical') drive('value2', true);
+  if (j.type === 'planar') for (const [key, ax] of [['value2', 'x'], ['value3', 'y'], ['offset', 'offset']]) { drive(key, true); row.lastChild.prepend(mk('span', { textContent: ax })); }
   const opt = (field, label, props = {}) => {
     const i = mk('input', { type: 'number', step: 'any', className: 'jv', value: j[field] ?? '', ...props });
     const take = () => {   // as you type: the joint always holds what the field shows, so a save never misses it
@@ -1211,7 +1235,13 @@ function jointRow(j) {
   const keys = bodyKeys(), sel = mk('select', { className: 'ghost' }, mk('option', { value: '', textContent: 'ground' }),
     ...[...keys.values()].filter((k) => k !== j.body).map((k) => mk('option', { value: k, textContent: labelOfKey(k), selected: k === j.parent })));
   sel.addEventListener('change', () => { j.parent = sel.value || null; applyExplode(); saveJoints(); });
-  row.append(mk('div', { className: 'jo' }, mk('label', {}, 'on ', sel),
+  const flip = () => {   // Fusion's flip: the snapped part turned over on the joint's face, about the plane's x through the origin
+    const o = new THREE.Vector3(...j.origin), [u] = planeAxes(j.axis);
+    const F = new THREE.Matrix4().makeTranslation(o.x, o.y, o.z).multiply(new THREE.Matrix4().makeRotationAxis(u, Math.PI)).multiply(new THREE.Matrix4().makeTranslation(-o.x, -o.y, -o.z));
+    j.align = F.multiply(new THREE.Matrix4().fromArray(j.align)).toArray().map(r6);
+    applyExplode(); saveJoints(); commit();
+  };
+  row.append(mk('div', { className: 'jo' }, mk('label', {}, 'on ', sel), ...(j.align ? [mk('button', { className: 'ghost', textContent: 'Flip', title: 'Turn the part over on the joint face', onclick: flip })] : []),
     ...(j.type === 'screw' ? [opt('pitch', 'pitch ')] : []), ...(j.type === 'fixed' || j.type === 'ball' ? [] : [opt('min', 'min '), opt('max', 'max ')])));
   return row;
 }
