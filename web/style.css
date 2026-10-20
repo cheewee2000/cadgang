@@ -40,6 +40,12 @@ body { display: flex; flex-direction: column; }
 .share-menu button { text-align: left; }
 .vercel-form { display: flex; flex-direction: column; gap: 4px; width: 260px; white-space: normal; padding: 4px; }
 .vercel-form[hidden] { display: none; }
+.share-dialog { background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--ink); border-radius: 0; padding: var(--sp-3); max-width: min(520px, calc(100vw - 32px)); font-size: var(--fs-12); }
+.share-dialog::backdrop { background: rgba(0, 0, 0, 0.2); }
+.share-dialog form { display: flex; flex-direction: column; gap: var(--sp-2); }
+.share-dialog p { margin: 0; }
+.share-dialog a { color: var(--ink); overflow-wrap: anywhere; }
+.share-dialog-btns { display: flex; gap: var(--sp-2); justify-content: flex-end; }
 /* A shared link: the viewer, without the file and share controls. */
 :root.shared #openBtn, :root.shared #newBtn, :root.shared #drawBtn, :root.shared .share, :root.shared #defaultBtn { display: none; }
 :root.native-render #viewport canvas { opacity: 0; }

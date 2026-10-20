@@ -1876,18 +1876,25 @@ $('#vercelForm').addEventListener('submit', async (e) => {
 });
 async function shareWeb() {
   shareMenu.hidden = true;
-  say('sharing to Vercel…');
+  progressStart('vercel-share', 'sharing to Vercel…');   // the bar runs on the clock against the last share's time
+  const t0 = performance.now();
   try {
     const res = await fetch('api/view/share', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: packBundle() });
     const d = await res.json();
     if (res.status === 401) await api('/share/vercel', { method: 'PUT', body: { token: '' } }).catch(() => {});   // a revoked token asks again next time
     if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
-    const shell = window.webkit?.messageHandlers?.cadgang;
-    if (shell) shell.postMessage({ cmd: 'copy', text: d.url });
-    else await navigator.clipboard.writeText(d.url).catch(() => {});
-    say(`link copied: ${d.url}`, false, true);
-  } catch (e) { say(`share failed: ${e.message}`, true); }
+    progressEnd('vercel-share', performance.now() - t0);
+    copyText(d.url);
+    $('#shareLink').href = $('#shareLink').textContent = d.url;
+    $('#shareDialog').showModal();
+  } catch (e) { progressEnd(); say(`share failed: ${e.message}`, true); }
 }
+function copyText(text) {
+  const shell = window.webkit?.messageHandlers?.cadgang;
+  if (shell) shell.postMessage({ cmd: 'copy', text });
+  else navigator.clipboard.writeText(text).catch(() => {});
+}
+$('#shareCopy').addEventListener('click', () => { copyText($('#shareLink').href); say('link copied'); });
 // A bundle is u32 header length, header JSON, then each source file's bytes: what Share to web uploads
 // and what a .cadgang project file holds. The header carries the view state (snap()), camera, theme and
 // materials, so unpacking it puts back everything the page was showing.
@@ -2050,7 +2057,7 @@ const CMDS = [
 const keyLabel = (c) => (c.shift ? '⇧' : '') + (c.meta ? '⌘' : '') + ({ Escape: 'Esc', Backspace: '⌫' }[c.key] ?? c.key.toUpperCase());
 
 window.addEventListener('keydown', (e) => {
-  if ((e.target.matches?.('input,select,textarea') && !((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's')) || e.altKey) return;   // typing keeps its keys, but ⌘S saves from inside a field
+  if ((e.target.matches?.('input,select,textarea') && !((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's')) || e.altKey || $('#shareDialog').open) return;   // typing keeps its keys, but ⌘S saves from inside a field
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const c = CMDS.find((c) => c.key === key && !!c.meta === (e.metaKey || e.ctrlKey) && !!c.shift === e.shiftKey);
   if (!c) return;
