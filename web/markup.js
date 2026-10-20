@@ -12,7 +12,7 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
-export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTargets, layer, tools, onChange }) {
+export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTargets, layer, tools, onChange, snap = null }) {
   const group = new THREE.Group();
   group.renderOrder = 5;
   scene.add(group);
@@ -201,7 +201,11 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (!using) return;
     e.stopImmediatePropagation(); e.preventDefault();
     if (current) return;   // a second finger mid-stroke: neither draws nor orbits
-    const p = pointAt(e);
+    let p = pointAt(e);
+    // an arrow's head goes exactly on the corner, centre or edge the hover lit up (⌥: anywhere)
+    const s = using === 'arrow' && snap?.snapAt(e);
+    if (s) p = s.toArray();
+    snap?.clearSnap();
     if (!p) return;
     canvas.setPointerCapture(e.pointerId);
     last = { x: e.clientX, y: e.clientY, id: e.pointerId };
@@ -216,7 +220,10 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   canvas.addEventListener('pointermove', (e) => {
     if (!mine(e)) return;
     e.stopImmediatePropagation();
-    if (!current) return;
+    if (!current) {   // ARROW: light up the point or edge the head would land on
+      if (tool === 'arrow' && e.pointerType !== 'touch') { const lit = snap?.showSnap(e); canvas.style.cursor = lit ? 'cell' : 'crosshair'; }
+      return;
+    }
     if (current.kind === 'pen') {
       if (Math.hypot(e.clientX - last.x, e.clientY - last.y) < 3) return;
       const p = pointAt(e); if (!p) return;
@@ -236,6 +243,8 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     }
     rebuild();
   }, { capture: true });
+
+  canvas.addEventListener('pointerleave', () => { if (!current) snap?.clearSnap(); });
 
   canvas.addEventListener('pointerup', (e) => {
     if (!mine(e)) return;
@@ -301,6 +310,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     tool = tool === name ? null : name;
     for (const b of tools.querySelectorAll('[data-tool]')) b.classList.toggle('on', b.dataset.tool === tool);
     canvas.style.cursor = tool ? 'crosshair' : '';
+    if (tool !== 'arrow') snap?.clearSnap();
     if (!tool) { current = null; rebuild(); }
   }
   function setPen(next) {
