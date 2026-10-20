@@ -1,9 +1,9 @@
 /**
  * Camera input from a trackpad or a mouse wheel, shared by every viewport.
- *   mouse wheel     zoom about the pointer, as SolidWorks does
+ *   mouse wheel     zoom to the pointer, as Bambu Studio does
  *   scroll          rotate (two fingers = turn the part)
  *   shift + scroll  pan
- *   pinch / ⌥scroll zoom (Chrome sends a pinch as a wheel event with ctrlKey;
+ *   pinch / ⌥scroll zoom to the pointer (Chrome sends a pinch as a wheel event with ctrlKey;
  *                         WebKit sends gesturestart/gesturechange with a scale)
  *   two-finger spin turn a flat drawing in 90° steps (WebKit gesture rotation)
  *   double-click    centre the orbit on the point under the pointer
@@ -21,7 +21,7 @@ export function attachOrbitInput(el, { orbit, camera, getCamera = () => camera, 
     if (e.timeStamp - lastWheel > 250) wheelMouse = e.deltaMode !== 0 || (!e.deltaX && !!e.wheelDeltaY && e.wheelDeltaY % 120 === 0);
     lastWheel = e.timeStamp;
     if (wheelMouse && !e.ctrlKey) { zoomAt(e, Math.exp(-Math.sign(e.deltaY) * 0.15)); return; }
-    if (e.ctrlKey || e.altKey) { orbit.dist *= Math.exp(e.deltaY * 0.01); return; }
+    if (e.ctrlKey || e.altKey) { zoomAt(e, Math.exp(Math.max(-0.5, Math.min(0.5, e.deltaY * 0.01)))); return; }   // pinch: spread comes closer
     if (e.shiftKey || isFlat()) {
       const k = orbit.dist * 0.0015;
       const cam = getCamera();
@@ -47,19 +47,25 @@ export function attachOrbitInput(el, { orbit, camera, getCamera = () => camera, 
   }
 
   // WebKit (Safari, the Mac app's WKWebView) pinch: scale is cumulative since gesturestart.
-  let gestureDist = 0, gestureSteps = 0;
-  el.addEventListener('gesturestart', (e) => { e.preventDefault(); gestureDist = orbit.dist; gestureSteps = 0; });
+  let gestureScale = 1, gestureSteps = 0;
+  el.addEventListener('gesturestart', (e) => { e.preventDefault(); gestureScale = 1; gestureSteps = 0; });
   el.addEventListener('gesturechange', (e) => {
     e.preventDefault();
-    if (gestureDist && e.scale) orbit.dist = gestureDist / e.scale;
+    if (e.scale) { zoomAt(e, gestureScale / e.scale); gestureScale = e.scale; }   // to the point between the fingers
     if (!isFlat()) return;
     const steps = Math.round((e.rotation || 0) / 90);     // snaps at 45°: a quarter turn per quarter spun
     if (steps !== gestureSteps) { orbit.yaw += (steps - gestureSteps) * Math.PI / 2; gestureSteps = steps; }
   });
-  el.addEventListener('gestureend', (e) => { e.preventDefault(); gestureDist = 0; });
+  el.addEventListener('gestureend', (e) => { e.preventDefault(); gestureScale = 1; });
 
   // The Mac app hands its trackpad pinch over directly (mac/main.swift magnify): + spreads = closer.
-  window.cadgangPinch = (m) => { orbit.dist *= Math.exp(-m); };
+  // It carries no position, so it zooms to where the pointer last was over the view.
+  let lastAt = null;
+  el.addEventListener('pointermove', (e) => { lastAt = { clientX: e.clientX, clientY: e.clientY }; }, { passive: true });
+  window.cadgangPinch = (m) => {
+    const r = el.getBoundingClientRect();
+    zoomAt(lastAt ?? { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }, Math.exp(-m));
+  };
 
   el.addEventListener('dblclick', (e) => {
     const p = hitAt(e);

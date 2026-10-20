@@ -104,6 +104,10 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   const watch = fileWatcher(broadcast);
   const local = async (req) => { const f = await localFile(req); watch(f.path); return f; };
   const r = express.Router();
+  // Which Claude session last used cadgang's tools, by its folder (the MCP server sends it on every
+  // call): ASK CLAUDE's fallback target when no session works in the viewed file's folder.
+  const lastUse = new Map();
+  r.use((req, _res, next) => { const cwd = req.get('x-cadgang-project'); if (cwd) lastUse.set(cwd, Date.now()); next(); });
   const slug = (subject) => crypto.createHash('sha1').update(String(subject)).digest('hex').slice(0, 16);
   const markupPath = (subject) => path.join(dataDir, 'markups', `${slug(subject)}.json`);
   const sharePath = (id) => path.join(dataDir, 'shares', `${id}.bin`);
@@ -181,20 +185,26 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     if (tab) { claude.set(tab, { cwd: req.body.cwd ?? null, at: claude.get(tab)?.cwd === (req.body.cwd ?? null) ? claude.get(tab).at : new Date().toISOString() }); saveClaude(); }
     res.json({ ok: true, tab: tab || null, sessions: [...claude.keys()] });
   });
-  const PROMPT = 'Review the view I just sent from CADgang: call cadgang_feedback and give me feedback on what you see, anchored to my markups.';
-  // Which session gets it: the one working in the folder that holds the viewed file (deepest folder
-  // wins), then the most recently started. (v0.14.16: before, always the newest registration — and
-  // only sessions started in the cadgang repo registered, so every press went to the cadgang session.)
+  const PROMPT = "I sent you my view from CADgang: call cadgang_feedback to see it and my markups, make each open markup's change in the model's source, re-export, check it in CADgang, and mark the ones you did with cadgang_markup_done.";
+  // Which session gets it, so the prompt never lands in an unrelated chat: the one working in the
+  // folder that holds the viewed file (deepest wins; the home folder holds everything, so it does
+  // not count), else the one that last used cadgang's tools. Neither: nobody, and the page puts the
+  // prompt on the clipboard instead. (Before v0.14.63 it fell back to the newest session of all,
+  // which typed into whatever chat was opened last.) Only a tab where Claude is running takes it:
+  // typed into an idle shell, the prompt would run as a command.
   const inside = (file, dir) => !!dir && (file + '/').startsWith(dir.replace(/\/+$/, '') + '/');
   function order(subject) {
     const files = String(subject || '').split('|').filter((f) => f.startsWith('/'));
-    const depth = (v) => (files.some((f) => inside(f, v.cwd)) ? v.cwd.length : -1);
-    return [...claude.entries()].sort(([, a], [, b]) => depth(b) - depth(a) || String(b.at).localeCompare(String(a.at))).map(([tab]) => tab);
+    const depth = (v) => (v.cwd && v.cwd !== os.homedir() && files.some((f) => inside(f, v.cwd)) ? v.cwd.length : -1);
+    const used = (v) => lastUse.get(v.cwd) ?? 0;
+    return [...claude.entries()].filter(([, v]) => depth(v) >= 0 || used(v) > 0)
+      .sort(([, a], [, b]) => depth(b) - depth(a) || used(b) - used(a)).map(([tab]) => tab);
   }
   async function sendToClaude(subject) {
     for (const tab of order(subject)) {
       const status = ((await knife(`tab status ${tab}`)) || '').trim();
       if (!status || status === 'gone') { claude.delete(tab); saveClaude(); continue; }
+      if (status !== 'working' && status !== 'attention') continue;   // no Claude running in it
       const reply = ((await knife(`tab type ${tab} ${PROMPT}`)) || '').trim();
       if (reply === 'ok') return { tab, status };
     }

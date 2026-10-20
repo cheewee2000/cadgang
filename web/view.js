@@ -29,6 +29,9 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { MATERIALS, materialOf, pickMaterial, materialFor } from './materials.js';
 import { silhouetteEdges, silhouetteFor } from './silhouette.js';
 import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
+import { createViewCube } from './viewcube.js';
+import { createPlanes } from './planes.js';
+import { turnAbout as turnOrbit, yawPitchOf, offsetOf } from './orbitmath.js';
 
 const $ = (s) => document.querySelector(s);
 const ui = { edges: true, wire: false, grid: true, look: 'shaded', ortho: false, flat: false, color: false }; // flat: a 2D drawing is open
@@ -727,7 +730,7 @@ function bakeRot(q) {
   }
   rot.copy(q);
   bbox = new THREE.Box3(); for (const m of model.children) bbox.union(m.geometry.boundingBox);
-  placeGrid(); setupSection(); applyExplode();
+  placeGrid(); setupSection(); applyExplode(); planes.render();
   return d;
 }
 function turnModel(q) {
@@ -771,6 +774,7 @@ function finishLoad(name, ms, keep = false) {
   $('#stats').textContent = `${model.children.length} BOD${model.children.length === 1 ? 'Y' : 'IES'} · ${segs ? `${segs.toLocaleString()} SEGS · ` : ''}${tris ? `${tris.toLocaleString()} TRIS · ` : ''}${verts.toLocaleString()} VERTS · ${ms} MS`;
   $('#drop').hidden = true; $('#loadError').textContent = '';
   placeGrid();
+  planes.load();   // this file's planes, sized to it
   const dups = listBodies();
   warmRays();
   setupSection();
@@ -834,6 +838,8 @@ const VIEWS = { 1: [0, 0], 2: [Math.PI, 0], 3: [0, Math.PI / 2 - 1e-4], 4: [0, -
 function setView(n) { const v = VIEWS[n]; if (v) { orbit.yaw = v[0]; orbit.pitch = v[1]; } }
 
 let drag = null;
+/** Turn the view about a point (null: the orbit's centre): what was pressed on stays put (orbitmath.js). */
+const turnAbout = (pivot, dyaw, dpitch) => turnOrbit(THREE, orbit, pivot, dyaw, dpitch);
 function pan(dx, dy) {
   const k = orbit.dist * 0.0015;
   const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
@@ -847,6 +853,12 @@ for (const t of ['gesturestart', 'gesturechange', 'gestureend'])   // WebKit's o
   renderer.domElement.addEventListener(t, (e) => { if (touches.size) { e.preventDefault(); e.stopImmediatePropagation(); } }, { capture: true });
 renderer.domElement.addEventListener('pointerdown', (e) => {
   bodyMenu.hidden = true;
+  if (pickPlane) {   // a new plane on the face clicked; anything else backs out
+    const done = pickPlane; pickPlane = null; renderer.domElement.classList.remove('picking');
+    const h = e.button === 0 && faceAt(e);
+    if (h) { done(h.point, h.normal); say('plane added'); } else say('no face there: no plane');
+    return;
+  }
   if (pickAxis) {   // picking an explode direction: left takes the face under the pointer, anything else backs out
     if (e.button === 0) { const h = faceAt(e); if (h) setPartAxis(pickAxis.m, h.normal); }
     endPickAxis();
@@ -857,15 +869,16 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
     renderer.domElement.setPointerCapture(e.pointerId);
     if (touches.size > 1) { drag = null; return; }
   }
-  // SolidWorks mouse: middle drag rotates, ctrl+middle pans, shift+middle zooms (left on empty space rotates too).
+  // Bambu Studio mouse: left drag rotates about the point pressed on, right or middle (wheel) drag pans,
+  // the wheel zooms to the pointer. ⌥-drag on a part slides it along its explode axis.
   if (e.button === 1) e.preventDefault();
-  const zoom = e.button === 1 && e.shiftKey;
-  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, zoom, pan: !zoom && (e.button === 2 || e.shiftKey || (e.button === 1 && e.ctrlKey)), downX: e.clientX, downY: e.clientY, click: e.button === 0 };
+  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, pan: e.button === 2 || e.button === 1 || e.shiftKey, downX: e.clientX, downY: e.clientY, click: e.button === 0 };
   if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
-  else if (e.button === 0 && !e.shiftKey && !measure.on && e.pointerType !== 'touch') {
-    const hit = partAt(e);   // a part under the mouse slides along its explode axis; empty space orbits
+  else if (e.button === 0 && e.altKey && !measure.on && e.pointerType !== 'touch') {
+    const hit = partAt(e);
     if (hit) { const v = explodeVec(hit.body); if (moves(hit.body, v)) drag.part = { m: hit.body, ...screenAxis(hit.point, v.normalize()) }; }
   }
+  if (!drag.pan && !drag.sect && !drag.part && !ui.flat) drag.pivot = hitAt(e);   // orbit about what was pressed on
   renderer.domElement.setPointerCapture(e.pointerId);
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
@@ -916,12 +929,10 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     applyExplode();
     return;
   }
-  if (drag.zoom) { orbit.dist *= Math.exp(dy * 0.005); return; }   // shift+middle: drag up comes closer
   if (drag.pan || ui.flat) {
     pan(dx, dy);
   } else {
-    orbit.yaw -= dx * 0.006;   // finger or mouse, the model follows: drag left and its front turns left
-    orbit.pitch += dy * 0.006;
+    turnAbout(drag.pivot, -dx * 0.006, dy * 0.006);   // finger or mouse, the model follows: drag left and its front turns left
   }
 });
 renderer.domElement.addEventListener('pointerup', (e) => {
@@ -1337,6 +1348,7 @@ const markup = createMarkup({
   getCamera: () => camera, getTargets: () => model.children,
   onChange: (items) => { markupChanged(items); commit(); },
   snap: { snapAt: (e) => measure.snapAt(e), showSnap: (e) => measure.showSnap(e), clearSnap: () => measure.clearSnap() },   // the arrow snaps like measure
+  planeAt: (ray) => planes.hit(ray),   // marks draw on the visible reference planes too
 });
 let markupTimer = null;
 let subject = '';   // what is open: the file path(s) from the shell, or the dropped file name(s)
@@ -1385,6 +1397,26 @@ function showBusy(what) {
 }
 let snapshotTimer = null;
 /** Post what is on screen; coalesced, since a stroke is many change events. */
+// ASK CLAUDE: the frame, camera and markups queue on the server for cadgang_feedback, and the
+// server types the request into the Claude Code session it can name (Knife Terminal: the one working
+// in this file's folder, else the one that last used cadgang). With none, the request goes on the
+// clipboard to paste.
+async function sendToClaude() {
+  if (!subject || !bbox) { say('open a file first', true); return; }
+  say('asking Claude…');
+  try {
+    const body = { png: markup.snapshot(), subject, markups: markup.items, camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() } };
+    const r = await fetch('api/view/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    const open = markup.items.filter((m) => !m.done).length;
+    if (j.delivered) { say(`asked Claude in Knife Terminal tab ${j.delivered.tab} · ${open} open markup${open === 1 ? '' : 's'}`); return; }
+    let copied = false; try { await navigator.clipboard.writeText(j.prompt); copied = true; } catch {}
+    say(copied ? 'no Claude session to ask: the request is copied, paste it into Claude Code (⌘V)' : 'no Claude session to ask: tell Claude to call cadgang_feedback', true);
+  } catch (e) { say(`could not ask Claude: ${e.message}`, true); }
+}
+$('#sendBtn').addEventListener('click', sendToClaude);
+
 function postSnapshot() {
   if (follow) return;
   clearTimeout(snapshotTimer);
@@ -1607,6 +1639,38 @@ function updateSilhouettes() {
   }
 }
 
+// The view cube (lower right): a face, edge or corner turns the view to look from there, over a
+// quarter second; the orbit's centre stays where it is. Its button fits the model.
+let viewTween = null;
+function lookFrom(dir) {
+  const { yaw, pitch } = yawPitchOf(THREE, dir);
+  // start from the same view in the plain range (the orbit has no pole, so it may be past one)
+  const { yaw: y0, pitch: p0 } = yawPitchOf(THREE, offsetOf(THREE, orbit.yaw, orbit.pitch));
+  const dy = Math.atan2(Math.sin(yaw - y0), Math.cos(yaw - y0));   // the short way round
+  viewTween = { y0, p0, dy, dp: pitch - p0, t0: performance.now() };
+}
+function stepViewTween() {
+  if (!viewTween) return;
+  const t = Math.min(1, (performance.now() - viewTween.t0) / 250), k = t * t * (3 - 2 * t);
+  orbit.yaw = viewTween.y0 + viewTween.dy * k; orbit.pitch = viewTween.p0 + viewTween.dp * k;
+  if (t === 1) { viewTween = null; commit(); }
+}
+// Reference planes (Front / Top / Right on and off, and your own), next to Section (planes.js).
+let pickPlane = null;   // set while a new plane waits for its face
+const planes = createPlanes({
+  THREE, scene, getBox: () => bbox, getSubject: () => subject,
+  pickFace: (done) => { pickPlane = done; renderer.domElement.classList.add('picking'); say('click a face for the new plane · Esc cancels'); },
+});
+const planesRow = Object.assign(document.createElement('div'), { className: 'hud-row' });   // Planes and Add an image, one line under Section
+$('#sectAxis').after(planesRow);
+planesRow.append(planes.el);
+// ADD AN IMAGE, beside the planes: choose a PNG or JPEG, then click a face (drag to size it). It is the markup's IMAGE tool.
+const imageBtn = Object.assign(document.createElement('button'), { className: 'ghost add-image', textContent: 'Add an image', title: 'Put a PNG or JPEG on a surface: choose it, then click a face (drag to size it)' });
+imageBtn.dataset.tool = 'image';
+imageBtn.addEventListener('click', () => markup.setTool('image'));
+planesRow.append(imageBtn);
+const viewCube = createViewCube({ THREE, container: viewport, getCamera: () => camera, onView: lookFrom, onFit: () => { fit(); commit(); } });
+
 // MATERIALS needs something for metal and glass to reflect in the live view: a soft studio room.
 let roomEnv = null;
 (function loop() {
@@ -1618,6 +1682,7 @@ let roomEnv = null;
       ambient.intensity = env ? 0 : 1.15; hemi.intensity = env ? 0 : 0.6;   // the room is the ambient light under MATERIALS; both washed plastic out
     }
   }
+  stepViewTween();
   applyCamera();
   updateSilhouettes();
   // The ground goes as soon as it would hide the model: seen from under it (camera below it, or an ortho view
@@ -1627,6 +1692,8 @@ let roomEnv = null;
   if (rt.on && !NATIVE && rt.floor && rt.floor.visible !== above(rt.floor.position.z)) { rt.floor.visible = !rt.floor.visible; syncRender(); }
   if (sky.visible) { sky.position.copy(orbit.target); sky.scale.setScalar(orbit.dist * 50); sky.material.uniforms.center.value.copy(orbit.target); }
   if (rt.on && NATIVE) nativeCam(); else if (rt.pt && rt.on) renderSample(); else renderer.render(scene, camera);
+  viewCube.hidden = !bbox || ui.flat;
+  viewCube.render();
   measure.projectLabels();
   markup.projectLabels();
   requestAnimationFrame(loop);
@@ -1697,7 +1764,7 @@ async function openShare(id) {
   } catch (e) { progressEnd(); loadFailed('shared view', e); }
 }
 // For headless drives: the scene objects behind the page.
-window.__view = { model, section, orbit, ui, measure, rt, THREE, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
+window.__view = { model, section, orbit, ui, measure, rt, THREE, planes, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
   project: (x, y, z) => { const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3(x, y, z).project(camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; } };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
@@ -1743,19 +1810,21 @@ const CMDS = [
   { key: '0', label: 'Explode all / none', btn: '#explode', run: () => setExplode(+$('#explode').value ? 0 : 100), on: () => +$('#explode').value > 0 },
   { key: '=', label: 'Explode more', run: () => setExplode(+$('#explode').value + 10) },
   { key: '-', label: 'Explode less', run: () => setExplode(+$('#explode').value - 10) },
-  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (pickAxis) { endPickAxis(); return; } if (measure.cancel()) return; if (selection.size) { select([]); return; } setSectionAxis(''); setMeasure(false); } },
+  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (pickPlane) { pickPlane = null; renderer.domElement.classList.remove('picking'); say(''); return; } if (pickAxis) { endPickAxis(); return; } if (measure.cancel()) return; if (selection.size) { select([]); return; } setSectionAxis(''); setMeasure(false); } },
   { sep: true },
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },
-  ...[['p', 'pen', 'Pen'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['r', 'erase', 'Erase']].map(([key, t, label]) => ({ key, label, btn: `[data-tool="${t}"]`, run: () => markup.setTool(t), on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
+  // P pen and ⇧P pencil, as in Figma ('pen' is the pencil's stroke kind in saved markups, kept for old files)
+  ...[['p', 'path', 'Pen'], ['p', 'pen', 'Pencil', true], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['t', 'text', 'Text', true], ['i', 'image', 'Image', true], ['r', 'erase', 'Erase']].map(([key, t, label, shift]) => ({ key, shift, label, btn: `[data-tool="${t}"]`, run: () => markup.setTool(t), on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
   { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
   { sep: true },
   { key: 'd', label: 'Background: light / dark / dusk / dawn / night', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.bg !== 'light' },
   { key: 'o', meta: true, label: 'Open…', btn: '#openBtn', run: () => $('#fileInput').click() },
+  { key: 'Enter', meta: true, label: 'Ask Claude', btn: '#sendBtn', run: sendToClaude },
   { key: 'z', meta: true, label: 'Undo', run: undo },
   { key: 'z', meta: true, shift: true, label: 'Redo', run: redo },
 ];
-const keyLabel = (c) => (c.shift ? '⇧' : '') + (c.meta ? '⌘' : '') + ({ Escape: 'Esc', Backspace: '⌫' }[c.key] ?? c.key.toUpperCase());
+const keyLabel = (c) => (c.shift ? '⇧' : '') + (c.meta ? '⌘' : '') + ({ Escape: 'Esc', Backspace: '⌫', Enter: '↵' }[c.key] ?? c.key.toUpperCase());
 
 window.addEventListener('keydown', (e) => {
   if (e.target.matches?.('input,select,textarea') || e.altKey) return;

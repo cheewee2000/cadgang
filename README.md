@@ -31,15 +31,17 @@ No build step; the page is plain ES modules. `CADGANG_PORT` picks the port, `CAD
 ## Tools
 
 - **Bodies** panel: one row per STEP body or DXF layer, in folders by assembly (STEP products, glTF nodes); a crowded folder gathers like-named bodies (every copy of one capacitor), repeated names get `_1`, `_2`, and a row reads `name · material` when the file names the material. Tick to hide, ◐ to see through. **Explode** slides bodies apart. A pin or bearing coaxial with a bore moves along the shared axis, parts mated on a plane separate perpendicular to it, a part between walls slides along the channel, a part in a pocket leaves by the open axis, anything loose goes out from the centre, and nothing travels through another body. The vectors solve on load up to 300k triangles; above that, press **Solve** next to the slider. **Color** gives each a hue.
+- **Planes**: Front, Top and Right reference planes through the origin, each on or off; **+** adds your own, offset from one of them by a distance or lying on a face you click. Kept per file.
 - **Section**: Off/X/Y/Z, drag the cut face or the slider, **Invert** the kept side. Cuts are capped, so hollow walls read as rings.
 - **Measure** snaps to endpoints, midpoints, centres and quadrants, defaults to axis-aligned distances (shift: free), reads a circle's ⌀ or an edge's length in one click, reads a cylinder's ⌀, a fillet's R or a sphere's SR from one click on the face, and measures face to face (parallel planes give the gap, anything else the closest approach). Dimensions stay on the page until clicked away or undone.
-- **Markup**: pen, arrow, note, erase. Anchored on the model, saved per file, and what `cadgang_screen` shows Claude.
+- **Markup**: pen (as in Figma: click for corners, drag for curves, click the first point to close, Enter to end, ⌫ takes a point back), pencil (freehand), arrow, note, text (lies on the face clicked), image (a PNG or JPEG projected onto the surface; drag to size it), erase. Marks start only on the model: a press off it orbits the view, with any tool. Anchored on the model, saved per file, and what `cadgang_screen` shows Claude. Marks Claude has acted on turn Infinite Machine green at 30% and stay as a record.
 - **Several files**: each browser tab or Mac window is one file with its own markups. **New** opens another; Claude's `cadgang_open` and `cadgang_screen` go to the tab or window you last touched.
 - Looks (shaded, metal, plastic, glass, x-ray, normals), ortho, edges, wire, grid, dark theme. These persist across sessions.
 - **Undo/redo** (⌘Z / ⇧⌘Z) covers every view change, dimension and stroke. **Right-click** opens the command menu; every button shows its hotkey on hover.
 - **Select** a body by clicking it in the view or the list, a whole part by clicking its folder (shift adds). **U** widens to the part around it, then the assembly; **H** hides, **T** makes see-through, **S** shows only the selection, **⇧H** shows everything, Esc deselects. Clicks pass through see-through bodies, so ghost the case and pick what is inside. The selection's menu sets its material (the MATERIALS look) and its colour (every solid look), kept per file in the browser and undone with ⌘Z.
 - **STEP colours and material names** the WASM importer misses (a style on a solid inside a part's compound, as Fusion writes them) are read from the file's text; the material name ("Steel - Satin") decides the MATERIALS guess first.
-- Mouse like SolidWorks: the wheel zooms about the pointer, middle-drag rotates, ctrl+middle pans, shift+middle zooms; dragging turns the model with the pointer. On a trackpad, scroll rotates, shift-scroll pans, pinch zooms. Rotation has no limits; double-click re-centres.
+- Mouse like Bambu Studio: left-drag rotates about the point you pressed on (empty space: about the orbit's centre), right-drag or wheel-drag pans, the wheel zooms to the pointer; ⌥-drag on a part slides it along its explode axis. On a trackpad, scroll rotates, shift-scroll pans, pinch zooms to the pointer. Rotation has no limits; double-click re-centres.
+- **View cube**, lower right: turns with the model, x / y / z axes at its corner. Click a face for that view, an edge or a corner for the view between; the button beside it fits the model.
 - **DXF** drawings are paper: drag and scroll pan, two-finger spin turns in 90° steps (`[` `]` on a keyboard), **Flip** (B) turns the sheet over. Lines, polylines with bulges, circles, arcs, ellipses, splines and block inserts are drawn; text, dimensions and hatches are skipped and counted.
 - A file opened by path reloads in place when it changes on disk (export again from your CAD; the camera stays).
 - `?open=/abs/a.step|/abs/b.stl`, `?section=z:0.3`, `?explode=0.4` set the viewer from a URL.
@@ -50,7 +52,7 @@ No build step; the page is plain ES modules. `CADGANG_PORT` picks the port, `CAD
 | E W G O C | Edges, Wire, Grid, Ortho, Color | I / Esc | Invert section / cancel pick, section off |
 | L | Next look | 1–7 | Front, back, top, bottom, right, left, iso |
 | H T S U | Hide, see-through, show only, select the part around | ⇧H | Show all bodies |
-| M | Measure | P A N R ⌫ | Pen, Arrow, Note, Erase, Clear markup |
+| M | Measure | P ⇧P A N ⇧T ⇧I R ⌫ | Pen, Pencil, Arrow, Note, Text, Image, Erase, Clear markup |
 | B | Flip drawing over | [ ] | Turn 90° |
 | D | Dark / light | ⌘O ⌘Z ⇧⌘Z | Open, Undo, Redo |
 
@@ -67,7 +69,8 @@ The repo ships `.mcp.json` (and `.codex/config.toml`), so opening it in Claude C
 | Tool | What it does |
 |---|---|
 | `cadgang_screen` | The live viewport as the user sees it, with their markups drawn on, plus the markups as 3D data (mm), the file on screen and the camera |
-| `cadgang_markup_clear` | Remove the markups of the file on screen once acted on |
+| `cadgang_markup_done` | Mark markups done once acted on (by id, or all open ones): they stay as a record, in Infinite Machine green at 30% |
+| `cadgang_markup_clear` | Remove every markup of the file on screen (only when asked; after acting on them, mark them done) |
 | `cadgang_open` | Open one or more files in the window |
 | `cadgang_drawing_request` | What the user asked a drawing of, and the questions to ask them |
 | `cadgang_drawing_make` | Send the answered spec; the viewer renders and saves the sheet |
