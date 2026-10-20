@@ -127,7 +127,7 @@ scene.add(model, edges);
 let grid = null;
 let bbox = null;
 let joints = [];   // see JOINTS: the bodies that move on an axis
-let sources = [];   // what each open file loaded as: [{name, cad, buffer}] (CAD tessellated), for project files
+let sources = [];   // what each open file loaded as: [{name, cad, buffer}] (CAD tessellated), for Share to web and project files
 
 function clearModel() {
   for (const g of [model, edges]) {
@@ -706,7 +706,7 @@ function bakeRot(q) {
   for (const m of model.children) {
     for (const g of [m.geometry, m.userData.edges?.geometry]) {
       if (!g) continue;
-      for (const a of [g.attributes.position, g.attributes.normal]) if (a && sources.some((f) => f.buffer === a.array.buffer)) a.array = a.array.slice();   // never turn the bytes a project file saves
+      for (const a of [g.attributes.position, g.attributes.normal]) if (a && sources.some((f) => f.buffer === a.array.buffer)) a.array = a.array.slice();   // never turn the bytes Share to web and project files send
       g.applyMatrix4(M); g.computeBoundingBox();
     }
     m.userData.offset?.applyQuaternion(d);
@@ -1367,6 +1367,7 @@ function parseCad(buffer) {
 }
 
 async function api(path, { method = 'GET', body } = {}) {
+  if (window.cadgangServerless) { if (method === 'GET') throw new Error('no server'); return {}; }   // a Vercel share: reads fall back, saves stay in the page
   const res = await fetch('api/view' + path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -1633,7 +1634,7 @@ function showBusy(what) {
 let snapshotTimer = null;
 /** Post what is on screen; coalesced, since a stroke is many change events. */
 function postSnapshot() {
-  if (follow) return;
+  if (follow || window.cadgangServerless) return;
   clearTimeout(snapshotTimer);
   snapshotTimer = setTimeout(() => {
     try {
@@ -1654,7 +1655,7 @@ window.addEventListener('focus', focus);
 document.addEventListener('pointerdown', focus);
 document.addEventListener('visibilitychange', focus);
 (function connect() {
-  if (new URLSearchParams(location.search).has('share')) return;   // a shared link is on its own: the VPS proxy carries no WebSocket
+  if (new URLSearchParams(location.search).has('share')) return;   // a shared link is on its own: Vercel and the VPS proxy carry no WebSocket
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${location.pathname.replace(/[^/]*$/, '')}ws`);
   ws.onopen = () => { focus(); announce(); };
   ws.onmessage = (ev) => {
@@ -1852,13 +1853,43 @@ fetch('api/health').then((r) => r.json()).then((h) => {
     : navigator.clipboard.writeText(link).then(() => say(`copied ${link}`), () => say(link)));
 }).catch(() => {});
 // ------------------------------------------------------------------- share
-// The share icon opens a menu holding SHARE TO IPAD. Share to web is gone from the app (outside users
-// have no share host); a shared link (?share=<id>) on the VPS still opens the whole viewer from that view.
+// The share icon opens a menu: SHARE TO WEB deploys a frozen copy of this view (meshes + view state)
+// to the user's own Vercel account and copies its link (the first time, it asks for their token);
+// SHARE TO IPAD is the old iPad button. A shared link (?share=<id>) opens the whole viewer from that
+// view; its visitors orbit, cut, explode and mark up, but cannot open, save or share files.
 const shareMenu = $('#shareMenu');
-$('#shareBtn').addEventListener('click', (e) => { e.stopPropagation(); shareMenu.hidden = !shareMenu.hidden; });
+$('#shareBtn').addEventListener('click', (e) => { e.stopPropagation(); shareMenu.hidden = !shareMenu.hidden; $('#vercelForm').hidden = true; });
+shareMenu.addEventListener('click', (e) => e.stopPropagation());
 document.addEventListener('click', () => { shareMenu.hidden = true; });
-// A bundle is u32 header length, header JSON, then each source file's bytes: what a .cadgang project
-// file holds. The header carries the view state (snap()), camera, theme and
+$('#shareWeb').addEventListener('click', async () => {
+  if (!sources.length) return say('open a file first', true);
+  const has = await api('/share/vercel').then((d) => d.token, () => false);
+  if (!has) { $('#vercelForm').hidden = false; return $('#vercelToken').focus(); }
+  shareWeb();
+});
+$('#vercelForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try { await api('/share/vercel', { method: 'PUT', body: { token: $('#vercelToken').value } }); }
+  catch (err) { return say(err.message, true); }
+  $('#vercelToken').value = ''; $('#vercelForm').hidden = true;
+  shareWeb();
+});
+async function shareWeb() {
+  shareMenu.hidden = true;
+  say('sharing to Vercel…');
+  try {
+    const res = await fetch('api/view/share', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: packBundle() });
+    const d = await res.json();
+    if (res.status === 401) await api('/share/vercel', { method: 'PUT', body: { token: '' } }).catch(() => {});   // a revoked token asks again next time
+    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+    const shell = window.webkit?.messageHandlers?.cadgang;
+    if (shell) shell.postMessage({ cmd: 'copy', text: d.url });
+    else await navigator.clipboard.writeText(d.url).catch(() => {});
+    say(`link copied: ${d.url}`, false, true);
+  } catch (e) { say(`share failed: ${e.message}`, true); }
+}
+// A bundle is u32 header length, header JSON, then each source file's bytes: what Share to web uploads
+// and what a .cadgang project file holds. The header carries the view state (snap()), camera, theme and
 // materials, so unpacking it puts back everything the page was showing.
 function packBundle(extra = {}) {
   const head = new TextEncoder().encode(JSON.stringify({

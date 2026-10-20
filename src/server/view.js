@@ -23,6 +23,7 @@ import net from 'node:net';
 import os from 'node:os';
 import express from 'express';
 import { importCadFileInWorker as importCadFile } from '../core/step.js';
+import { deployShare } from './vercel.js';
 
 const DESKTOP = process.env.CADGANG_DESKTOP === '1';
 export const CAD_EXT = /\.(step|stp|iges|igs|brep)$/i;
@@ -99,6 +100,8 @@ function multipartFile(buf, ctype) {
   return buf.subarray(start, buf.indexOf(Buffer.concat([Buffer.from('\r\n'), b]), start));
 }
 const SHARE_KEY_FILE = path.join(os.homedir(), '.cadgang', 'share_key');
+const VERCEL_TOKEN_FILE = path.join(os.homedir(), '.cadgang', 'vercel_token');
+const vercelToken = () => { try { return fsSync.readFileSync(VERCEL_TOKEN_FILE, 'utf8').trim(); } catch { return ''; } };
 const shareKey = () => { try { return fsSync.readFileSync(SHARE_KEY_FILE, 'utf8').trim(); } catch { return process.env.CADGANG_SHARE_KEY || ''; } };
 
 export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
@@ -321,7 +324,31 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     } catch (e) { next(e); }
   });
 
-  // Shared links: bundles stored on the VPS under an unguessable id (the app no longer uploads them).
+  // Share to web: the page's bundle deployed to the user's own Vercel account (vercel.js), with the
+  // token they pasted once (~/.cadgang/vercel_token, 0600; the page never reads it back).
+  r.get('/share/vercel', (req, res) => res.json({ token: !!vercelToken() }));
+  r.put('/share/vercel', express.json(), async (req, res, next) => {
+    try {
+      if (!mayReadLocal(req)) throw Object.assign(new Error('Sharing starts from the Mac app'), { status: 403 });
+      const token = String(req.body?.token || '').trim();
+      if (token) {
+        const me = await fetch('https://api.vercel.com/v2/user', { headers: { Authorization: `Bearer ${token}` } });
+        if (!me.ok) throw Object.assign(new Error('Vercel did not accept that token'), { status: 400 });
+      }
+      await fs.mkdir(path.dirname(VERCEL_TOKEN_FILE), { recursive: true });
+      await (token ? fs.writeFile(VERCEL_TOKEN_FILE, token, { mode: 0o600 }) : fs.rm(VERCEL_TOKEN_FILE, { force: true }));
+      res.json({ token: !!token });
+    } catch (e) { next(e); }
+  });
+  r.post('/share', express.raw({ type: () => true, limit: '1gb' }), async (req, res, next) => {
+    try {
+      if (!mayReadLocal(req)) throw Object.assign(new Error('Sharing starts from the Mac app'), { status: 403 });
+      const token = vercelToken();
+      if (!token) throw Object.assign(new Error('Add a Vercel token first'), { status: 428 });
+      res.json({ url: await deployShare(req.body, token) });
+    } catch (e) { next(e); }
+  });
+  // Older shared links: bundles stored on the VPS under an unguessable id (the app no longer uploads there).
   r.post('/share/store', express.raw({ type: () => true, limit: '8mb' }), async (req, res, next) => {
     try {
       const key = shareKey(), got = String(req.headers.authorization || '').replace(/^Bearer /, '');

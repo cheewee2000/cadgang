@@ -38,6 +38,8 @@ body { display: flex; flex-direction: column; }
 .share-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; gap: 2px; background: var(--paper); border: var(--bw-hair) solid var(--rule); padding: 4px; white-space: nowrap; }
 .share-menu[hidden] { display: none; }
 .share-menu button { text-align: left; }
+.vercel-form { display: flex; flex-direction: column; gap: 4px; width: 260px; white-space: normal; padding: 4px; }
+.vercel-form[hidden] { display: none; }
 /* A shared link: the viewer, without the file and share controls. */
 :root.shared #openBtn, :root.shared #newBtn, :root.shared #drawBtn, :root.shared .share, :root.shared #defaultBtn { display: none; }
 :root.native-render #viewport canvas { opacity: 0; }
