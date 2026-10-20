@@ -103,3 +103,11 @@ test('an offset moves any joint along its axis, on top of its motion and past it
   assert.deepEqual(at(jointMatrix(J({ type: 'slider', axis: [1, 0, 0], value: 2, max: 2, offset: 5 })), [0, 0, 0]), [7, 0, 0]);
   assert.deepEqual(at(jointMatrix(J({ type: 'fixed', axis: [0, 1, 0], offset: -4 })), [0, 0, 0]), [0, -4, 0]);
 });
+
+test('a body with two joints stacks them: the second rides on the first', () => {
+  const slide = J({ id: 'a', type: 'slider', axis: [1, 0, 0], value: 10 });
+  const turn = J({ id: 'b', type: 'revolute', origin: [0, 0, 0], axis: [0, 0, 1], value: 90 });
+  const poses = solvePoses([slide, turn]);
+  assert.deepEqual(at(poses.get('b#0'), [1, 0, 0]), [10, 1, 0]);   // turned about the pin at rest, then slid with it
+  assert.deepEqual(at(poses.frames.get('b'), [0, 0, 0]), [10, 0, 0]);   // the turn's frame has slid
+});

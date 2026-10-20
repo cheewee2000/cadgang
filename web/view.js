@@ -1012,13 +1012,20 @@ function bodyKeys() {   // partKey for every body at once
   for (const m of model.children) { const n = seen.get(m.userData.name) ?? 0; seen.set(m.userData.name, n + 1); out.set(m, `${m.userData.name}#${n}`); }
   return out;
 }
-const jointOf = (m) => (joints.length ? joints.find((j) => j.body === bodyKeys().get(m)) : undefined);
-// The joint a drag on this body moves: its own, or, for a body that only rides on another (a lens fixed in
-// its cell, a claw on the housing), the first joint up its chain that can move.
+const jointsOf = (key) => joints.filter((j) => j.body === key);
+// A body's joint for ⌘-drag and the menu: the one last driven (a slider, a field, a drag), else its first.
+let lastJoint = null;
+const jointOf = (m) => { const list = joints.length ? jointsOf(bodyKeys().get(m)) : []; return list.find((j) => j.id === lastJoint) ?? list[0]; };
+// The joint a drag on this body moves: its last-driven one that can move, else its first that can, or, for a
+// body that only rides on another (a lens fixed in its cell, a claw on the housing), the first up its chain.
 function drivingJoint(m) {
-  let j = jointOf(m);
-  for (let n = 0; j && j.type === 'fixed' && n < 32; n++) j = j.parent ? joints.find((x) => x.body === j.parent) : null;
-  return j && j.type !== 'fixed' ? j : null;
+  let key = bodyKeys().get(m);
+  for (let n = 0; key && n < 32; n++) {
+    const list = jointsOf(key), moving = list.filter((j) => j.type !== 'fixed');
+    if (moving.length) return moving.find((j) => j.id === lastJoint) ?? moving[0];
+    key = list[0]?.parent;
+  }
+  return null;
 }
 const bodyOfKey = (key) => [...bodyKeys()].find(([, k]) => k === key)?.[0] ?? null;
 const jointId = () => 'j' + Math.random().toString(36).slice(2, 8);
@@ -1028,13 +1035,15 @@ function setJoints(list) {
 }
 const jointVal = (j, key) => (key.startsWith('rot') ? j.rot[+key.slice(3)] : j[key]);
 function setJointValue(j, key, v) {
+  lastJoint = j.id;
   if (key.startsWith('rot')) j.rot = j.rot.map((r, i) => (i === +key.slice(3) ? v : r));
   else j[key] = key === 'value' ? clampValue(j, v) : v;
   syncJointRow(j); applyExplode(); saveJoints();
 }
 function removeJoint(j) { joints = joints.filter((x) => x !== j); renderJoints(); applyExplode(); saveJoints(); commit(); }
 function addJoint(m, type, a, parent = null, align = null) {
-  const key = bodyKeys().get(m), parentKey = parent ? bodyKeys().get(parent) : null;
+  const key = bodyKeys().get(m), first = jointsOf(key)[0];
+  const parentKey = first ? first.parent : parent ? bodyKeys().get(parent) : null;   // a stacked joint rides on the first: same parent
   const centre = m.geometry.boundingBox.getCenter(new THREE.Vector3());
   const j = normalizeJoint({
     id: jointId(), type, body: key, parent: parentKey,
@@ -1042,7 +1051,8 @@ function addJoint(m, type, a, parent = null, align = null) {
     origin: (a ? a.origin : centre).toArray().map(r6), axis: (a ? a.axis : new THREE.Vector3(0, 0, 1)).toArray().map(r6),
     pitch: type === 'screw' ? pitchFor(a?.radius ? a.radius * 2 : 4) : 0, align: align?.toArray().map(r6) ?? null,
   });
-  setJoints([...joints.filter((x) => x.body !== key), j]);   // one joint per body
+  setJoints([...joints, j]);   // a body's joints stack: this one rides on the ones it already has
+  lastJoint = j.id;
   commit();
   say(type === 'fixed' ? `${nameOf(m)} rides on ${parent ? nameOf(parent) : 'the ground'}` : `${nameOf(m)}: ${type} joint — drag the part, or use its slider`);
 }
@@ -1071,7 +1081,7 @@ function pickJointFace(e) {
   if (h?.body === pickJoint.first.m) return say('click a face on another part, or empty space for the ground');
   const { m, a: a1 } = pickJoint.first, parent = h?.body ?? null, a2 = h && faceAxis(h);
   const round = (a) => a && a.kind !== 'plane';
-  const align = parent ? snapFace(a1, a2) : null;
+  const align = parent && !jointsOf(bodyKeys().get(m)).length ? snapFace(a1, a2) : null;   // a part already jointed is where its joints put it: only its first joint snaps
   const a = round(a2) ? a2 : round(a1) ? moved(a1, align) : a2 ?? a1;   // the joint lives on the parent: the faces meet there
   const flatOnFlat = a1.kind === 'plane' && a2?.kind === 'plane' && Math.abs(a1.axis.dot(a2.axis)) > 0.999;   // two faces that mate (or a face on the ground): it slides about on them
   const suggest = a.kind === 'sphere' ? 'ball' : a.kind === 'cyl' ? 'revolute' : flatOnFlat || !parent ? 'planar' : 'slider';
@@ -1133,7 +1143,7 @@ function faceAxis(h) {   // { kind, origin, axis, radius? } in the geometry's ow
 function driveJoint(d, dx, dy, alt) {
   const { j, m } = d;
   d.hit.updateMatrixWorld(true);
-  const Wp = (j.parent && poses.get(j.parent)) || IDENT;
+  const Wp = poses.frames?.get(j.id) || IDENT;   // where the joint's own frame is now: its parent, then the body's joints before it
   const n = new THREE.Vector3(...j.axis).transformDirection(Wp);
   const o = new THREE.Vector3(...j.origin).applyMatrix4(Wp).add(m.userData.exPos);
   if (j.type === 'ball') {   // a trackball: the pointer turns the part about its centre, as the camera sees it
@@ -1187,7 +1197,7 @@ $('#newJointBtn').addEventListener('click', () => startPickJoint());
 document.documentElement.dataset.mode = ui.mode;
 
 // The panel: one row per joint, a slider to drive it, its parent and limits; how to make and move them under.
-const JOINT_HINTS = 'New joint (N): click a face on the part that moves, then one on the part it moves on (empty space: the ground), then the motion.\nDrag a part: drive its joint. ⌥-drag: turn a planar one. ⌘-drag: its offset along the axis.\nFlip turns a snapped part over.';
+const JOINT_HINTS = 'New joint (N): click a face on the part that moves, then one on the part it moves on (empty space: the ground), then the motion.\nDrag a part: drive its joint. ⌥-drag: turn a planar one. ⌘-drag: its offset along the axis.\nFlip turns a snapped part over. A part can have several joints: each rides on the ones before it, and a drag drives the one you last moved.';
 function renderJoints() {
   const el = $('#joints');
   el.hidden = false;   // shown in Joint mode (CSS hides it in Explode), with the hints even before the first joint
@@ -1238,14 +1248,15 @@ function jointRow(j) {
   };
   const keys = bodyKeys(), sel = mk('select', { className: 'ghost' }, mk('option', { value: '', textContent: 'ground' }),
     ...[...keys.values()].filter((k) => k !== j.body).map((k) => mk('option', { value: k, textContent: labelOfKey(k), selected: k === j.parent })));
-  sel.addEventListener('change', () => { j.parent = sel.value || null; applyExplode(); saveJoints(); });
+  sel.addEventListener('change', () => { for (const x of jointsOf(j.body)) x.parent = sel.value || null; applyExplode(); saveJoints(); });   // the stack moves together
   const flip = () => {   // Fusion's flip: the snapped part turned over on the joint's face, about the plane's x through the origin
     const o = new THREE.Vector3(...j.origin), [u] = planeAxes(j.axis);
     const F = new THREE.Matrix4().makeTranslation(o.x, o.y, o.z).multiply(new THREE.Matrix4().makeRotationAxis(u, Math.PI)).multiply(new THREE.Matrix4().makeTranslation(-o.x, -o.y, -o.z));
     j.align = F.multiply(new THREE.Matrix4().fromArray(j.align)).toArray().map(r6);
     applyExplode(); saveJoints(); commit();
   };
-  row.append(mk('div', { className: 'jo' }, mk('label', {}, 'on ', sel), ...(j.align ? [mk('button', { className: 'ghost', textContent: 'Flip', title: 'Turn the part over on the joint face', onclick: flip })] : []),
+  const stacked = jointsOf(j.body)[0] !== j;   // a second joint on the body rides on the first: its carrier is set there
+  row.append(mk('div', { className: 'jo' }, stacked ? mk('span', { textContent: `then, on its ${JOINT_LABEL[jointsOf(j.body)[0].type].toLowerCase()} joint` }) : mk('label', {}, 'on ', sel), ...(j.align ? [mk('button', { className: 'ghost', textContent: 'Flip', title: 'Turn the part over on the joint face', onclick: flip })] : []),
     ...(j.type === 'screw' ? [opt('pitch', 'pitch ')] : []), ...(j.type === 'fixed' || j.type === 'ball' ? [] : [opt('min', 'min '), opt('max', 'max ')])));
   return row;
 }

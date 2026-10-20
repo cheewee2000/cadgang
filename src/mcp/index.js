@@ -236,7 +236,7 @@ server.registerTool(
     title: 'Add, change, drive or remove a joint',
     description: `Change the joints of the file on screen (see cadgang_joints for what they are and the body keys).
 
-  - action 'add': type + body (a key, or a unique body name). For revolute/slider/screw/cylindrical with no axis and origin, the body's longest round face gives them (a screw's shank, a pin); otherwise pass both. A screw with no pitch gets the ISO metric coarse pitch for its diameter. One joint per body: adding replaces the body's joint.
+  - action 'add': type + body (a key, or a unique body name). For revolute/slider/screw/cylindrical with no axis and origin, the body's longest round face gives them (a screw's shank, a pin); otherwise pass both. A screw with no pitch gets the ISO metric coarse pitch for its diameter. A body can have several joints: they stack in the order added, each riding on the ones before it (a pin in a slot: a slider along the slot, then a revolute about the pin), all on the first one's parent; to replace a joint, remove it first. With several, update and remove by id.
   - action 'update': id (or body) + any of value, value2, value3, offset, rotation, pitch, min, max, parent, name, origin, axis. This is also how you DRIVE a joint: set value (degrees, or mm for a slider; for a screw, 360 is one turn) and the part moves on the user's screen. min/max limit value (null = free).
   - action 'remove': id (or body). action 'clear': every joint.
 
@@ -287,7 +287,9 @@ To unscrew a screw: update its joint to a large value (say 2160 = six turns at 1
           origin: num(origin || [0, 0, 0]), axis: unit3(axis || [0, 0, 1]), rot: a.rotation ?? [0, 0, 0], value: a.value ?? 0, value2: a.value2 ?? 0, value3: a.value3 ?? 0, offset: a.offset ?? 0,
           pitch: a.type === 'screw' ? a.pitch ?? (radius ? isoPitch(radius * 2) : 1.5) : 0, min: a.min ?? null, max: a.max ?? null,
         };
-        joints = [...joints.filter((x) => x.body !== b.key), j];
+        const first = joints.find((x) => x.body === b.key);
+        if (first) { j.parent = first.parent; j.align = null; }   // stacked on the body's first joint
+        joints = [...joints, j];
       } else {
         const j = joints.find((x) => (a.id ? x.id === a.id : a.body ? x.body === body(a.body)?.key : false));
         if (!j) throw new Error(`No such joint. Joints: ${joints.map((x) => `${x.id} (${x.type} ${x.body})`).join(', ') || 'none'}`);

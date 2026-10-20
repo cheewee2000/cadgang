@@ -24,6 +24,10 @@ import * as THREE from 'three';
  * file's own frame, the one the geometry is in before any explode. A joint's parent carries it: the
  * pose of a body is its parent's pose followed by its own joint, so a nut on a screw on a plate follows
  * the plate. `min`/`max` (null = free) limit `value`.
+ *
+ * A body may have several joints: they stack in list order, each riding on the ones before it (a pin in
+ * a slot slides along the slot, then turns about the pin, whose axis has slid with it). The first one's
+ * parent carries the stack; the others' parents are the same. Only the first snaps (`align`).
  */
 export const JOINT_TYPES = ['revolute', 'slider', 'screw', 'cylindrical', 'planar', 'ball', 'fixed'];
 export const JOINT_LABEL = { revolute: 'Revolute', slider: 'Slider', screw: 'Screw', cylindrical: 'Cylindrical', planar: 'Planar', ball: 'Ball', fixed: 'Fixed' };
@@ -92,18 +96,21 @@ function motion(j) {
   return m;
 }
 
-/** Every jointed body's pose (rest → current) through its parents. A loop in the chain is cut at the
- *  point it closes, and a body with two joints takes the first. */
+/** Every jointed body's pose (rest → current) through its parents, its joints stacked in order. A loop in
+ *  the chain is cut at the point it closes. `frames` holds, per joint id, the pose it moves from: its
+ *  parent's, then the body's joints before it (what a drag turns the pointer through). */
 export function solvePoses(joints) {
   const byBody = new Map();
-  for (const j of joints) if (!byBody.has(j.body)) byBody.set(j.body, j);
-  const out = new Map(), busy = new Set();
+  for (const j of joints) byBody.set(j.body, [...(byBody.get(j.body) ?? []), j]);
+  const out = new Map(), busy = new Set(), frames = new Map();
+  out.frames = frames;
   const pose = (key) => {
     if (out.has(key)) return out.get(key);
-    const j = byBody.get(key);
-    if (!j || busy.has(key)) return new THREE.Matrix4();
+    const stack = byBody.get(key);
+    if (!stack || busy.has(key)) return new THREE.Matrix4();
     busy.add(key);
-    const m = (j.parent ? pose(j.parent).clone() : new THREE.Matrix4()).multiply(jointMatrix(j));
+    const m = stack[0].parent ? pose(stack[0].parent).clone() : new THREE.Matrix4();
+    for (const j of stack) { frames.set(j.id, m.clone()); m.multiply(jointMatrix(j)); }
     busy.delete(key);
     out.set(key, m);
     return m;
