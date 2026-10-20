@@ -163,8 +163,10 @@ select.ghost:hover { opacity: 0.55; }
 .markup-tools .swatch { width: 22px; padding: 0; background: var(--swatch); }
 .markup-tools .swatch.on { box-shadow: inset 0 0 0 2px var(--paper); border-color: var(--ink); }
 .markup-sep { width: var(--bw-hair); background: var(--rule); margin: 0 var(--sp-1); }
-.note-label, .note-input { position: absolute; transform: translate(-50%, calc(-100% - 12px)); background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--signal-red); padding: 1px 6px; font: inherit; font-size: var(--fs-12); white-space: nowrap; pointer-events: none; }
-.note-input { pointer-events: auto; width: 180px; outline: none; border-radius: 0; }
+.note-input { position: absolute; transform: translate(-50%, calc(-100% - 12px)); background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--signal-red); padding: 1px 6px; font: inherit; font-size: var(--fs-12); white-space: nowrap; pointer-events: none; }
+/* A tag for an arrow or note: screen-space, upright, one size at any zoom. Placed by markup.js (transform) */
+.note-label { position: absolute; left: 0; top: 0; max-width: 220px; box-sizing: border-box; background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--rule); border-left: 3px solid var(--tag, var(--signal-red)); padding: 4px 8px; font: inherit; font-size: var(--fs-12); line-height: 16px; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; box-shadow: 0 1px 6px rgba(0,0,0,.12); will-change: transform; }
+.note-input { pointer-events: auto; width: 180px; outline: none; border-radius: 0; white-space: pre-wrap; resize: none; overflow: hidden; line-height: 16px; box-sizing: border-box; }
 .note-label[hidden] { display: none; }
 /* body list */
 /* HUD clusters over the viewport: section + bodies top-left, view/render buttons bottom-left */
@@ -209,7 +211,7 @@ select.ghost:hover { opacity: 0.55; }
 .load-error:empty { display: none; }
 
 /* right-click menu and hover tips */
-#ctx { position: fixed; z-index: 20; display: flex; flex-direction: column; min-width: 200px; background: var(--paper); border: var(--bw-hair) solid var(--ink); padding: 2px; }
+#ctx { position: fixed; z-index: 20; display: flex; flex-direction: column; min-width: 200px; max-height: calc(100vh - 16px); overflow-y: auto; background: var(--paper); border: var(--bw-hair) solid var(--ink); padding: 2px; }
 #ctx[hidden] { display: none; }
 #ctx button { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-4); border: 0; border-left: 2px solid transparent; padding: 5px 8px; font-size: var(--fs-12); text-align: left; }
 #ctx button.on { border-left-color: var(--ink); }
@@ -225,3 +227,38 @@ footer button.ghost { font-size: var(--fs-12); padding: 4px 8px; }
 .status { color: var(--ink-soft); font-size: var(--fs-12); min-width: 84px; max-width: 40vw; text-align: right; text-transform: uppercase; letter-spacing: var(--ls-label); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 footer > * { white-space: nowrap; }
 .status.err { color: var(--signal-red); }
+
+/* Joints panel: one block per joint under the bodies */
+.joints { position: relative; z-index: 2; display: flex; flex-direction: column; gap: var(--sp-2); max-height: 40%; overflow: auto; box-sizing: border-box; min-width: 120px; max-width: 70vw; background: var(--paper); border: var(--bw-hair) solid var(--rule); padding: var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); }
+.joints[hidden] { display: none; }
+.joints-head { opacity: 0.6; text-transform: uppercase; }
+.joint { display: flex; flex-direction: column; gap: 2px; padding-top: var(--sp-1); border-top: var(--bw-hair) solid var(--rule); }
+.joint .jl { display: flex; align-items: center; gap: var(--sp-2); }
+.joint .jname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.7; }
+.joint .jl button { padding: 0 var(--sp-1); line-height: 1; }
+.joint .jr, .joint .jo { display: flex; align-items: center; gap: var(--sp-2); }
+.joint .jr input[type=range] { flex: 1; min-width: 90px; accent-color: var(--ink); }
+.joint .jv { width: 5.5em; font: inherit; font-size: var(--fs-12); height: 20px; }
+.joint .jo { flex-wrap: wrap; }
+.joints .jo select.ghost { font-size: var(--fs-12); height: 20px; padding: 0 22px 0 4px; background-position: right 4px center; max-width: 11em; }   /* the global select padding leaves no room for text at 20px */
+
+/* Mode: explode and joint tools are never on at once. The explode controls keep their room in joint mode so the toolbar never shifts */
+:root[data-mode="joint"] #explodeSect { visibility: hidden; }
+:root[data-mode="explode"] #joints { display: none; }
+
+/* Rename a body: a pencil on hover, an inline field while editing */
+.bodies .body-edit { flex: none; opacity: 0; cursor: pointer; padding: 0 2px; }
+.bodies label:hover .body-edit { opacity: 0.6; }
+.bodies .body-edit:hover { opacity: 1; text-decoration: none; }
+.bodies .body-rename { font: inherit; font-size: var(--fs-12); width: 12em; height: 18px; padding: 0 3px; }
+
+/* Selection: rows, the action bar, and the shift-drag window */
+.bodies label.sel { outline: var(--bw-hair) solid #1d6bff; outline-offset: 1px; }
+.selbar { position: absolute; top: var(--sp-3); left: 50%; transform: translateX(-50%); z-index: 3; display: flex; align-items: center; gap: var(--sp-2); background: var(--paper); border: var(--bw-hair) solid #1d6bff; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); white-space: nowrap; }
+.selbar[hidden] { display: none; }
+.selbar button, .selbar select { font-size: var(--fs-12); height: 22px; padding: 0 var(--sp-2); }
+.selbar select { padding-right: 22px; background-position: right 4px center; }
+.marquee { position: fixed; z-index: 9; pointer-events: none; border: 1px solid #1d6bff; background: rgba(29, 107, 255, 0.12); }
+.marquee[hidden] { display: none; }
+.marquee.crossing { border-style: dashed; background: rgba(29, 107, 255, 0.06); }
+.selbar select { width: 8.5em; }

@@ -166,6 +166,173 @@ server.registerTool(
   async (spec) => { try { return ok(await call('/view/drawing/make', { method: 'POST', body: { spec } })); } catch (e) { return fail(e); } }
 );
 
+// ---- joints: bodies that move on an axis (a screw that turns and advances, a hinge, a drawer)
+const JOINT_TYPES = ['revolute', 'slider', 'screw', 'cylindrical', 'ball', 'fixed'];
+const ISO_PITCH = [[2, 0.4], [2.5, 0.45], [3, 0.5], [4, 0.7], [5, 0.8], [6, 1], [8, 1.25], [10, 1.5], [12, 1.75], [16, 2], [20, 2.5], [24, 3]];   // metric coarse, by nominal diameter
+const isoPitch = (d) => ISO_PITCH.reduce((b, p) => (Math.abs(p[0] - d) < Math.abs(b[0] - d) ? p : b))[1];
+const unit3 = (v) => { const n = Math.hypot(...v); if (!n) throw new Error('axis must not be zero'); return v.map((x) => +(x / n).toFixed(6)); };
+
+const sub3 = (a, b) => a.map((v, i) => v - b[i]);
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const lineDist = (p, o, axis) => { const d = sub3(p, o), t = dot3(d, axis); return { dist: Math.hypot(...sub3(d, axis.map((v) => v * t))), along: t }; };
+
+/** What the user's notes and arrows point at: for each, the body it sits on and the round face nearest its anchor. */
+function readAnnotations(markups, bodies) {
+  return (markups || []).filter((m) => m.text && (m.kind === 'note' || m.kind === 'arrow')).map((m) => {
+    const at = m.kind === 'arrow' ? m.points[1] : m.points[0];   // an arrow's head is what it points at, its tail holds the text
+    const pool = m.body ? bodies.filter((b) => b.key === m.body) : bodies;
+    let best = null;
+    for (const b of pool) (b.cylinders || []).forEach((c, i) => {
+      const { dist, along } = lineDist(at, c.origin, c.axis);
+      const score = Math.min(Math.abs(dist - c.radius), dist);
+      if (!best || score < best.score) best = { score, body: b.key, cylinder: i, axis: c.axis, origin: c.origin, radius: c.radius, distanceToAxis: +dist.toFixed(3), alongAxis: +along.toFixed(3) };
+    });
+    if (best) { delete best.score; }
+    return { id: m.id, kind: m.kind, text: m.text, body: m.body ?? null, point: at.map((v) => +v.toFixed(3)), nearestRoundFace: best, ...(m.normal ? { faceNormal: m.normal } : {}) };   // a flat part has no round face: the face it was marked on gives a slide axis
+  });
+}
+/** Pairs of bodies with round faces on one axis (a screw in a bore, a pin in a hole): the smaller radius is the pin, the other likely carries it. */
+function coaxialPairs(bodies) {
+  const out = [];
+  for (let i = 0; i < bodies.length; i++) for (let j = i + 1; j < bodies.length; j++)
+    for (const [ci, a] of (bodies[i].cylinders || []).entries()) for (const [cj, b] of (bodies[j].cylinders || []).entries()) {
+      if (Math.hypot(...cross3(a.axis, b.axis)) > 0.01) continue;
+      if (lineDist(b.origin, a.origin, a.axis).dist > 0.05 + 0.02 * Math.max(a.radius, b.radius)) continue;
+      out.push({ a: bodies[i].key, aCylinder: ci, aRadius: a.radius, b: bodies[j].key, bCylinder: cj, bRadius: b.radius, axis: a.axis, origin: a.origin });
+    }
+  return out;
+}
+
+server.registerTool(
+  'cadgang_joints',
+  {
+    title: 'Bodies, joints and the notes that ask for them',
+    description: `The bodies of the file on screen, the joints between them, and the user's notes and arrows read as requests for joints.
+
+A joint lets a body move on an axis, as in Fusion 360: 'revolute' turns about an axis, 'slider' slides along it, 'screw' turns AND advances (pitch mm per turn, right-handed: a positive turn goes along +axis), 'cylindrical' turns and slides independently (value = degrees, value2 = mm), 'ball' turns freely about a point (origin) by Euler angles rot = [x, y, z] degrees (a sphere you can spin to any orientation), 'fixed' rides with its parent. Angles are degrees, lengths mm. 'parent' is the body the joint is carried by (null = ground): a nut on a bolt on a plate follows the plate; a chain works (a lens fixed to a cell that screws into a housing that hinges).
+
+Each body has a 'key' ("name#n", what joints refer to; it never changes), a 'label' when the user renamed it (use the label in what you say to them: it is the name they see), its box [minx,miny,minz,maxx,maxy,maxz] and its round faces ('cylinders': origin on the axis, axis, radius, length; the longest first): a screw's shank, a pin, a bore. Origins and axes are in the file's frame, the one the box is in.
+
+'annotations': each note or arrow of the user with text, the body it sits on and the round face nearest to where it points (axis, origin, radius, distanceToAxis). The user marks parts this way — "screw", "hinge", "slides", "M3", "on the lid" — and asks you to make them move. Read the words: screw/bolt/thread → 'screw' (a size like M3 gives the pitch; the default is the ISO coarse pitch for the shank), hinge/pivot/rotates/knob/wheel → 'revolute', turns to ANY orientation/on any axis (a ball, an orb, a joystick) → 'ball' (origin = its centre), slides/drawer/rail/plunger → 'slider', both turns and slides → 'cylindrical', glued/fixed to X → 'fixed' with parent X. "On X", "in X" or "to X" names the parent. A note placed with no body (point in empty space) has no body: use cadgang_screen to see what it points at.
+'coaxial': pairs of bodies with round faces on one axis (a pin in a bore): the smaller radius is the pin that moves; the other is its natural parent.
+
+To make the joints work: add each with cadgang_joint, then check it — drive it through its range (cadgang_joint update value, then cadgang_screen) and confirm the part moves the way the note meant and does not pass through its neighbour; fix the axis, parent or limits if not. Then tell the user what you made and clear the notes you acted on (cadgang_markup_clear).`,
+    inputSchema: {},
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async () => {
+    try {
+      const d = await call('/view/joints');
+      const { markups } = await call(`/view/markup?subject=${encodeURIComponent(d.subject || '')}`);
+      return ok({ ...d, annotations: readAnnotations(markups, d.bodies || []), coaxial: coaxialPairs(d.bodies || []) });
+    } catch (e) { return fail(e); }
+  }
+);
+
+server.registerTool(
+  'cadgang_joint',
+  {
+    title: 'Add, change, drive or remove a joint',
+    description: `Change the joints of the file on screen (see cadgang_joints for what they are and the body keys).
+
+  - action 'add': type + body (a key, or a unique body name). For revolute/slider/screw/cylindrical with no axis and origin, the body's longest round face gives them (a screw's shank, a pin); otherwise pass both. A screw with no pitch gets the ISO metric coarse pitch for its diameter. One joint per body: adding replaces the body's joint.
+  - action 'update': id (or body) + any of value, value2, rotation, pitch, min, max, parent, name, origin, axis. This is also how you DRIVE a joint: set value (degrees, or mm for a slider; for a screw, 360 is one turn) and the part moves on the user's screen. min/max limit value (null = free).
+  - action 'remove': id (or body). action 'clear': every joint.
+
+To unscrew a screw: update its joint to a large value (say 2160 = six turns at 1.5 mm pitch). Take cadgang_screen after to see it.`,
+    inputSchema: {
+      action: z.enum(['add', 'update', 'remove', 'clear']),
+      id: z.string().optional(), name: z.string().optional(),
+      type: z.enum(JOINT_TYPES).optional(),
+      body: z.string().optional().describe('body key "name#n", or a unique body name or label'),
+      parent: z.string().nullable().optional().describe('body that carries this one; null = ground'),
+      origin: z.array(z.number()).length(3).optional().describe('a point on the axis, file frame, mm'),
+      axis: z.array(z.number()).length(3).optional().describe('axis direction (any length)'),
+      value: z.number().optional(), value2: z.number().optional().describe('cylindrical: the slide, mm'),
+      rotation: z.array(z.number()).length(3).optional().describe('ball: Euler angles [x, y, z] in degrees (the turn about origin)'),
+      pitch: z.number().optional().describe('screw: mm per turn; negative = left-hand'),
+      min: z.number().nullable().optional(), max: z.number().nullable().optional(),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  async (a) => {
+    try {
+      const cur = await call('/view/joints');
+      const bodies = cur.bodies || [];
+      if (!bodies.length && a.action !== 'clear') throw new Error('The window has not reported its bodies yet: is a file open in CADgang? Try again in a second.');
+      const body = (name) => {
+        if (name == null) return null;
+        const only = (f) => (bodies.filter(f).length === 1 ? bodies.find(f) : null);   // a name or label that is unique
+        const hit = bodies.find((b) => b.key === name) ?? only((b) => b.name === name) ?? only((b) => b.label === name);
+        if (!hit) throw new Error(`No body "${name}" (or its name is not unique — use the key). Bodies: ${bodies.map((b) => b.key).join(', ')}`);
+        return hit;
+      };
+      const num = (v) => v.map((x) => +x.toFixed(6));
+      let joints = cur.joints || [];
+      if (a.action === 'clear') joints = [];
+      else if (a.action === 'add') {
+        if (!a.type || !a.body) throw new Error("add needs 'type' and 'body'");
+        const b = body(a.body);
+        let { origin, axis } = a, radius = null;
+        if (a.type === 'ball') { origin ??= [0, 1, 2].map((i) => +((b.box[i] + b.box[i + 3]) / 2).toFixed(4)); axis ??= [0, 0, 1]; }   // spinning about the body's centre
+        if (a.type !== 'fixed' && (!origin || !axis)) {
+          const c = b.cylinders?.[0];
+          if (!c) throw new Error(`${b.key} has no round face to take an axis from: pass 'origin' and 'axis'`);
+          origin ??= c.origin; axis ??= c.axis; radius = c.radius;
+        }
+        const j = {
+          id: 'j' + Math.random().toString(36).slice(2, 8), name: a.name || `${a.type} · ${b.name}`, type: a.type, body: b.key, parent: body(a.parent)?.key ?? null,
+          origin: num(origin || [0, 0, 0]), axis: unit3(axis || [0, 0, 1]), rot: a.rotation ?? [0, 0, 0], value: a.value ?? 0, value2: a.value2 ?? 0,
+          pitch: a.type === 'screw' ? a.pitch ?? (radius ? isoPitch(radius * 2) : 1.5) : 0, min: a.min ?? null, max: a.max ?? null,
+        };
+        joints = [...joints.filter((x) => x.body !== b.key), j];
+      } else {
+        const j = joints.find((x) => (a.id ? x.id === a.id : a.body ? x.body === body(a.body)?.key : false));
+        if (!j) throw new Error(`No such joint. Joints: ${joints.map((x) => `${x.id} (${x.type} ${x.body})`).join(', ') || 'none'}`);
+        if (a.action === 'remove') joints = joints.filter((x) => x !== j);
+        else {
+          for (const k of ['name', 'value', 'value2', 'pitch', 'min', 'max']) if (a[k] !== undefined) j[k] = a[k];
+          if (a.parent !== undefined) j.parent = body(a.parent)?.key ?? null;
+          if (a.origin) j.origin = num(a.origin);
+          if (a.axis) j.axis = unit3(a.axis);
+          if (a.rotation) j.rot = a.rotation;
+        }
+      }
+      const res = await call('/view/joints', { method: 'PUT', body: { joints, from: 'mcp' } });
+      return ok({ joints: res.joints });
+    } catch (e) { return fail(e); }
+  }
+);
+
+server.registerTool(
+  'cadgang_rename',
+  {
+    title: 'Rename bodies',
+    description: `Give bodies of the file on screen new names, which the user sees at once in their Bodies list, menus and Joints panel (and that you see as 'label' in cadgang_joints). Joints, marks and explode edits keep working: the body's key never changes. Pass body as a key, or a unique name or label; label '' puts the file's own name back. Use it when the user asks you to name parts ("call those microdots 1 to 7").`,
+    inputSchema: { renames: z.array(z.object({ body: z.string(), label: z.string() })).min(1) },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async ({ renames }) => {
+    try {
+      const { subject, bodies } = await call('/view/joints');
+      if (!bodies?.length) throw new Error('The window has not reported its bodies yet: is a file open in CADgang? Try again in a second.');
+      const only = (f) => (bodies.filter(f).length === 1 ? bodies.find(f) : null);
+      const { parts } = await call(`/view/parts?subject=${encodeURIComponent(subject)}`);
+      const names = { ...(parts['@names'] || {}) };
+      for (const { body, label } of renames) {
+        const b = bodies.find((x) => x.key === body) ?? only((x) => x.name === body) ?? only((x) => x.label === body);
+        if (!b) throw new Error(`No body "${body}" (or its name is not unique — use the key). Bodies: ${bodies.map((x) => x.key).join(', ')}`);
+        if (label.trim()) names[b.key] = label.trim(); else delete names[b.key];
+      }
+      const next = { ...parts, ...(Object.keys(names).length ? { '@names': names } : {}) };
+      if (!Object.keys(names).length) delete next['@names'];
+      await call('/view/parts', { method: 'PUT', body: { subject, parts: next, from: 'mcp' } });
+      return ok({ subject, names });
+    } catch (e) { return fail(e); }
+  }
+);
+
 registerCellTools(server, { call, ok, fail, base: BASE, headers: HEADERS });
 // Claude Code starts this server in the project folder: make it cadgang's project (unless a document is already open elsewhere).
 fetch(`${BASE}/api/project`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: process.cwd(), ifUnset: true }) })

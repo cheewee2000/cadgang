@@ -52,10 +52,13 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   let hitBody = null;
   const keyOf = (m) => { const all = getTargets(); const n = all.filter((o, i) => o.userData.name === m.userData.name && i < all.indexOf(m)).length; return `${m.userData.name}#${n}`; };
   const byKey = (k) => { const i = k.lastIndexOf('#'), name = k.slice(0, i), n = +k.slice(i + 1); return getTargets().filter((o) => o.userData.name === name)[n] ?? null; };
-  const ZERO = new THREE.Vector3();
-  const shift = (item) => (item.body && byKey(item.body)?.position) || ZERO;
-  const toWorld = (item, p) => new THREE.Vector3(...p).add(shift(item)).toArray();
-  const toRest = (item, p) => new THREE.Vector3(...p).sub(shift(item)).toArray();
+  // A part moves by its explode offset and by its joint (a turn about an axis), so a mark rides its pose, not just its position.
+  const IDENT = new THREE.Matrix4();
+  const bodyOf = (item) => (item.body && byKey(item.body)) || null;
+  const poseOf = (item) => { const b = bodyOf(item); if (!b) return IDENT; b.updateMatrix(); return b.matrix; };
+  const toWorld = (item, p) => new THREE.Vector3(...p).applyMatrix4(poseOf(item)).toArray();
+  const toRest = (item, p) => new THREE.Vector3(...p).applyMatrix4(poseOf(item).clone().invert()).toArray();
+  const follow = (holder, item) => { const b = bodyOf(item); if (b) { holder.position.copy(b.position); holder.quaternion.copy(b.quaternion); } else { holder.position.set(0, 0, 0); holder.quaternion.identity(); } };
   function pointAt(e) {
     const cam = getCamera();
     raycaster.setFromCamera(ndc(e), cam);
@@ -109,48 +112,16 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       const dot = new THREE.Mesh(new THREE.SphereGeometry(scale * 0.3, 12, 8), solidMat);   // a leader ends in a dot
       dot.position.copy(pts[1]);
       objs.push(dot);
-      if (item.text && item.normal) objs.push(planeText(item, pts, scale));
     } else if (item.kind === 'note') {
       const dot = new THREE.Mesh(new THREE.SphereGeometry(scale * 0.25, 12, 8), solidMat);
       dot.position.copy(pts[0]);
       objs.push(dot);
     }
     const holder = new THREE.Group();   // moved by the part's explode offset each frame
-    holder.userData.item = item; holder.position.copy(shift(item));
+    holder.userData.item = item; follow(holder, item);
     for (const o of objs) { o.renderOrder = Math.max(o.renderOrder, 5); o.userData.item = item; holder.add(o); }
     group.add(holder);
     return objs;
-  }
-
-  // An arrow's text drawn flat on the plane of the face it points at: a label texture on a quad in
-  // that plane, running along the arrow and starting at its tail (read left to right as seen when it
-  // was drawn: an arrow pointing right puts its text on its left end). A dot's text sits upright above it.
-  function planeText(item, [tail, head], scale) {
-    const c = document.createElement('canvas'), ctx = c.getContext('2d'), px = 48;
-    ctx.font = `${px}px "Space Mono", monospace`;
-    c.width = Math.ceil(ctx.measureText(item.text).width + px); c.height = Math.ceil(px * 1.6);
-    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, c.width, c.height);
-    ctx.strokeStyle = item.color || COLOR; ctx.lineWidth = 4; ctx.strokeRect(2, 2, c.width - 4, c.height - 4);
-    ctx.font = `${px}px "Space Mono", monospace`; ctx.fillStyle = '#000000'; ctx.textBaseline = 'middle';
-    ctx.fillText(item.text, px / 2, c.height / 2);
-    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-    const h = scale * 1.1, w = h * c.width / c.height;
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, depthTest: false, transparent: true, side: THREE.DoubleSide }));
-    const n = new THREE.Vector3(...item.normal), camUp = new THREE.Vector3(...item.up), camRight = camUp.clone().cross(n);
-    const away = tail.clone().sub(head); away.addScaledVector(n, -away.dot(n));   // head → tail, in the plane
-    let r = camRight, u = camUp;
-    const along = away.length() > scale * 0.3;   // an arrow, not a dot
-    if (along) {
-      away.normalize();
-      r = away.dot(camRight) < 0 ? away.clone().negate() : away.clone();   // never upside down
-      u = n.clone().cross(r);
-    }
-    mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(r, u, n));
-    mesh.position.copy(tail);
-    if (along) mesh.position.addScaledVector(away, w / 2 + scale * 0.2);   // starts at the tail, away from the head
-    else mesh.position.addScaledVector(u, h * 0.9);   // a dot: above it
-    mesh.renderOrder = 6; mesh.userData.own = true;
-    return mesh;
   }
 
   function rebuild() {
@@ -158,30 +129,62 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     for (const l of layer.querySelectorAll('.note-label')) l.remove();
     for (const item of items) {
       build(item);
-      if (item.text && !item.normal) {   // planar text is in the scene already
+      if (item.text) {
         const el = document.createElement('div');
         el.className = 'note-label';
-        el.textContent = item.text || '…';
+        el.textContent = item.text;
         el.dataset.id = item.id;
-        el.style.borderColor = item.color || COLOR;
+        el.style.setProperty('--tag', item.color || COLOR);
         layer.appendChild(el);
       }
     }
     if (current) build(current);
   }
 
-  /** Called every frame: keep note labels on their anchors. */
-  function projectLabels() {
-    const r = canvas.getBoundingClientRect();
-    for (const m of mats.values()) m.line.resolution.set(r.width, r.height);
-    for (const h of group.children) h.position.copy(shift(h.userData.item));
+  // Text is a tag in screen space, not a quad on the face: it stays upright and the same size at any
+  // angle or zoom. A tag sits on the arrow's text end (the tail), on the side away from the head, so
+  // the leader runs into it; a note's tag sits above its dot. Tags that would overlap are pushed apart.
+  const GAP = 8, SPACE = 4;
+  let tags = [];   // the last layout: { item, text, x, y, w, h, color } in canvas pixels
+  function layoutTags() {
+    const r = canvas.getBoundingClientRect(), out = [];
     for (const el of layer.querySelectorAll('.note-label')) {
       const item = items.find((i) => i.id === el.dataset.id);
       if (!item) continue;
-      const s = toScreen(toWorld(item, item.points[0]));
-      el.style.left = `${s.x}px`; el.style.top = `${s.y}px`;
-      el.hidden = s.behind;
+      const tail = toScreen(toWorld(item, item.points[0]));
+      el.hidden = tail.behind;
+      if (tail.behind) continue;
+      const w = el.offsetWidth, h = el.offsetHeight;
+      let dx = 0, dy = -1;   // which way the tag lies from its anchor
+      if (item.kind === 'arrow' && item.points[1]) {
+        const head = toScreen(toWorld(item, item.points[1]));
+        if (Math.hypot(tail.x - head.x, tail.y - head.y) > 10) { dx = tail.x - head.x; dy = tail.y - head.y; }
+      }
+      let x, y;
+      if (Math.abs(dx) >= Math.abs(dy) * 0.6) { x = dx > 0 ? tail.x + GAP : tail.x - GAP - w; y = tail.y - h / 2; }
+      else { x = tail.x - w / 2; y = dy > 0 ? tail.y + GAP : tail.y - GAP - h; }
+      x = Math.max(SPACE, Math.min(r.width - w - SPACE, x));
+      y = Math.max(SPACE, Math.min(r.height - h - SPACE, y));
+      out.push({ el, item, text: item.text, x, y, w, h, color: item.color || COLOR });
     }
+    out.sort((a, b) => a.y - b.y || a.x - b.x);
+    for (let i = 0; i < out.length; i++) {
+      for (let j = 0; j < i; j++) {
+        const a = out[j], b = out[i];
+        if (b.x < a.x + a.w + SPACE && a.x < b.x + b.w + SPACE && b.y < a.y + a.h + SPACE && a.y < b.y + b.h + SPACE) b.y = a.y + a.h + SPACE;
+      }
+      out[i].y = Math.min(out[i].y, r.height - out[i].h - SPACE);
+    }
+    return out;
+  }
+
+  /** Called every frame: keep the tags on their anchors. */
+  function projectLabels() {
+    const r = canvas.getBoundingClientRect();
+    for (const m of mats.values()) m.line.resolution.set(r.width, r.height);
+    for (const h of group.children) follow(h, h.userData.item);
+    tags = layoutTags();
+    for (const t of tags) { t.el.style.transform = `translate(${Math.round(t.x)}px, ${Math.round(t.y)}px)`; }
   }
 
   // ------------------------------------------------------------- pointer
@@ -251,12 +254,31 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     rebuild();
   }, { capture: true });
 
+  // Double-click a tag (or the dot it hangs on) to edit its text in place. Only with no tool chosen: with
+  // one, a double-click is two marks.
+  canvas.addEventListener('dblclick', (e) => {
+    if (tool || noteInput) return;
+    const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    const hit = [...tags].reverse().find((t) => x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h)
+      || tags.find((t) => t.item.points.some((q) => { const s = toScreen(toWorld(t.item, q)); return Math.hypot(s.x - x, s.y - y) < 12; }));
+    if (!hit) return;
+    e.preventDefault(); e.stopPropagation();
+    startNote(toWorld(hit.item, hit.item.points[0]), e, hit.item);
+    noteInput.value = hit.item.text; noteInput.select(); noteInput.dispatchEvent(new Event('input'));
+    noteInput.style.left = `${hit.x + hit.w / 2}px`; noteInput.style.top = `${hit.y + hit.h + 12}px`;   // over its own tag
+    noteInput.style.width = `${Math.max(180, hit.w)}px`;
+    hit.el.style.visibility = 'hidden';
+  });
+
   /** Note input at p; with `item`, the text goes on that item (an arrow) instead of a new note. */
   function startNote(p, e, item = null, body = undefined) {   // p in world space
     noteInput?.remove();
-    const el = document.createElement('input');
+    const el = document.createElement('textarea');   // Enter saves, Shift+Enter starts a new line
     el.className = 'note-input';
-    el.placeholder = 'note… (Enter)';
+    el.placeholder = 'note… (Enter saves, Shift+Enter for a new line)';
+    el.rows = 1;
+    const grow = () => { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`; };
+    el.addEventListener('input', grow);
     const s = toScreen(p);
     el.style.left = `${s.x}px`; el.style.top = `${s.y}px`;
     layer.appendChild(el);
@@ -275,7 +297,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       }
       el.remove(); noteInput = null; rebuild();
     };
-    el.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') done(true); else if (ev.key === 'Escape') done(false); ev.stopPropagation(); });
+    el.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); done(true); } else if (ev.key === 'Escape') done(false); ev.stopPropagation(); });
     el.addEventListener('blur', () => done(true));
   }
 
@@ -328,16 +350,27 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     const ctx = c.getContext('2d');
     ctx.drawImage(canvas, 0, 0);
     const k = canvas.width / canvas.getBoundingClientRect().width;
-    ctx.font = `${13 * k}px "Space Mono", monospace`;
-    ctx.textBaseline = 'bottom';
-    for (const item of items) {
-      if (!item.text || item.normal) continue;   // planar text is in the render already
-      const s = toScreen(toWorld(item, item.points[0]));
-      if (s.behind) continue;
-      const text = item.text, w = ctx.measureText(text).width + 12 * k, h = 20 * k;
-      ctx.fillStyle = '#ffffff'; ctx.fillRect(s.x * k - w / 2, s.y * k - 12 * k - h, w, h);
-      ctx.strokeStyle = item.color || COLOR; ctx.lineWidth = k; ctx.strokeRect(s.x * k - w / 2, s.y * k - 12 * k - h, w, h);
-      ctx.fillStyle = '#000000'; ctx.fillText(text, s.x * k - w / 2 + 6 * k, s.y * k - 12 * k - 3 * k);
+    projectLabels();
+    const px = 12 * k, pad = 8 * k, line = 16 * k;
+    ctx.font = `${px}px "Space Mono", monospace`; ctx.textBaseline = 'middle';
+    for (const t of tags) {
+      const x = t.x * k, w = t.w * k;
+      const rows = [];   // the same wrap the tag has: words to the tag's width
+      for (const para of t.text.split('\n')) {
+        let row = '';
+        for (const word of para.split(/\s+/).filter(Boolean)) {
+          const next = row ? `${row} ${word}` : word;
+          if (row && ctx.measureText(next).width > w - 2 * pad - 3 * k) { rows.push(row); row = word; } else row = next;
+        }
+        rows.push(row);
+      }
+      const h = Math.max(t.h * k, rows.length * line + 8 * k), y = t.y * k + (t.h * k - h) / 2;   // as tall as its text needs
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = k; ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = t.color; ctx.fillRect(x, y, 3 * k, h);
+      ctx.fillStyle = '#000000';
+      const top = y + (h - rows.length * line) / 2 + line / 2;
+      rows.forEach((text, i) => ctx.fillText(text, x + pad + 3 * k, top + i * line));
     }
     return c.toDataURL('image/png');
   }
