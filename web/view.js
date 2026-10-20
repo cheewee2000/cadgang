@@ -1982,11 +1982,17 @@ async function openProject(buffer, name, path = '') {
 $('#saveBtn').addEventListener('click', () => saveProject());
 window.cadgangSave = saveProject;   // the shell's File menu
 
+// A Vercel share keeps its bundle gzipped in parts (Vercel's 100 MB file limit): share.json says how many.
+async function vercelBundle() {
+  const { parts } = await fetch('share.json').then((r) => r.json());
+  const blobs = await Promise.all(Array.from({ length: parts }, (_, i) => fetchBuffer(`share.${i}.bin`)));
+  return new Response(new Blob(blobs).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+}
 async function openShare(id) {
   document.documentElement.classList.add('shared');
   say('loading shared view…'); progressStart('share');
   try {
-    const buf = await fetchBuffer(`api/view/share/${encodeURIComponent(id)}`);
+    const buf = window.cadgangServerless ? await vercelBundle() : await fetchBuffer(`api/view/share/${encodeURIComponent(id)}`);
     subject = `share:${id}`;   // markups attach to the link: everyone who opens it sees the same ones
     const head = await loadBundle(buf, { markupFromServer: true });
     document.title = `${head.name} · CADgang`;

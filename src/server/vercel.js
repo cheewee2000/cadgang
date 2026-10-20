@@ -1,7 +1,8 @@
 /**
  * Share to web on the user's own Vercel account: each share is one static deployment of the viewer
- * (web/) plus the view's bundle as share.bin, in a project of theirs named cadgang-shares. A rewrite
- * answers the page's own `api/view/share/:id` fetch with share.bin, so ?share= opens it unchanged.
+ * (web/) plus the view's bundle, gzipped and cut into share.<n>.bin parts under Vercel's 100 MB file
+ * limit, listed in share.json, in a project of theirs named cadgang-shares. The page there reads
+ * share.json and puts the bundle back together (view.js openShare).
  * Visitors orbit, cut, explode and mark up; their marks stay in their own browser (no server there).
  * ponytail: personal-scope tokens only; pass ?teamId= on every call if team tokens are ever needed.
  */
@@ -9,14 +10,14 @@ import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
+import { promisify } from 'node:util';
 
 const WEB = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
 const API = 'https://api.vercel.com';
 export const PROJECT = 'cadgang-shares';
-const VERCEL_JSON = JSON.stringify({ rewrites: [
-  { source: '/api/view/share/:id', destination: '/share.bin' },
-  { source: '/view', destination: '/view.html' },
-] });
+const VERCEL_JSON = JSON.stringify({ rewrites: [{ source: '/view', destination: '/view.html' }] });
+const PART = 64 << 20;   // Vercel refuses files over 100 MB
 
 async function webFiles(dir = WEB, rel = '') {
   const out = [];
@@ -39,7 +40,9 @@ export async function deployShare(bundle, token, { fetch = globalThis.fetch, wai
     return { ok: res.ok, status: res.status, d };
   };
   const fail = (r, what) => Object.assign(new Error(`Vercel ${what}: ${r.d.error?.message || `HTTP ${r.status}`}`), { status: r.status === 401 || r.status === 403 ? 401 : 502 });
-  const files = [...await webFiles(), { file: 'share.bin', data: bundle }, { file: 'vercel.json', data: Buffer.from(VERCEL_JSON) }]
+  const gz = await promisify(zlib.gzip)(bundle);
+  const parts = Array.from({ length: Math.max(1, Math.ceil(gz.length / PART)) }, (_, i) => ({ file: `share.${i}.bin`, data: gz.subarray(i * PART, (i + 1) * PART) }));
+  const files = [...await webFiles(), ...parts, { file: 'share.json', data: Buffer.from(JSON.stringify({ parts: parts.length, gzip: true })) }, { file: 'vercel.json', data: Buffer.from(VERCEL_JSON) }]
     .map((f) => ({ ...f, sha: crypto.createHash('sha1').update(f.data).digest('hex') }));
   const create = () => call('/v13/deployments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
     name: PROJECT, projectSettings: { framework: null }, files: files.map(({ file, sha, data }) => ({ file, sha, size: data.length })),

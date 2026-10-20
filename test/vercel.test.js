@@ -11,8 +11,8 @@ test('deployShare uploads only missing files and returns the ready link', async 
     const json = (status, d) => ({ ok: status < 300, status, json: async () => d });
     if (url.endsWith('/v13/deployments')) {
       const body = JSON.parse(init.body);
-      assert.ok(body.files.some((f) => f.file === 'share.bin') && body.files.some((f) => f.file === 'view.html') && body.files.some((f) => f.file === 'vercel.json'));
-      if (creates++ === 0) return json(400, { error: { code: 'missing_files', missing: [body.files.find((f) => f.file === 'share.bin').sha] } });
+      assert.ok(body.files.some((f) => f.file === 'share.0.bin') && body.files.some((f) => f.file === 'share.json') && body.files.some((f) => f.file === 'view.html') && body.files.some((f) => f.file === 'vercel.json'));
+      if (creates++ === 0) return json(400, { error: { code: 'missing_files', missing: [body.files.find((f) => f.file === 'share.0.bin').sha] } });
       return json(200, { id: 'dpl_1', url: 'cadgang-shares-abc.vercel.app', readyState: 'BUILDING' });
     }
     if (url.includes('/v2/files')) { assert.equal(init.headers['x-vercel-digest'].length, 40); return json(200, {}); }
@@ -22,7 +22,7 @@ test('deployShare uploads only missing files and returns the ready link', async 
   };
   const link = await deployShare(Buffer.from('bundle'), 't', { fetch, wait: async () => {} });
   assert.equal(link, 'https://cadgang-shares-abc.vercel.app/view?share=dpl_1');
-  assert.equal(calls.filter(([, u]) => u === '/v2/files').length, 1);   // only share.bin, the viewer was already there
+  assert.equal(calls.filter(([, u]) => u === '/v2/files').length, 1);   // only the share's part, the viewer was already there
 });
 
 test('a rejected token is a 401', async () => {
