@@ -197,7 +197,9 @@ function fillStyles(buffer, result, bodies, parents) {
     for (const c of node.children ?? []) walk(c);
   })(result.root);   // the WASM importer's tree; the native one sends meshes only
   bodies.forEach((b, i) => {
-    const st = fromText[i], part = partOf[i];
+    const st = fromText[i];
+    // OCCT's writer names an unnamed product after itself ("Open CASCADE STEP translator 7.6 2.1"): no part, no folder
+    const part = partOf[i] && !/^Open CASCADE/i.test(partOf[i]) ? partOf[i] : null;
     // an unnamed body with no path of its own still sits in the part the importer found it in
     if (!b.path?.length && part && /^body \d+$/.test(b.name) && !st?.name) b.path = [...(parents.get(part) ?? []), part];
     if (!st) return;

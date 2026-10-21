@@ -27,7 +27,7 @@ import { renderDrawing } from './drawing.js';
 import { createMeasure, cylinderFit, sphereFit } from './measure.js';
 import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { MATERIALS, materialOf, pickMaterial, materialFor } from './materials.js';
+import { MATERIALS, materialOf, pickMaterial, pickedMaterial, materialFor } from './materials.js';
 import { silhouetteEdges, silhouetteFor } from './silhouette.js';
 import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
 import { createViewCube } from './viewcube.js';
@@ -105,6 +105,12 @@ const TINT_KEY = 'cadgang-tints';
 let tints = {};
 try { tints = JSON.parse(localStorage.getItem(TINT_KEY)) || {}; } catch {}
 const saveTints = () => { try { localStorage.setItem(TINT_KEY, JSON.stringify(tints)); } catch {} };
+// A finish the user gave a body (matte, satin, gloss, polished), kept the same way: how rough it renders.
+const FINISHES = { matte: { label: 'Matte', rough: 0.75 }, satin: { label: 'Satin', rough: 0.45 }, gloss: { label: 'Gloss', rough: 0.2 }, polished: { label: 'Polished', rough: 0.06 } };
+const FINISH_KEY = 'cadgang-finishes';
+let finishes = {};
+try { finishes = JSON.parse(localStorage.getItem(FINISH_KEY)) || {}; } catch {}
+const saveFinishes = () => { try { localStorage.setItem(FINISH_KEY, JSON.stringify(finishes)); } catch {} };
 // One hue per body or layer when COLOR is on; golden-ratio spacing keeps any count apart.
 const partColor = (i) => new THREE.Color().setHSL((i * 0.618034) % 1, 0.6, 0.5);
 function styleMesh(m) {
@@ -122,6 +128,7 @@ function styleMesh(m) {
     else if (src.color && SOLID_LOOKS.has(ui.look)) mat.color.setRGB(...src.color, THREE.SRGBColorSpace);
     if (!ui.color && src.pbr && SOLID_LOOKS.has(ui.look)) Object.assign(mat, src.pbr);
     if (!ui.color && m.userData.tint && mat.color && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.color.setRGB(...m.userData.tint, THREE.SRGBColorSpace);
+    if (m.userData.finish && FINISHES[m.userData.finish] && 'roughness' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.roughness = FINISHES[m.userData.finish].rough;
     if (m.userData.opacity < 1 && SOLID_LOOKS.has(ui.look)) Object.assign(mat, { transparent: true, opacity: m.userData.opacity, depthWrite: false });
     if (m.userData.ghost) Object.assign(mat, { transparent: true, opacity: Math.min(mat.opacity, 0.15), depthWrite: false, transmission: 0 });
     mat.side = section.axis && bbox ? THREE.FrontSide : THREE.DoubleSide;
@@ -160,7 +167,7 @@ function clearModel() {
   rot.identity();
   setRender(false);
   ui.flat = false; $('#sideBtn').hidden = true;
-  selected.clear(); selFolder = null; treeRoot = null;
+  selected.clear(); treeRoot = null;
   $('#bodies').replaceChildren(); $('#bodies').hidden = true;
   $('#explode').value = 0;
 }
@@ -235,6 +242,7 @@ function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', pa
   m.userData.material = material;   // the file's own material name ("Steel - Satin"), shown after the body's name
   m.userData.opacity = opacity;     // the file's transparency (a STEP's SURFACE_STYLE_TRANSPARENT)
   m.userData.tint = tints[file]?.[m.userData.name] ?? null;   // the user's colour for it, kept from last time
+  m.userData.finish = finishes[file]?.[m.userData.name] ?? null;   // and the finish
   m.userData.faces = faces;   // B-rep face ranges, when the importer knew them: picked by measure
   model.add(m);
   styleMesh(m);               // after add: the part colour is its index in the model
@@ -326,7 +334,7 @@ function listBodies() {
   })(root);
   treeRoot = root;
   const under = (node) => [...node.bodies, ...[...node.kids.values()].flatMap(under)];
-  const see = (onclick) => Object.assign(document.createElement('button'), { className: 'ghost see', textContent: '◐', title: 'See-through (T)', onclick: (e) => { e.preventDefault(); onclick(); } });
+  const see = (onclick) => Object.assign(document.createElement('button'), { className: 'ghost see', textContent: '◐', title: 'Transparent (T)', onclick: (e) => { e.preventDefault(); onclick(); } });
   const render = (node, into, depth) => {
     for (const [g, kid] of node.kids) {
       const box = document.createElement('div'); box.className = 'group';
@@ -372,15 +380,37 @@ function listBodies() {
       m.userData.row = row;
       row.addEventListener('pointerenter', () => highlightBody(m));
       row.addEventListener('pointerleave', () => highlightBody(null));
-      if (root.kids.size) row.append(Object.assign(document.createElement('span'), { className: 'fold-gap' }));   // aligns with the groups' +/−
-      const pick = document.createElement('select'); pick.className = 'ghost mat-pick'; pick.title = 'What this body is made of (MATERIALS look)';
+      // a part with several finishes (a glTF mesh, one per material) opens to a row for each
+      const finishes = (m.userData.groups ?? []).filter((g) => g.name || g.color);
+      const subs = finishes.length > 1 && document.createElement('div');
+      if (subs) {
+        subs.className = 'finish-rows'; subs.hidden = true;
+        const fold = Object.assign(document.createElement('button'), { className: 'ghost fold', textContent: '+', title: 'Its finishes' });
+        fold.addEventListener('click', (e) => { e.preventDefault(); subs.hidden = !subs.hidden; fold.textContent = subs.hidden ? '+' : '−'; });
+        row.append(fold);
+        for (const g of finishes) {
+          const f = finishFacts(m, g), r2 = document.createElement('div'); r2.className = 'finish-row';
+          r2.append(Object.assign(document.createElement('span'), { className: 'fname', textContent: g.name || 'finish', title: g.name }), finishBits(f));
+          subs.append(r2);
+        }
+      } else if (root.kids.size || model.children.some((o) => (o.userData.groups?.length ?? 0) > 1)) row.append(Object.assign(document.createElement('span'), { className: 'fold-gap' }));   // aligns with the +/−
+      // the material word: a list that reads as text; a choice shows under the MATERIALS look, so it switches to it
+      const pick = document.createElement('select'); pick.className = 'ghost mat-word';
       for (const [k, d] of Object.entries(MATERIALS)) pick.append(new Option(d.label, k));
-      pick.value = materialOf(m);
-      pick.addEventListener('change', () => { pickMaterial(m, pick.value); styleMesh(m); rerender(); });
+      pick.addEventListener('pointerdown', (e) => e.stopPropagation());
+      pick.addEventListener('click', (e) => e.stopPropagation());
+      pick.addEventListener('change', () => {
+        pickMaterial(m, pick.value);
+        if (ui.look !== 'materials') { $('#look').value = 'materials'; $('#look').dispatchEvent(new Event('change', { bubbles: true })); }
+        styleMesh(m); paintFinishes(); rerender(); commit();
+      });
       const edit = Object.assign(document.createElement('span'), { className: 'body-edit', textContent: '✎', title: 'Rename this body' });
       edit.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); startRename(m); });
-      row.append(cb, nm, edit, pick, see(() => { setBodyGhost(m, !m.userData.ghost); syncRows(); }));
+      const tag = Object.assign(document.createElement('span'), { className: 'mat-tag' }); tag._body = m;   // material · finish · colour (paintFinishes)
+      tag.append(pick, Object.assign(document.createElement('span'), { className: 'bits' }));
+      row.append(cb, nm, tag, edit, see(() => { setBodyGhost(m, !m.userData.ghost); syncRows(); }));
       into.appendChild(row);
+      if (subs) into.appendChild(subs);
     }
   };
   render(root, panel, 0);
@@ -475,7 +505,37 @@ window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name
 /** Body ticks in model order (a group tree renders them out of order). */
 const bodyBoxes = () => { const by = new Map([...$('#bodies').querySelectorAll('input.body-cb')].map((cb) => [cb._body, cb])); return model.children.map((m) => by.get(m)).filter(Boolean); };
 /** Ticks follow the bodies: a group is ticked when all of it shows, half when some does. */
+/** A body's volume in mm³: the signed volume of its triangles, so a closed shell's own (an open one's is a guess). Cached. */
+function volumeOf(m) {
+  if (m.userData.vol != null) return m.userData.vol;
+  const g = m.geometry, P = g.getAttribute('position'), I = g.index, n = I ? I.count : P.count;
+  let v = 0;
+  for (let t = 0; t < n; t += 3) {
+    const a = I ? I.getX(t) : t, b = I ? I.getX(t + 1) : t + 1, c = I ? I.getX(t + 2) : t + 2;
+    const ax = P.getX(a), ay = P.getY(a), az = P.getZ(a), bx = P.getX(b), by = P.getY(b), bz = P.getZ(b), cx = P.getX(c), cy = P.getY(c), cz = P.getZ(c);
+    v += ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+  }
+  return (m.userData.vol = Math.abs(v) / 6);
+}
+/** Grams of bodies, from each one's volume and its material's density. */
+const gramsOf = (ms) => ms.reduce((w, m) => w + (m.isLine ? 0 : (volumeOf(m) / 1000) * (MATERIALS[materialOf(m)]?.density ?? 1.2)), 0);
+const fmtMass = (g) => (g >= 453.592 ? `${(g / 453.592).toFixed(2)} lbs` : `${g.toFixed(g < 10 ? 2 : 1)} g`);   // grams up to a pound, then pounds
+/** The bottom bar's weight: the shown bodies, by the material each has; with a selection, its share too. */
+function paintWeight() {
+  const el = $('#weight');
+  if (!el) return;
+  const shown = model.children.filter((m) => m.visible && !m.isLine);
+  if (!shown.length) { el.textContent = ''; return; }
+  const by = new Map();
+  for (const m of shown) { const k = materialOf(m); by.set(k, (by.get(k) ?? 0) + gramsOf([m])); }
+  const total = gramsOf(shown), picked = sel().filter((m) => m.visible && !m.isLine);
+  el.textContent = `≈ ${picked.length ? `${fmtMass(gramsOf(picked))} of ` : ''}${fmtMass(total)}`;
+  el.title = `Estimated weight of the shown bodies, from each body's volume and its material's density${picked.length ? ' (first: the selection)' : ''}:\n`
+    + [...by].sort((a, b) => b[1] - a[1]).map(([k, g]) => `${MATERIALS[k]?.label ?? k} (${MATERIALS[k]?.density ?? 1.2} g/cm³): ${fmtMass(g)}`).join('\n');
+}
+
 function syncRows() {
+  paintFinishes();
   for (const cb of $('#bodies').querySelectorAll('input.body-cb')) {
     const m = cb._body, row = cb.closest('label');
     cb.checked = m.visible;
@@ -548,7 +608,11 @@ function paintSelection() {
   for (const cb of bodyBoxes()) cb.closest('label')?.classList.toggle('sel', selected.has(cb._body));
   const n = selected.size;
   $('#selBar').hidden = !n;
+  const tools = $('#markupTools');   // under the Measure / markup row, right-aligned with it
+  if (n && tools) $('#selBar').style.top = `${tools.offsetTop + tools.offsetHeight + 6}px`;
   $('#selCount').textContent = `${n} selected`;
+  if (n) { const first = [...selected][0], c = $('#selColor'); if (c && !first.isLine) c.style.background = c.dataset.hex = hexOfRGB(finishFacts(first).color); }   // the colour they have, as the row shows it
+  paintWeight();
 }
 /** mode: 'set' replaces the selection, 'add' joins it, 'toggle' flips each one. */
 function selectBodies(list, mode = 'set') {
@@ -594,7 +658,7 @@ $('#selMaterial').addEventListener('change', (e) => {
   for (const m of selected) pickMaterial(m, key);
   if (ui.look !== 'materials') { $('#look').value = 'materials'; $('#look').dispatchEvent(new Event('change', { bubbles: true })); }   // a material only shows under that look
   for (const m of selected) styleMesh(m);
-  for (const cb of bodyBoxes()) if (selected.has(cb._body)) { const p = cb.closest('label')?.querySelector('.mat-pick'); if (p) p.value = key; }
+  paintFinishes();
   rerender();
   say(`${selected.size} bod${selected.size === 1 ? 'y' : 'ies'}: ${MATERIALS[key].label.toLowerCase()}`);
   e.target.value = '';
@@ -611,8 +675,116 @@ const stem = (n) => String(n).replace(/(\s*\(\d+\)|[_\s-]\d+)$/, '');   // "CAP_
 /** A row reads "name_n · material": the body's name, its number when the name repeats in its group, the file's material. */
 function labelOf(m) {
   // a name the user gave (Rename) is theirs as it stands; the file's name gets its _n when it repeats
-  const base = m.userData.label || m.userData.name.replace(/_part$/, '') + (m.userData.num ? `_${m.userData.num}` : '');   // _part: cadquery's leaf suffix
-  return m.userData.material && m.userData.material !== base ? `${base} · ${m.userData.material}` : base;
+  return m.userData.label || m.userData.name.replace(/_part$/, '') + (m.userData.num ? `_${m.userData.num}` : '');   // _part: cadquery's leaf suffix
+}
+// What a body is made of, as its row says it: material · finish · colour. A STEP or glTF that names
+// its finish ("Plastic - Matte (White)", Fusion's appearance names) is read word for word; otherwise
+// the finish comes from how rough and metallic it renders and the colour is named from its RGB.
+const COLOR_NAMES = [['White', [0.95, 0.95, 0.94]], ['Light grey', [0.78, 0.78, 0.78]], ['Grey', [0.5, 0.5, 0.5]], ['Dark grey', [0.25, 0.25, 0.25]], ['Black', [0.06, 0.06, 0.06]],
+  ['Red', [0.8, 0.12, 0.1]], ['Orange', [0.95, 0.5, 0.1]], ['Yellow', [0.95, 0.85, 0.15]], ['Green', [0.15, 0.6, 0.2]], ['Teal', [0.1, 0.55, 0.55]], ['Blue', [0.15, 0.3, 0.8]],
+  ['Navy', [0.08, 0.12, 0.35]], ['Purple', [0.5, 0.2, 0.6]], ['Pink', [0.95, 0.5, 0.7]], ['Brown', [0.45, 0.28, 0.15]], ['Tan', [0.82, 0.7, 0.5]], ['Gold', [0.88, 0.72, 0.36]]];
+const colorName = (rgb) => COLOR_NAMES.reduce((b, [n, c]) => { const d = (c[0] - rgb[0]) ** 2 + (c[1] - rgb[1]) ** 2 + (c[2] - rgb[2]) ** 2; return d < b.d ? { n, d } : b; }, { n: '', d: Infinity }).n;
+const hexRGB = (h) => [(h >> 16) & 255, (h >> 8) & 255, h & 255].map((v) => v / 255);
+const finishWord = (name, rough, metal) => {
+  const w = /polish|mirror/i.test(name) ? 'Polished' : /gloss/i.test(name) ? 'Gloss' : /satin|brush/i.test(name) ? 'Satin' : /matte|flat/i.test(name) ? 'Matte' : /anodi/i.test(name) ? 'Anodized' : /oxide/i.test(name) ? 'Oxide' : '';
+  if (w || rough == null) return w;
+  return rough < 0.15 ? 'Polished' : rough < 0.35 ? (metal ? 'Polished' : 'Gloss') : rough < 0.55 ? 'Satin' : 'Matte';
+};
+/** One finish of a body (its own, or a glTF group's): { name, finish, color: [r,g,b], colorText }. */
+function finishFacts(m, src = m.userData) {
+  const def = MATERIALS[materialOf(m)];
+  const name = src.name ?? m.userData.material ?? '';
+  const fileName = src === m.userData ? m.userData.material || '' : name;
+  const rough = src.pbr?.roughness ?? def?.rough, metal = (src.pbr?.metalness ?? def?.metal ?? 0) > 0.5;
+  const rgb = (src === m.userData && m.userData.tint) || src.color || m.userData.color || (def ? hexRGB(def.color) : [0.73, 0.72, 0.7]);
+  const named = /\(([^()]+)\)\s*$/.exec(fileName)?.[1];   // Fusion: "Plastic - Matte (White)"
+  return { name: fileName, finish: finishWord(fileName, rough, metal), color: rgb, colorText: (!m.userData.tint && named && !/\d/.test(named)) ? named : colorName(rgb) || 'Colour' };
+}
+const hexOfRGB = (rgb) => `#${new THREE.Color().setRGB(...rgb, THREE.SRGBColorSpace).getHexString(THREE.SRGBColorSpace)}`;
+/**
+ * The colour menu a swatch opens: the colours the model already uses (each body's, as its row shows it), then
+ * Other…, the system picker. pick(rgb) runs live as a colour is tried; done() once it is chosen.
+ */
+let colorMenuEl = null;
+const closeColorMenu = () => { colorMenuEl?.remove(); colorMenuEl = null; };
+document.addEventListener('pointerdown', (e) => { if (colorMenuEl && !colorMenuEl.contains(e.target)) closeColorMenu(); }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && colorMenuEl) { e.stopPropagation(); closeColorMenu(); } }, true);
+function openColorMenu(anchor, current, pick, done) {
+  closeColorMenu();
+  const used = new Map();   // hex → name
+  for (const m of model.children) {
+    if (m.isLine) continue;
+    for (const src of m.userData.groups?.length ? m.userData.groups : [m.userData]) { const f = finishFacts(m, src); used.set(hexOfRGB(f.color), f.colorText); }
+  }
+  const menu = colorMenuEl = Object.assign(document.createElement('div'), { className: 'color-menu' });
+  menu.append(Object.assign(document.createElement('div'), { className: 'color-menu-head', textContent: 'In this model' }));
+  const grid = Object.assign(document.createElement('div'), { className: 'color-menu-grid' });
+  for (const [hex, name] of [...used].slice(0, 40)) {
+    const b = Object.assign(document.createElement('button'), { className: 'color-chip' + (hex === current ? ' on' : ''), title: `${name} ${hex}` });
+    b.style.background = hex;
+    b.addEventListener('click', () => { pick(rgbOf(hex)); done(); closeColorMenu(); });
+    grid.append(b);
+  }
+  const other = Object.assign(document.createElement('button'), { className: 'ghost color-other', textContent: 'Other…', title: 'Choose any colour' });
+  const input = Object.assign(document.createElement('input'), { type: 'color', value: current || '#888888', className: 'color-other-input' });
+  input.addEventListener('input', () => pick(rgbOf(input.value)));
+  input.addEventListener('change', () => { done(); closeColorMenu(); });
+  other.addEventListener('click', () => input.click());
+  menu.append(grid, other, input);
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect(), w = menu.offsetWidth, h = menu.offsetHeight;
+  menu.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`;
+  menu.style.top = `${r.bottom + 4 + h > innerHeight ? Math.max(8, r.top - h - 4) : r.bottom + 4}px`;
+}
+
+/** The finish · swatch · colour part of a row, after its material word; for a body (m), finish and colour are lists to change. */
+function finishBits(f, m = null) {
+  const frag = document.createDocumentFragment();
+  if (m) {
+    const fin = Object.assign(document.createElement('select'), { className: 'fin-word', title: 'Its finish: click to change it' });
+    fin.append(new Option(f.finish || 'Finish', ''), ...Object.entries(FINISHES).map(([k, d]) => new Option(d.label, k)));
+    fin.value = m.userData.finish ?? '';
+    if (!m.userData.finish) fin.options[0].textContent = f.finish || 'Finish';   // the file's (or the material's) until one is chosen
+    for (const ev of ['pointerdown', 'click']) fin.addEventListener(ev, (e) => e.stopPropagation());
+    fin.addEventListener('change', () => { setFinish([m], fin.value || null); commit(); });
+    const sw = Object.assign(document.createElement('button'), { type: 'button', className: 'swatch-pick', title: `${hexOfRGB(f.color)}: click to change the colour` });
+    sw.style.background = hexOfRGB(f.color);
+    sw.addEventListener('pointerdown', (e) => e.stopPropagation());
+    sw.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openColorMenu(sw, hexOfRGB(f.color), (rgb) => { setTint([m], rgb); rerender(); paintFinishes(); paintSelection(); }, () => commit()); });
+    frag.append(fin, sw);
+  } else {
+    if (f.finish) frag.append(Object.assign(document.createElement('span'), { className: 'fin', textContent: f.finish }));
+    const sw = Object.assign(document.createElement('span'), { className: 'swatch', title: hexOfRGB(f.color) }); sw.style.background = hexOfRGB(f.color);
+    frag.append(sw);
+  }
+  frag.append(Object.assign(document.createElement('span'), { className: 'col', textContent: f.colorText }));
+  return frag;
+}
+/** The user's finish for these bodies (null: back to the file's). */
+function setFinish(ms, key) {
+  for (const m of ms) {
+    m.userData.finish = key;
+    const f = (finishes[m.userData.file] ??= {});
+    if (key) f[m.userData.name] = key; else delete f[m.userData.name];
+    styleMesh(m);
+  }
+  saveFinishes(); paintFinishes(); rerender();
+}
+function paintFinishes() {
+  paintWeight();
+  for (const el of document.querySelectorAll('#bodies .mat-tag')) {
+    const m = el._body, sel = el.querySelector('select.mat-word'), picked = pickedMaterial(m);
+    sel.value = materialOf(m);
+    const guess = !picked && !m.userData.material && !(m.userData.groups ?? []).some((g) => g.name);
+    sel.classList.toggle('guess', guess);
+    sel.title = guess ? 'A guess from its name (the file names no material): click to choose one' : picked ? 'Your choice: click to change it' : `The file says ${m.userData.material || 'its finishes'}: click to choose another`;
+    const groups = m.userData.groups?.filter((g) => g.name) ?? [];
+    const f = groups.length > 1 ? { ...finishFacts(m, groups[0]), finish: `${groups.length} finishes` } : finishFacts(m, groups[0] ?? m.userData);
+    if (m.userData.finish) f.finish = FINISHES[m.userData.finish].label;
+    const bits = el.querySelector('.bits');
+    if (bits.contains(document.activeElement)) continue;   // a list or picker open in it: leave it be
+    bits.replaceChildren(finishBits(f, m));
+  }
 }
 /** The body under the pointer: visible, on the kept side of a section, solid ones before see-through ones. */
 function bodyAt(e) {
@@ -636,35 +808,23 @@ function setTint(ms, rgb) {
   saveTints();
 }
 
-// Our additions on the selection: U widens it to the part around it, then the assembly; T makes it see-through;
-// a colour for it (every solid look); the tree's folders and the grid move read it too.
-let selFolder = null, treeRoot = null;   // the folder the selection is, when U made it one; the list's tree
+// Our additions on the selection: T makes it transparent; a colour for it (every solid look); the tree's folders read it too.
+let treeRoot = null;   // the list's tree
 const sel = () => [...selected];
 const under = (node) => [...node.bodies, ...[...node.kids.values()].flatMap(under)];
-function selectUp() {
-  const first = sel()[0];
-  const whole = selFolder && under(selFolder).length === selected.size && under(selFolder).every((m) => selected.has(m));
-  const node = whole ? selFolder.parent : first?.userData.node;
-  if (!node || node === treeRoot) return;
-  selectBodies(under(node), 'set'); selFolder = node;
-  say(`${node.name}: ${selected.size} bod${selected.size === 1 ? 'y' : 'ies'}`);
-}
 function ghostSelected() { const on = !sel().every((m) => m.userData.ghost); for (const m of sel()) setBodyGhost(m, on); syncRows(); commit(); }
 const BODY_CMDS = [
-  { key: 't', label: 'Selected see-through', run: ghostSelected, on: () => selected.size && sel().every((m) => m.userData.ghost) },
+  { key: 't', label: 'Selected transparent', run: ghostSelected, on: () => selected.size && sel().every((m) => m.userData.ghost) },
   { key: 's', label: 'Show only selected', run: () => selActions.only() },
-  { key: 'u', label: 'Select the part around', run: selectUp },
 ];
-// the selection bar gets See-through, Part around, and a colour with its reset
+// the selection bar gets Transparent, and a colour with its reset
 {
   const bar = $('#selBar'), clear = bar.querySelector('[data-sel="clear"]');
   const btn = (text, title, run) => { const b = Object.assign(document.createElement('button'), { className: 'ghost', textContent: text, title }); b.addEventListener('click', run); return b; };
-  const color = Object.assign(document.createElement('input'), { type: 'color', id: 'selColor', title: 'Give them a colour (every solid look)' });
-  color.addEventListener('input', () => { setTint(sel(), rgbOf(color.value)); rerender(); });
-  color.addEventListener('change', () => commit());
-  const reset = btn('↺', "Back to the file's colour", () => { setTint(sel(), null); rerender(); commit(); });
-  bar.insertBefore(btn('See-through', 'See through them (T)', ghostSelected), clear);
-  bar.insertBefore(btn('Part around', 'Select the part they are in, then the assembly (U)', selectUp), clear);
+  const color = Object.assign(document.createElement('button'), { type: 'button', id: 'selColor', className: 'sel-swatch', title: 'Give them a colour (every solid look)' });
+  color.addEventListener('click', () => openColorMenu(color, color.dataset.hex, (rgb) => { setTint(sel(), rgb); rerender(); paintFinishes(); color.style.background = color.dataset.hex = hexOfRGB(rgb); }, () => commit()));   // the rows' swatches and colour names follow
+  const reset = btn('↺', "Back to the file's colour", () => { setTint(sel(), null); rerender(); paintFinishes(); paintSelection(); commit(); });
+  bar.insertBefore(btn('Transparent', 'Make them transparent (T)', ghostSelected), clear);
   bar.insertBefore(color, clear); bar.insertBefore(reset, clear);
 }
 // A body's explode vector at full slider: the solver's offset, or along the axis the
@@ -775,7 +935,7 @@ const partKey = (m) => { const all = model.children; return `${m.userData.name}#
 let partsReady = false, partsSaved = '{}', partsTimer = null;
 function partsState() {
   const out = {};
-  for (const m of model.children) if (m.userData.axis || m.userData.pull != null || m.userData.moved) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null, ...(m.userData.moved && { moved: m.userData.moved.toArray().map((v) => +v.toFixed(4)) }) };
+  for (const m of model.children) if (m.userData.axis || m.userData.pull != null || m.userData.exTo) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null, ...(m.userData.exTo && { exTo: m.userData.exTo.toArray().map((v) => +v.toFixed(4)) }) };
   if (rot.w < 1 - 1e-9) out['@rot'] = rotArr();   // the axes and marks above are in this turned frame
   const names = namesOf();
   if (Object.keys(names).length) out['@names'] = names;
@@ -801,7 +961,7 @@ function loadParts() {
     const r = d.parts?.['@rot'];
     if (r) { bakeRot(new THREE.Quaternion().fromArray(r)); history.list = []; history.i = -1; queueMicrotask(commit); }   // undo never goes back past the saved turn
     if (d.parts?.['@names']) { applyNames(d.parts['@names']); history.list = []; history.i = -1; queueMicrotask(commit); }
-    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; m.userData.moved = p.moved ? new THREE.Vector3(...p.moved) : undefined; } }
+    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; m.userData.exTo = p.exTo ? new THREE.Vector3(...p.exTo) : undefined; } }
     partsSaved = JSON.stringify(partsState()); partsReady = true;
     applyExplode();
   }).catch(() => { partsReady = true; });
@@ -816,7 +976,7 @@ function applyExplode() {
     const v = explodeVec(m), len = v.length();
     at.copy(v).multiplyScalar(len ? (maxTravel(m) * stageFrac(m, k)) / len : 0);
     if (m.userData.parent) at.add(place(m.userData.parent));
-    if (m.userData.moved) at.add(m.userData.moved);   // where it was dragged on the grid
+    if (m.userData.exTo) at.addScaledVector(m.userData.exTo, stageFrac(m, k));   // where it was dragged while exploded: it explodes to there
     return at;
   };
   for (const m of model.children) place(m);
@@ -997,7 +1157,7 @@ for (const b of document.querySelectorAll('[data-rot]')) b.addEventListener('cli
   turnModel(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3().setComponent('xyz'.indexOf(b.dataset.rot), 1), e.shiftKey ? -rotStep() : rotStep()).multiply(rot)));
 $('#rotReset').addEventListener('click', () => turnModel(new THREE.Quaternion()));
 function setExplode(v) { if (ui.mode === 'joint') return say('explode is off in joint mode: switch to Explode (J)'); $('#explode').value = Math.max(0, Math.min(100, v)); applyExplode(); }
-$('#resetBtn').addEventListener('click', () => { for (const m of model.children) { m.userData.axis = undefined; m.userData.pull = undefined; } applyExplode(); say('explode positions reset'); });
+$('#resetBtn').addEventListener('click', () => { for (const m of model.children) { m.userData.axis = undefined; m.userData.pull = undefined; m.userData.exTo = undefined; } applyExplode(); say('explode positions reset'); });
 
 function finishLoad(name, ms, keep = false) {
   const box = new THREE.Box3().setFromObject(model);
@@ -1015,6 +1175,7 @@ function finishLoad(name, ms, keep = false) {
   $('#fileName').textContent = name;
   document.title = `CADgang · ${name}`;
   $('#measures').textContent = `${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)}`;
+  paintWeight();
   $('#stats').textContent = `${model.children.length} BOD${model.children.length === 1 ? 'Y' : 'IES'} · ${segs ? `${segs.toLocaleString()} SEGS · ` : ''}${tris ? `${tris.toLocaleString()} TRIS · ` : ''}${verts.toLocaleString()} VERTS · ${ms} MS`;
   $('#drop').hidden = true; $('#loadError').textContent = '';
   placeGrid();
@@ -1038,10 +1199,11 @@ const UNIT_MM = { mm: 1, in: 25.4 };
 let gridStep = 0;   // the grid's spacing in mm: what ⇧ snaps a dragged part to
 const fmtLen = (mm) => (ui.units === 'in' ? `${(mm / 25.4).toFixed(3)} in` : `${mm.toFixed(2)} mm`);
 
-// RULER: the grid's scale along its front (X) and left (Y) edges, counting from 0 at the corner, in
-// the chosen unit: a tick on every grid line, a longer one with its number every few (about ten an edge).
+// RULER: the grid's scale along its front (X) and left (Y) edges, in the chosen unit, counting from 0 at the
+// grid crossing on the model's front left corner, + one way and − the other: a tick on every grid line, a
+// longer one with its number every few (about ten an edge).
 let ruler = null;
-function placeRuler(gridStepMM, gridDivs, x0, y0, z) {
+function placeRuler(gridStepMM, gridDivs, x0, y0, z, ox = x0, oy = y0) {
   if (ruler) { scene.remove(ruler); ruler.traverse((o) => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); }); ruler = null; }
   // A tick on every grid line; a number about ten times an edge (mm), or at every inch (in: every
   // other ½" line, or every few inches on a big grid).
@@ -1066,14 +1228,15 @@ function placeRuler(gridStepMM, gridDivs, x0, y0, z) {
     g.add(sp);
   };
   segs.push(x0, y0, z, x0 + span, y0, z, x0, y0, z, x0, y0 + span, z);   // the two edges
+  const ix = Math.round((ox - x0) / stepMM), iy = Math.round((oy - y0) / stepMM);   // the lines through the origin
+  const num = (n) => (n < 0 ? '−' : '') + (Math.abs(n) * stepU).toFixed(dec);
+  const mod = (a, b) => ((a % b) + b) % b;
   for (let i = 0; i <= divs; i++) {
-    const major = i % every === 0, len = th * (major ? 0.9 : 0.45);
     const x = x0 + i * stepMM, y = y0 + i * stepMM;
-    segs.push(x, y0, z, x, y0 - len, z, x0, y, z, x0 - len, y, z);
-    if (!major) continue;
-    const v = (i * stepU).toFixed(dec);
-    label(v, x, y0 - len - th * 0.7);                       // under the front edge
-    if (i) label(v, x0 - len - th * 0.25, y, 'right');       // left of the left edge (0 once, at the corner)
+    const mx = mod(i - ix, every) === 0, my = mod(i - iy, every) === 0;
+    segs.push(x, y0, z, x, y0 - th * (mx ? 0.9 : 0.45), z, x0, y, z, x0 - th * (my ? 0.9 : 0.45), y, z);
+    if (mx) label(num(i - ix), x, y0 - th * 0.9 - th * 0.7);              // under the front edge
+    if (my) label(num(i - iy), x0 - th * 0.9 - th * 0.25, y, 'right');    // left of the left edge
   }
   label(ui.units, x0 + span + th * 1.2, y0 - th * 0.9 - th * 0.7);
   const lines = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(segs, 3)), new THREE.LineBasicMaterial({ color: ink }));
@@ -1096,7 +1259,7 @@ function placeGrid() {
   const step = inch ? (sub ? 25.4 / PER_INCH : 25.4) : Math.pow(10, Math.floor(Math.log10(span / 10)));
   gridStep = step;
   let divs = Math.max(2, Math.round(span / step));
-  if (sub) divs = Math.max(PER_INCH, Math.ceil(divs / PER_INCH) * PER_INCH);
+  divs = Math.ceil(divs / (sub ? 2 * PER_INCH : 2)) * (sub ? 2 * PER_INCH : 2);   // even, in lines and in inches: one runs through the middle
   grid = new THREE.GridHelper(divs * step, divs, 0xbdbdbd, 0xe3e3e3);
   if (sub) {   // the inch lines, over the halves (a child: it rides the grid's turn and place)
     const major = new THREE.GridHelper(divs * step, divs / PER_INCH, 0xa9a9a6, 0xa9a9a6);
@@ -1104,10 +1267,15 @@ function placeGrid() {
     grid.add(major);
   }
   grid.rotation.x = Math.PI / 2;            // the part's Z is up
-  grid.position.set((bbox.min.x + bbox.max.x) / 2, (bbox.min.y + bbox.max.y) / 2, bbox.min.z - step * 0.01); // a hair under a flat drawing
+  // A grid line crosses at the model's lower left corner seen from the top (its front left), and the ruler
+  // counts from there. The grid sits as near centred on the model as that allows: its middle a whole number of
+  // (inch) lines from the corner, with an even count of them, so a line runs through the middle and the corner.
+  const ox = bbox.min.x, oy = bbox.min.y, big = sub ? step * PER_INCH : step;
+  const snap = (c, o) => o + Math.round((c - o) / big) * big;
+  grid.position.set(snap((bbox.min.x + bbox.max.x) / 2, ox), snap((bbox.min.y + bbox.max.y) / 2, oy), bbox.min.z - step * 0.01); // a hair under a flat drawing
   grid.visible = ui.grid;
   scene.add(grid);
-  placeRuler(step, divs, grid.position.x - divs * step / 2, grid.position.y - divs * step / 2, grid.position.z);
+  placeRuler(step, divs, grid.position.x - divs * step / 2, grid.position.y - divs * step / 2, grid.position.z, ox, oy);
 }
 
 // ------------------------------------------------------------------- camera
@@ -1193,12 +1361,16 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
     if (ui.mode === 'joint') { if (j && !(e.metaKey && j.type === 'ball')) drag.joint = { j, offset: e.metaKey, m: bodyOfKey(j.body), hit: hit.body, local: hit.point.clone().applyMatrix4(hit.body.matrixWorld.clone().invert()) }; }   // joint mode: a jointed part turns or slides on its joint, anything else orbits
     else if (hit && e.altKey) { const v = explodeVec(hit.body); if (moves(hit.body, v)) drag.part = { m: hit.body, full: +$('#explode').value >= 100, ...screenAxis(hit.point, v.normalize()) }; }
   }
-  // a selected part, pressed on: drag it across the grid (Bambu's Prepare); ⇧ snaps to grid steps
-  if (e.button === 0 && !e.altKey && !drag.sect && !drag.part && !measure.on && !ui.flat && e.pointerType !== 'touch' && ui.mode !== 'joint' && selected.size) {
-    const m = bodyAt(e);
-    if (m && selected.has(m)) {
-      const h = hitAt(e);
-      if (h) drag.move = { bodies: sel(), plane: new THREE.Plane(new THREE.Vector3(0, 0, 1), -h.z), from: h.clone(), start: sel().map((b) => b.userData.moved?.clone() ?? new THREE.Vector3()) };
+  // Exploded, a part pressed on and dragged moves in the screen's plane (up and down too): the selection when the
+  // part is in it, else that part alone. The move is part of its explode: the slider brings it home at 0 and back
+  // out to where it was put. ⇧ snaps to grid steps. Assembled, a drag rotates as always.
+  if (e.button === 0 && !e.altKey && !e.shiftKey && !drag.sect && !drag.part && !measure.on && !ui.flat && e.pointerType !== 'touch' && ui.mode !== 'joint' && !$('[data-tool].on')) {
+    const m = bodyAt(e), h = m && hitAt(e);
+    if (m && h) {
+      const bodies = selected.has(m) ? sel() : [m];
+      const k = parseFloat($('#explode').value) / 100, fracs = bodies.map((b) => stageFrac(b, k));
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), h);
+      if (fracs.some((f) => f > 0.02)) drag.move = { m, bodies, plane, fracs, from: h.clone(), startEx: bodies.map((b) => b.userData.exTo?.clone() ?? new THREE.Vector3()) };
     }
   }
   if (!drag.pan && !drag.sect && !drag.part && !drag.move && !drag.marquee && !drag.joint && !ui.flat) drag.pivot = hitAt(e);   // orbit about what was pressed on
@@ -1274,16 +1446,20 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     applyExplode();
     return;
   }
-  if (drag.move) {   // slide the selection in the grid's plane, under the pointer
+  if (drag.move) {   // exploded: slide the selection in the screen's plane, under the pointer
     const r = renderer.domElement.getBoundingClientRect();
     raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
     const q = raycaster.ray.intersectPlane(drag.move.plane, new THREE.Vector3());
     if (!q) return;
-    const d = q.sub(drag.move.from); d.z = 0;
-    if (e.shiftKey && gridStep) { d.x = Math.round(d.x / gridStep) * gridStep; d.y = Math.round(d.y / gridStep) * gridStep; }
-    drag.move.bodies.forEach((m, i) => { m.userData.moved = drag.move.start[i].clone().add(d); });
+    const d = q.sub(drag.move.from);
+    if (!drag.move.started) { drag.move.started = true; if (!selected.has(drag.move.m)) selectBodies([drag.move.m], 'set'); }   // what moves is what is selected
+    if (e.shiftKey && gridStep) { d.x = Math.round(d.x / gridStep) * gridStep; d.y = Math.round(d.y / gridStep) * gridStep; d.z = Math.round(d.z / gridStep) * gridStep; }
+    drag.move.bodies.forEach((m, i) => {
+      const f = drag.move.fracs[i];
+      if (f > 0.02) m.userData.exTo = drag.move.startEx[i].clone().addScaledVector(d, 1 / f);   // scaled so it sits under the pointer now and goes further at full explode (a part whose stage hasn't started stays)
+    });
     applyExplode();
-    say(`moved ${fmtLen(d.x)}, ${fmtLen(d.y)}`);
+    say(`moved ${fmtLen(d.x)}, ${fmtLen(d.y)}, ${fmtLen(d.z)}: it explodes to here`);
     return;
   }
   if (drag.pan || ui.flat) {
@@ -1732,7 +1908,7 @@ const loaders = {
 function collectGeometries(obj, assoc = null, out = []) {
   obj.updateMatrixWorld(true);
   // keep the file's part name and its material's colour, roughness and metalness (glTF carries them)
-  const look = (mat) => ({ color: mat?.color ? mat.color.getRGB(new THREE.Color(), THREE.SRGBColorSpace).toArray() : null,
+  const look = (mat) => ({ name: mat?.name || '', color: mat?.color ? mat.color.getRGB(new THREE.Color(), THREE.SRGBColorSpace).toArray() : null,
     pbr: mat?.isMeshStandardMaterial ? { roughness: mat.roughness, metalness: mat.metalness } : null });
   const geoOf = (o) => o.geometry.clone().applyMatrix4(o.matrixWorld);
   // the named nodes above a body, outermost first: the tree's folders (as a STEP's assembly path)
@@ -1749,9 +1925,20 @@ function collectGeometries(obj, assoc = null, out = []) {
     }
     if (!o.isMesh || done.has(o)) return;
     const mat = [].concat(o.material)[0];
-    out.push({ geo: geoOf(o), name: o.name || undefined, path: pathOf(o), material: mat?.name ?? '', ...look(mat) });
+    out.push({ geo: geoOf(o), ...look(mat), name: o.name || undefined, path: pathOf(o), material: mat?.name ?? '' });   // the part's name, not its material's
   });
   return out;
+}
+
+/**
+ * The name an STL carries, if any: cadgang writes "cadgang: <cell>" into a binary header, and an
+ * ASCII file opens "solid <name>". Other binary headers are mostly an exporter's banner, so they're ignored.
+ */
+function stlName(buffer) {
+  const head = new TextDecoder('latin1').decode(new Uint8Array(buffer, 0, Math.min(80, buffer.byteLength))).replace(/\0.*$/s, '').trim();
+  const n = head.match(/^cadgang:\s*(.+)$/)?.[1]
+    ?? (buffer.byteLength >= 84 && 84 + new DataView(buffer).getUint32(80, true) * 50 === buffer.byteLength ? null : head.match(/^solid\s+([^\r\n]+)/)?.[1]);
+  return n && !/^(ascii|mesh|stl|cadgang|part|model|object|untitled)$/i.test(n.trim()) ? n.trim() : undefined;
 }
 
 async function parseMesh(ext, buffer, name) {
@@ -1763,7 +1950,7 @@ async function parseMesh(ext, buffer, name) {
     return parts;
   }
   const loader = loaders[ext]();
-  if (ext === 'stl') return [{ geo: loader.parse(buffer), flat: true }];
+  if (ext === 'stl') return [{ geo: loader.parse(buffer), flat: true, name: stlName(buffer) }];
   if (ext === 'ply') return [{ geo: loader.parse(buffer) }];
   if (ext === 'obj') return collectGeometries(loader.parse(new TextDecoder().decode(buffer)));
   if (ext === '3mf' || ext === 'fbx') return collectGeometries(loader.parse(buffer, ''));
@@ -2614,7 +2801,7 @@ const CMDS = [
   { key: 'l', label: 'Next look', btn: '#look', run: () => { const s = $('#look'); s.selectedIndex = (s.selectedIndex + 1) % s.options.length; s.dispatchEvent(new Event('change', { bubbles: true })); } },
   { key: 'm', label: 'Measure', run: () => setMeasure(!measure.on), btn: '#measureBtn', on: () => measure.on },
   { sep: true },
-  ...BODY_CMDS.map((c) => ({ ...c, label: { h: 'Hide selected', t: 'Selected see-through', s: 'Show only selected', u: 'Select the part around' }[c.shift ? '' : c.key] ?? c.label })),
+  ...BODY_CMDS.map((c) => ({ ...c, label: { h: 'Hide selected', t: 'Selected transparent', s: 'Show only selected' }[c.shift ? '' : c.key] ?? c.label })),
   { sep: true },
   { key: 'b', label: 'Flip drawing over', btn: '#sideBtn', run: () => { orbit.pitch = -orbit.pitch; } },
   { key: '[', label: 'Turn left 90°', run: () => { orbit.yaw -= Math.PI / 2; } },
@@ -2662,7 +2849,7 @@ const history = { list: [], i: -1 };
 function snap() {
   return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value, rot: rotArr(),
-    bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3), m.userData.moved?.toArray().map((v) => +v.toFixed(4)) ?? null]),
+    bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), finishes: model.children.map((m) => m.userData.finish ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3), null, m.userData.exTo?.toArray().map((v) => +v.toFixed(4)) ?? null]),
     markup: markup.items, dims: measure.dims, joints, names: namesOf() });
 }
 function commit() {
@@ -2692,7 +2879,7 @@ function apply(s) {
   if (ui.ortho !== st.ortho) setOrtho(st.ortho);
   if (st.units && st.units !== ui.units) setUnits(st.units);
   $('#sectPos').value = st.section.pos; section.flip = st.section.flip; setSectionAxis(st.section.axis);
-  model.children.forEach((m, i) => { const [axis, pull, moved] = st.parts?.[i] ?? [null, null, null]; m.userData.axis = axis || undefined; m.userData.pull = pull ?? undefined; m.userData.moved = moved ? new THREE.Vector3(...moved) : undefined; });
+  model.children.forEach((m, i) => { const [axis, pull, , exTo] = st.parts?.[i] ?? []; m.userData.axis = axis || undefined; m.userData.pull = pull ?? undefined; m.userData.exTo = exTo ? new THREE.Vector3(...exTo) : undefined; });
   if (st.names !== undefined && JSON.stringify(st.names) !== JSON.stringify(namesOf())) applyNames(st.names);   // a state from an older file has no names or joints: leave them be
   if (st.joints !== undefined) setJoints(st.joints);
   $('#explode').value = st.explode; applyExplode();
@@ -2700,6 +2887,8 @@ function apply(s) {
     setBodyVisible(m, st.bodies[i] ?? true); setBodyGhost(m, !!st.ghosts?.[i]);
     const t = st.tints?.[i] ?? null;
     if (JSON.stringify(m.userData.tint ?? null) !== JSON.stringify(t)) setTint([m], t);
+    const fin = st.finishes?.[i] ?? null;
+    if ((m.userData.finish ?? null) !== fin) setFinish([m], fin);
   });
   syncRows();
   if (JSON.stringify(markup.items) !== JSON.stringify(st.markup)) { markup.load(st.markup); markupChanged(st.markup); }
