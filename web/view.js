@@ -887,6 +887,23 @@ const rotStep = () => THREE.MathUtils.degToRad(+$('#rotStep').value);
 for (const b of document.querySelectorAll('[data-rot]')) b.addEventListener('click', (e) =>
   turnModel(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3().setComponent('xyz'.indexOf(b.dataset.rot), 1), e.shiftKey ? -rotStep() : rotStep()).multiply(rot)));
 $('#rotReset').addEventListener('click', () => turnModel(new THREE.Quaternion()));
+// ← → nudge the explode 1%; held, they scrub it at a steady rate (key repeat is too jumpy) until let go.
+const scrub = { dir: 0, raf: 0 };
+function scrubExplode(dir) {
+  if (ui.mode === 'joint') return setExplode(0);
+  setExplode(+$('#explode').value + dir);
+  scrub.dir = dir; cancelAnimationFrame(scrub.raf);
+  const t0 = performance.now();
+  let last = t0 + 250;   // a tap is a nudge; scrubbing starts after a beat
+  const tick = (t) => {
+    if (!scrub.dir) return;
+    if (t > last) { setExplode(+$('#explode').value + scrub.dir * 40 * (t - last) / 1000); last = t; }
+    scrub.raf = requestAnimationFrame(tick);
+  };
+  scrub.raf = requestAnimationFrame(tick);
+}
+window.addEventListener('keyup', (e) => { if (scrub.dir && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { scrub.dir = 0; commit(); } });
+window.addEventListener('blur', () => { scrub.dir = 0; });
 function setExplode(v) { if (ui.mode === 'joint') return say('explode is off in joint mode: switch to Explode (E)'); $('#explode').value = Math.max(0, Math.min(100, v)); applyExplode(); }
 $('#resetBtn').addEventListener('click', () => { for (const m of model.children) { m.userData.axis = undefined; m.userData.pull = undefined; } applyExplode(); say('explode positions reset'); });
 
@@ -2455,6 +2472,8 @@ const CMDS = [
   { key: '0', label: 'Explode all / none', btn: '#explode', run: () => setExplode(+$('#explode').value ? 0 : 100), on: () => +$('#explode').value > 0 },
   { key: '=', label: 'Explode more', run: () => setExplode(+$('#explode').value + 10) },
   { key: '-', label: 'Explode less', run: () => setExplode(+$('#explode').value - 10) },
+  { key: 'ArrowRight', hold: true, label: 'Nudge explode out (hold to scrub)', run: () => scrubExplode(1) },
+  { key: 'ArrowLeft', hold: true, label: 'Nudge explode in (hold to scrub)', run: () => scrubExplode(-1) },
   { key: 'h', label: 'Hide selected', run: hideSelected },
   { key: 'h', shift: true, label: 'Show all bodies', run: showAllBodies },
   { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (pickAxis) { endPickAxis(); return; } if (pickJoint) { endPickJoint(); return; } if (measure.on) { measure.cancel(); setMeasure(false); return; } const t = $('[data-tool].on')?.dataset.tool; if (t) { markup.setTool(t); return; } if (selected.size) { selectBodies([], 'set'); return; } setSectionAxis(''); setMeasure(false); } },
@@ -2471,14 +2490,16 @@ const CMDS = [
   { key: 'z', meta: true, label: 'Undo', run: undo },
   { key: 'z', meta: true, shift: true, label: 'Redo', run: redo },
 ];
-const keyLabel = (c) => (c.shift ? '⇧' : '') + (c.meta ? '⌘' : '') + ({ Escape: 'Esc', Backspace: '⌫' }[c.key] ?? c.key.toUpperCase());
+const keyLabel = (c) => (c.shift ? '⇧' : '') + (c.meta ? '⌘' : '') + ({ Escape: 'Esc', Backspace: '⌫', ArrowLeft: '←', ArrowRight: '→' }[c.key] ?? c.key.toUpperCase());
 
 window.addEventListener('keydown', (e) => {
   if ((e.target.matches?.('input,select,textarea') && !((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's')) || e.altKey || $('#shareDialog').open) return;   // typing keeps its keys, but ⌘S saves from inside a field
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const c = CMDS.find((c) => c.key === key && !!c.meta === (e.metaKey || e.ctrlKey) && !!c.shift === e.shiftKey);
   if (!c) return;
-  e.preventDefault(); hideMenu(); c.run(); commit();
+  e.preventDefault();
+  if (c.hold && e.repeat) return;
+  hideMenu(); c.run(); commit();
 });
 
 // --- undo: a snapshot of the view state after every action; ⌘Z walks back.
