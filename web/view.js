@@ -443,12 +443,14 @@ function paintRows() {
   bodyBoxes().forEach((cb, i) => { cb.style.accentColor = ui.color ? `#${partColor(i).getHexString()}` : ''; });
 }
 /**
- * Hovering a body row lays a see-through overlay on that body, drawn over everything, so the
- * row can be matched to its part even when it is buried inside the assembly. A child of the
- * body, so it rides the explode; it shares the geometry and dies on leave.
+ * Hovering a body draws a thick outline round its outer silhouette, over everything, so the row
+ * can be matched to its part even when it is buried inside the assembly. The body is stamped
+ * into the stencil, then copies nudged a few pixels each way paint only outside the stamp.
+ * Children of the body, so they ride the explode; they share the geometry and die on leave.
  */
-let hoverOverlay = null;
+let hoverOverlay = [];
 let hovered = null;
+const OUTLINE_PX = 3;
 /** The body under the mouse: its overlay, and its row in the bodies list (or the folded group row that holds it). */
 function hoverBody(m) {
   if (m === hovered) return;
@@ -460,16 +462,25 @@ function hoverBody(m) {
   if (row) { row.classList.add('hover'); row.scrollIntoView({ block: 'nearest' }); }
 }
 function highlightBody(m) {
-  if (hoverOverlay) { hoverOverlay.parent?.remove(hoverOverlay); hoverOverlay.material.dispose(); hoverOverlay = null; }
+  for (const o of hoverOverlay) { o.parent?.remove(o); o.material.dispose(); }
+  hoverOverlay = [];
   if (!m) return;
-  const opts = { color: 0xff5a1f, transparent: true, opacity: m.isLine ? 1 : 0.45, depthTest: false, depthWrite: false,
-    clippingPlanes: section.axis && bbox ? [section.plane] : [] };
-  hoverOverlay = m.isLine
-    ? new THREE.LineSegments(m.geometry, new THREE.LineBasicMaterial(opts))
-    : new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ ...opts, side: THREE.DoubleSide }));
-  hoverOverlay.renderOrder = 10;
-  hoverOverlay.raycast = () => {};   // never a measure or markup target
-  m.add(hoverOverlay);
+  const opts = { color: 0xff5a1f, depthTest: false, depthWrite: false, clippingPlanes: section.axis && bbox ? [section.plane] : [] };
+  const add = (o, order) => { o.renderOrder = order; o.raycast = () => {}; m.add(o); hoverOverlay.push(o); };   // never a measure or markup target
+  if (m.isLine) return add(new THREE.LineSegments(m.geometry, new THREE.LineBasicMaterial(opts)), 10);
+  // Section caps leave the stencil at 0 (renderOrder 2), so ref 1 is free by now.
+  add(new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ ...opts, side: THREE.DoubleSide, colorWrite: false,
+    stencilWrite: true, stencilRef: 1, stencilFunc: THREE.AlwaysStencilFunc, stencilZPass: THREE.ReplaceStencilOp })), 10);
+  for (let i = 0; i < 8; i++) {
+    const a = i * Math.PI / 4;
+    const mat = new THREE.MeshBasicMaterial({ ...opts, side: THREE.DoubleSide,
+      stencilWrite: true, stencilRef: 1, stencilFunc: THREE.NotEqualStencilFunc });
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uNudge = { get value() { const c = renderer.domElement; return new THREE.Vector2(Math.cos(a) * 2 * OUTLINE_PX / c.clientWidth, Math.sin(a) * 2 * OUTLINE_PX / c.clientHeight); } };
+      sh.vertexShader = 'uniform vec2 uNudge;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\ngl_Position.xy += uNudge * gl_Position.w;');
+    };
+    add(new THREE.Mesh(m.geometry, mat), 11);
+  }
 }
 function setBodyVisible(m, on) {
   m.visible = on;
