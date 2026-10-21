@@ -1290,7 +1290,7 @@ window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
       shown++; label = name; progressEnd(name, performance.now() - tf);
     } catch (e) { if (ticket === loadTicket) { progressEnd(); loadFailed(name, e); } return; }
   }
-  if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0), keep && sameFile);
+  if (shown) { finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0), keep && sameFile); remember(paths); }
 };
 
 async function filesToBuffers(fileList) {
@@ -1304,6 +1304,36 @@ document.addEventListener('drop', async (e) => {
   if (e.dataTransfer.files.length) openBuffers(await filesToBuffers(e.dataTransfer.files));
 });
 $('#openBtn').addEventListener('click', () => $('#fileInput').click());
+
+// RECENT, beside Open: the last ten files (or sets of files) opened by path, newest first, kept in
+// this browser. A file dropped in has no path to open again, so it is not listed.
+const RECENT_KEY = 'cadgang-recent';
+const recentList = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch { return []; } };
+function remember(paths) {
+  if (follow || !paths.every((p) => p.startsWith('/'))) return;
+  const k = paths.join('|');
+  const list = [{ paths, at: new Date().toISOString() }, ...recentList().filter((r) => r.paths.join('|') !== k)].slice(0, 10);
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch {}
+}
+const recentMenu = $('#recentMenu');
+function showRecent() {
+  const list = recentList();
+  recentMenu.replaceChildren(...(list.length ? list.map((r) => {
+    const b = Object.assign(document.createElement('button'), { className: 'ghost recent-item', title: r.paths.join('\n') });
+    const name = r.paths.map((p) => p.split('/').pop()).join(' + ');
+    const dir = r.paths[0].split('/').slice(0, -1).join('/').replace(/^\/Users\/[^/]+/, '~');
+    b.append(Object.assign(document.createElement('span'), { textContent: name }), Object.assign(document.createElement('small'), { textContent: dir }));
+    b.addEventListener('click', () => { recentMenu.hidden = true; window.cadgangOpen(r.paths); });
+    return b;
+  }) : [Object.assign(document.createElement('div'), { className: 'recent-empty', textContent: 'No recent files yet' })]));
+  if (list.length) {
+    const clear = Object.assign(document.createElement('button'), { className: 'ghost recent-clear', textContent: 'Clear the list' });
+    clear.addEventListener('click', () => { try { localStorage.removeItem(RECENT_KEY); } catch {} showRecent(); });
+    recentMenu.append(document.createElement('hr'), clear);
+  }
+}
+$('#recentBtn').addEventListener('click', (e) => { e.stopPropagation(); if (recentMenu.hidden) showRecent(); recentMenu.hidden = !recentMenu.hidden; });
+document.addEventListener('pointerdown', (e) => { if (!recentMenu.contains(e.target) && e.target !== $('#recentBtn')) recentMenu.hidden = true; });
 $('#newBtn').addEventListener('click', () => window.open(location.pathname));
 // Drawing: the page registers what is open; Claude collects the spec over MCP and sends it back here to render.
 $('#drawBtn').addEventListener('click', async () => {
@@ -2014,8 +2044,9 @@ function showMenu(x, y, part) {
     return b;
   }));
   menu.hidden = false;
-  menu.style.left = `${Math.min(x, innerWidth - menu.offsetWidth - 8)}px`;
-  menu.style.top = `${Math.min(y, innerHeight - menu.offsetHeight - 8)}px`;
+  menu.scrollTop = 0;
+  menu.style.left = `${Math.max(8, Math.min(x, innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, innerHeight - menu.offsetHeight - 8))}px`;   // never above the window's top: it scrolls instead
 }
 function hideMenu() { menu.hidden = true; }
 document.addEventListener('pointerdown', (e) => { if (!menu.contains(e.target)) hideMenu(); });

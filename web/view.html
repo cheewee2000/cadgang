@@ -23,6 +23,10 @@
     </div>
     <div class="toolbar">
       <button id="openBtn" class="ghost" title="Open a file (⌘O)">Open</button>
+      <span class="recent">
+        <button id="recentBtn" class="ghost" title="Files you opened lately">Recent</button>
+        <div id="recentMenu" class="share-menu" hidden></div>
+      </span>
       <button id="newBtn" class="ghost" title="New window, for another file with its own markups">New</button>
       <button id="drawBtn" class="ghost" title="Drawing: Claude asks what the sheet needs, then the viewer renders it">Drawing</button>
       <input id="fileInput" type="file" multiple hidden
