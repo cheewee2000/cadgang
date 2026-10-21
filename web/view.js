@@ -1368,7 +1368,7 @@ $('#newJointBtn').addEventListener('click', () => startPickJoint());
 document.documentElement.dataset.mode = ui.mode;
 
 // The panel: one row per joint, a slider to drive it, its parent and limits; how to make and move them under.
-const JOINT_HINTS = 'New joint (N): click a face on the part that moves, then one on the part it moves on (empty space: the ground), then the motion.\nIn Joint mode (J), drag a part: drive its joint. ⌥-drag: turn a planar one. ⌘-drag: its offset along the axis.\nPoint at this panel to see what each joint joins. Drag the dots at the ends of a joint’s dashed track to set its min and max; double-click one to free it.\nFlip turns a snapped part over. A part can have several joints: each rides on the ones before it, and a drag drives the one you last moved.';
+const JOINT_HINTS = 'N: new joint (moving part, then base). Drag: drive · ⌥ turn · ⌘ offset.\nTrack dots: min/max, double-click frees.';
 function renderJoints() {
   const el = $('#joints');
   el.hidden = !joints.length && ui.mode !== 'joint';   // the joints in either mode; in Joint mode the hints even before the first one
