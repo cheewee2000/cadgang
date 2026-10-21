@@ -428,7 +428,7 @@ $('#solveBtn').addEventListener('click', () => {
   setTimeout(() => { const t = performance.now(); try { solveExplode(); } finally { progressEnd('explode', performance.now() - t); } }, 30);
 });
 // For a headless drive or a console: what the solver decided.
-window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, stage: m.userData.stage ?? 0, axis: m.userData.axis ?? null, pull: m.userData.pull == null ? null : +m.userData.pull.toFixed(2) }));
+window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, stage: m.userData.stage ?? 0, axis: m.userData.axis ?? null, pull: m.userData.pull == null ? null : +m.userData.pull.toFixed(2), fixStage: m.userData.fixStage ?? null, at: m.position.toArray().map((v) => +v.toFixed(1)), box: (({ min, max }) => [...min.toArray(), ...max.toArray()].map((v) => +v.toFixed(1)))(new THREE.Box3().setFromObject(m)) }));
 /** Body ticks in model order (a group tree renders them out of order). */
 const bodyBoxes = () => { const by = new Map([...$('#bodies').querySelectorAll('input.body-cb')].map((cb) => [cb._body, cb])); return model.children.map((m) => by.get(m)).filter(Boolean); };
 /** Ticks follow the bodies: a group is ticked when all of it shows, half when some does. */
