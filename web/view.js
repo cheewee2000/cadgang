@@ -1036,9 +1036,13 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   }
   if (!drag) {
     if (measure.on) { measure.hover(e); return; }
-    const p = e.pointerType !== 'touch' ? partAt(e) : null;
+    // A press on a cut face drags the section, anywhere else on a part drags the part: over a cut face the
+    // caps light up and the cursor turns to an up-down arrow, over a part it gets its outline and a hand.
+    const sect = onCap(e), p = !sect && e.pointerType !== 'touch' ? partAt(e) : null;
     hoverBody($('[data-tool].on') ? null : p?.body ?? null);   // no tool chosen: the body under the mouse and its row light up
-    renderer.domElement.classList.toggle('oncap', onCap(e) || !!p || !!limitAt(e));
+    litCaps(sect);
+    renderer.domElement.classList.toggle('onsect', sect);
+    renderer.domElement.classList.toggle('oncap', !sect && (!!p || !!limitAt(e)));
     return;
   }
   if (drag.id !== e.pointerId) return;
@@ -1097,7 +1101,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   drag = null;
   touches.delete(e.pointerId);
 });
-renderer.domElement.addEventListener('pointerleave', () => hoverBody(null));
+renderer.domElement.addEventListener('pointerleave', () => { hoverBody(null); litCaps(false); });
 renderer.domElement.addEventListener('pointercancel', (e) => { drag = null; touches.delete(e.pointerId); });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 renderer.domElement.addEventListener('dblclick', (e) => { const h = limitAt(e); if (h) { h.j[h.which] = null; renderJoints(); applyExplode(); saveJoints(); commit(); } });   // a limit's handle, double-clicked: free again
@@ -1539,8 +1543,18 @@ function closedMesh(g) {
   for (const v of edges.values()) if (v !== 2) return (g.userData.closed = false);
   return (g.userData.closed = true);
 }
+// The cut faces in the hover orange while the pointer is on one: a drag there moves the section.
+let capsLit = false;
+function litCaps(on) {
+  if (on === capsLit) return;
+  capsLit = on;
+  const c = on ? new THREE.Color(0xff5a1f) : capColor();
+  capPlane.material.color.copy(c);
+  for (const m of model.children) m.userData.cap?.material.color.copy(c);
+}
 function buildCaps() {
   const on = !!section.axis && !!bbox;
+  litCaps(false);
   capPlane.visible = on;
   model.children.forEach((m, i) => {
     if (m.userData.cap) { m.remove(m.userData.cap); m.userData.cap.material.dispose(); m.userData.cap = null; }
