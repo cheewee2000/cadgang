@@ -354,6 +354,17 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     else if (h?.f) marker(h.p, hl, 0.0035);   // where on the edge it lands
     return h;
   }
+  // The face under the pointer, lit as measure lights one (the IMAGE tool: which surface the picture lands on).
+  function showFace(e) {
+    clearHl();
+    if (!e) return null;
+    const r = canvas.getBoundingClientRect(), m = local(e);
+    raycaster.setFromCamera(new THREE.Vector2((m.x / r.width) * 2 - 1, -(m.y / r.height) * 2 + 1), getCamera());
+    const hit = raycaster.intersectObjects(solids(), false).find(kept);
+    const face = hit?.object.userData.faces?.find((f) => hit.faceIndex >= f.first && hit.faceIndex < f.first + f.count);
+    if (face) faceMesh({ mesh: hit.object, ...face }, hl);
+    return hit ?? null;
+  }
   const entity = (h, e) => (h.face && !h.snap && !h.f && !e.altKey ? { face: faceData(h.face), raw: h.face } : { p: h.p.clone() });
 
   // ----------------------------------------------------------------- faces
@@ -522,7 +533,7 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     setOn(v) { on = v; pending = null; clearHl(); clearSel(); canvas.style.cursor = v ? 'crosshair' : ''; if (v) dirty = true; },
     invalidate() { dirty = true; faceCache.clear(); },
     hover: onHover, click: onClick, projectLabels,
-    snapAt: (e) => snapAt(e)?.p.clone() ?? null, showSnap: (e) => !!showSnap(e), clearSnap: () => { if (!on) clearHl(); },
+    snapAt: (e) => snapAt(e)?.p.clone() ?? null, showSnap: (e) => !!showSnap(e), showFace: (e) => !!showFace(e), clearSnap: () => { if (!on) clearHl(); },
     pointSnapAt,
     cancel() { const had = !!pending; pending = null; clearSel(); return had; },
     get dims() { return dims; },

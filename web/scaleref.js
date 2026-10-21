@@ -151,7 +151,7 @@ function basketball(THREE) {
 }
 
 const MAKERS = { quarter, tennis: tennisBall, paper: looseleaf, basketball };
-const ICON = '<svg viewBox="0 0 24 16" width="22" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 15h22"/><circle cx="4" cy="12.5" r="2"/><rect x="8.5" y="7" width="6" height="7.5"/><circle cx="19" cy="9.5" r="4.6"/></svg>';
+const ICON = '<svg viewBox="0 0 24 16" width="22" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 15h22"/><circle cx="3.2" cy="12.5" r="2"/><rect x="7" y="7.5" width="6" height="7"/><circle cx="19.3" cy="10" r="4.3"/></svg>';
 
 export function createScaleRef({ THREE, scene, getBox, onChange = () => {} }) {
   let state = { on: false, which: 'quarter' };

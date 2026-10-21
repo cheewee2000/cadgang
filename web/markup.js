@@ -13,7 +13,7 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
 
-export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTargets, layer, tools, onChange, snap = null, planeAt = null }) {
+export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTargets, layer, tools, onChange, snap = null, planeAt = null, say = () => {}, tipAt = () => {} }) {
   const group = new THREE.Group();
   group.renderOrder = 5;
   scene.add(group);
@@ -290,7 +290,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     const it = imageUnder(e);
     if (!it) return;
     e.stopImmediatePropagation(); e.preventDefault();   // not the view's re-centre
-    editId = it.id; rebuild();
+    editId = it.id; rebuild(); tipAt(null, e);
   }, { capture: true });
   // The picture the IMAGE tool places next: chosen when the tool is picked, kept until another is.
   let picked = null;
@@ -781,9 +781,11 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       const c = z ? (z.kind === 'line' ? 'move' : 'pointer') : lineAt(e) ? 'pointer' : null;
       if (c) { canvas.style.cursor = c; lineCursor = true; }
       else if (lineCursor) { canvas.style.cursor = ''; lineCursor = false; }   // only undo our own cursor, not the view's
+      tipAt(!c && imageUnder(e) ? 'Double-click to adjust the picture' : null, e);   // a picture on a surface can be moved, sized, turned, cropped
     }
     if (!current) {   // ARROW, PEN: light up the point or edge it would land on (not while the view is dragged)
       if ((tool === 'arrow' || tool === 'path') && !e.buttons && e.pointerType !== 'touch') { const lit = snap?.showSnap(e); canvas.style.cursor = lit ? 'cell' : 'crosshair'; }
+      if (tool === 'image' && !e.buttons && e.pointerType !== 'touch') snap?.showFace?.(e);   // the surface the picture would land on
       if (draft && tool === 'path' && !e.buttons) {
         const lockedP = penPoint(e), snapP = !lockedP && snap?.snapAt(e)?.toArray();
         hoverP = lockedP ?? (snapP ? flatten(draft, snapP) : null) ?? (draft.plane ? flatAt(e, draft) : pointAt(e));
@@ -820,7 +822,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     rebuild();
   }, { capture: true });
 
-  canvas.addEventListener('pointerleave', () => { if (!current) snap?.clearSnap(); });
+  canvas.addEventListener('pointerleave', (e) => { if (!current) snap?.clearSnap(); tipAt(null, e); });
 
   canvas.addEventListener('pointerup', (e) => {
     if (imgDrag && e.pointerId === imgDrag.id) { e.stopImmediatePropagation(); imgDrag = null; changed(); rebuild(); return; }   // projected again, where it now is
@@ -842,7 +844,11 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       const item = { ...rest, at: new Date().toISOString() };
       items.push(item); changed();
       if (item.kind === 'arrow') startNote(toWorld(item, item.points[0]), e, item);   // an arrow says something: ask what, where the drag ended
-      if (item.kind === 'image') { current = null; setTool(null); return; }   // one picture per ADD AN IMAGE; double-click it to move or size it
+      if (item.kind === 'image') {   // one picture per ADD AN IMAGE; it opens for adjusting at once (later: double-click it)
+        current = null; setTool(null); editId = item.id; rebuild();
+        say('picture: drag to move · corner dots size · just outside a corner turns (⇧ 15°) · ⌘ corner or edge crops · ⌫ deletes · Esc done · double-click it later to adjust');
+        return;
+      }
     }
     current = null;
     rebuild();
@@ -925,7 +931,8 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     tool = tool === name ? null : name;
     for (const b of document.querySelectorAll('[data-tool]')) b.classList.toggle('on', b.dataset.tool === tool);   // ADD AN IMAGE sits by the planes, not in the markup bar
     canvas.style.cursor = tool ? 'crosshair' : '';
-    if (tool !== 'arrow' && tool !== 'path') snap?.clearSnap();
+    canvas.classList.toggle('drawing', !!tool);   // under the view's grab hand over parts, even after measure clears the cursor
+    if (tool !== 'arrow' && tool !== 'path') snap?.clearSnap();   // (and the IMAGE tool's lit face)
     if (tool === 'image') { picked = null; fileInput.click(); }   // choose the picture, then click (or drag) on a face
     if (!tool) { current = null; rebuild(); }
   }

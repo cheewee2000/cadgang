@@ -7,22 +7,27 @@
  *                         WebKit sends gesturestart/gesturechange with a scale)
  *   two-finger spin turn a flat drawing in 90° steps (WebKit gesture rotation)
  *   double-click    centre the orbit on the point under the pointer
+ * scheme() 'trackpad' (the default, as before the mouse scheme): scroll rotates, shift + scroll pans; a mouse
+ *   wheel's notch still zooms, so a mouse works in either scheme and a trackpad's scroll is untouched.
  * isFlat() true (a 2D drawing): scroll and drag pan instead of rotating.
  * Dragging keeps whatever the page already does (orbit / right-drag pan).
  */
-export function attachOrbitInput(el, { orbit, camera, getCamera = () => camera, THREE, hitAt, yawSign = 1, isFlat = () => false }) {
-  // A mouse wheel and a trackpad both send wheel events. A wheel notch comes in
-  // lines, or as a multiple of 120 legacy units with no sideways part; a trackpad
-  // starts with small pixel deltas. Classify the first event of a burst and keep
-  // that answer until the burst ends, so a trackpad fling never flips into zoom.
+export function attachOrbitInput(el, { orbit, camera, getCamera = () => camera, THREE, hitAt, yawSign = 1, isFlat = () => false, scheme = () => 'mouse' }) {
+  // A mouse wheel and a trackpad both send wheel events. A wheel notch is a big step: in lines
+  // (Firefox), or its old wheelDelta a multiple of 120 (360, 480 with macOS acceleration) and 50 px or
+  // more, straight up or down; a trackpad starts a burst with steps of a few px (both measured on a
+  // MacBook). Classify the first event of a burst and keep that answer until the burst ends, so a
+  // trackpad fling never flips into zoom. A wheel smoothed into a trackpad's stream (Mac Mouse Fix's
+  // smooth scrolling) reads as a trackpad.
   let wheelMouse = false, lastWheel = 0;
   el.addEventListener('wheel', (e) => {
     e.preventDefault();
-    if (e.timeStamp - lastWheel > 250) wheelMouse = e.deltaMode !== 0 || (!e.deltaX && !!e.wheelDeltaY && e.wheelDeltaY % 120 === 0);
+    if (e.timeStamp - lastWheel > 250) wheelMouse = e.deltaMode !== 0 || (!e.deltaX && !!e.wheelDeltaY && e.wheelDeltaY % 120 === 0 && Math.abs(e.deltaY) >= 50);
     lastWheel = e.timeStamp;
-    if (wheelMouse && !e.ctrlKey) { zoomAt(e, Math.exp(-Math.sign(e.deltaY) * 0.15)); return; }
+    const pad = scheme() === 'trackpad';
+    if (wheelMouse && !e.ctrlKey) { zoomAt(e, Math.exp(-Math.sign(e.deltaY) * 0.15)); return; }   // a wheel zooms in both schemes
     if (e.ctrlKey || e.altKey) { zoomAt(e, Math.exp(Math.max(-0.5, Math.min(0.5, e.deltaY * 0.01)))); return; }   // pinch: spread comes closer
-    if (!e.shiftKey || isFlat()) {   // two fingers pan; with ⇧ they turn the part
+    if (pad ? e.shiftKey || isFlat() : !e.shiftKey || isFlat()) {   // mouse scheme: two fingers pan, ⇧ turns; trackpad: the other way round
       const k = orbit.dist * 0.0015;
       const cam = getCamera();
       const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);

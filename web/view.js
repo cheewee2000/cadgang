@@ -493,7 +493,8 @@ function bodiesHead() {
   btn.addEventListener('click', () => { panel.classList.toggle('min'); paint(); saveBodies(); });
   paint();
   const tools = document.createElement('span'); tools.className = 'bodies-tools'; tools.append(btn);
-  // Absolutely placed against the panel, so it spans the panel's full height from inside the head.
+  // On the column's right edge, not inside the panel: inside, it scrolled away with a long list and sat under its scrollbar.
+  column.querySelector(':scope > .bodies-grip')?.remove();
   const grip = document.createElement('div'); grip.className = 'bodies-grip'; grip.title = 'Drag to set the width';
   grip.addEventListener('pointerdown', (e) => {
     e.preventDefault(); e.stopPropagation();
@@ -506,7 +507,8 @@ function bodiesHead() {
     };
     grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
   });
-  head.append(Object.assign(document.createElement('span'), { textContent: 'BODIES' }), tools, grip);
+  head.append(Object.assign(document.createElement('span'), { textContent: 'BODIES' }), tools);
+  column.append(grip);
   return head;
 }
 function saveBodies() {
@@ -1446,12 +1448,13 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   const tooling = measure.on || !!$('[data-tool].on');   // a markup or measure tool owns shift
   drag = { id: e.pointerId, x: e.clientX, y: e.clientY, pan: e.button === 2 || e.button === 1 || (e.shiftKey && tooling), downX: e.clientX, downY: e.clientY, click: e.button === 0 };
   if (e.button === 0 && e.shiftKey && !tooling && e.pointerType !== 'touch') drag.marquee = true;
+  const slide = ui.scroll === 'trackpad' ? !e.altKey : e.altKey;   // trackpad scheme: a plain drag slides the part along its axis, ⌥ places it freely; mouse: the other way round
   if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
   else if (e.button === 0 && !e.shiftKey && !measure.on && e.pointerType !== 'touch') {
     const hit = partAt(e);
     const j = ui.mode === 'joint' && hit && (e.metaKey ? jointOf(hit.body) : drivingJoint(hit.body));   // ⌘: the part's own joint offset, even on a rigid one
     if (ui.mode === 'joint') { if (j && !(e.metaKey && j.type === 'ball')) drag.joint = { j, offset: e.metaKey, m: bodyOfKey(j.body), hit: hit.body, local: hit.point.clone().applyMatrix4(hit.body.matrixWorld.clone().invert()) }; }   // joint mode: a jointed part turns or slides on its joint, anything else orbits
-    else if (hit && e.altKey) {
+    else if (hit && slide) {
       const v = explodeVec(hit.body), full = +$('#explode').value >= 100;
       // fully exploded, a part in a selection carries the others: each slides the same distance along its own axis
       const group = full && selected.has(hit.body) && selected.size > 1 ? [...selected].filter((m) => m.isMesh && moves(m, explodeVec(m))) : null;
@@ -1461,7 +1464,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   // Exploded, a part pressed on and dragged moves in the screen's plane (up and down too): the selection when the
   // part is in it, else that part alone. The move is part of its explode: the slider brings it home at 0 and back
   // out to where it was put. ⇧ snaps to grid steps. Assembled, a drag rotates as always.
-  if (e.button === 0 && !e.altKey && !e.shiftKey && !drag.sect && !drag.part && !measure.on && !ui.flat && e.pointerType !== 'touch' && ui.mode !== 'joint' && !$('[data-tool].on')) {
+  if (e.button === 0 && !slide && !e.shiftKey && !drag.sect && !drag.part && !measure.on && !ui.flat && e.pointerType !== 'touch' && ui.mode !== 'joint' && !$('[data-tool].on')) {
     const m = bodyAt(e), h = m && hitAt(e);
     if (m && h) {
       const bodies = selected.has(m) ? sel() : [m];
@@ -1597,7 +1600,7 @@ function hitAt(e) {
   raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   return raycaster.intersectObjects(model.children, false)[0]?.point ?? null;
 }
-attachOrbitInput(renderer.domElement, { orbit, getCamera: () => camera, THREE, hitAt, isFlat: () => ui.flat });
+attachOrbitInput(renderer.domElement, { orbit, getCamera: () => camera, THREE, hitAt, isFlat: () => ui.flat, scheme: () => ui.scroll });
 
 // Is the pointer over a cut face? The first hit on the kept side of the plane
 // being a back face means the ray entered the solid through the cut.
@@ -2403,11 +2406,22 @@ function setUnits(u) {
   ui.units = u; $('#unitsSel').value = u;
   placeGrid();   // inches: ¼" lines, darker every inch; mm: as always
 }
+function flipDrawing() { orbit.pitch = -orbit.pitch; }
+$('#sideBtn').addEventListener('click', () => { flipDrawing(); commit(); });
 $('#unitsSel').addEventListener('change', (e) => { setUnits(e.target.value); commit(); });
+ui.scroll = 'trackpad';
+$('#scrollSel').addEventListener('change', (e) => {
+  ui.scroll = e.target.value;
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(PREFS_KEY)), scroll: ui.scroll })); } catch {}
+});
+// another tab changed it: follow, or this tab's next save would write its stale choice back
+window.addEventListener('storage', (e) => {
+  if (e.key !== PREFS_KEY) return;
+  try { const v = JSON.parse(e.newValue)?.scroll; if (v === 'mouse' || v === 'trackpad') ui.scroll = $('#scrollSel').value = v; } catch {}
+});
 $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
 $('#gridBtn').addEventListener('click', () => toggle('grid', '#gridBtn'));
-$('#fitBtn').addEventListener('click', fit);
 $('#look').addEventListener('change', (e) => { ui.look = document.documentElement.dataset.look = e.target.value; for (const m of model.children) styleMesh(m); });
 function setOrtho(on) {
   ui.ortho = on;
@@ -2500,7 +2514,7 @@ const markup = createMarkup({
   THREE, renderer, scene, orbit, layer: $('#markupLayer'), tools: $('#markupTools'),
   getCamera: () => camera, getTargets: () => model.children,
   onChange: (items) => { markupChanged(items); commit(); },
-  snap: { snapAt: (e) => measure.snapAt(e), showSnap: (e) => measure.showSnap(e), clearSnap: () => measure.clearSnap() },   // the arrow snaps like measure
+  say, tipAt: cursorTip, snap: { snapAt: (e) => measure.snapAt(e), showSnap: (e) => measure.showSnap(e), showFace: (e) => measure.showFace(e), clearSnap: () => measure.clearSnap() },   // the arrow snaps like measure
   planeAt: (ray) => planes.hit(ray),   // marks draw on the visible reference planes too
 });
 let markupTimer = null;
@@ -3094,7 +3108,7 @@ if (openArg) window.cadgangOpen(openArg.split('|')).then(() => {
 // One table drives the hotkeys, the right-click menu and the hover tips.
 
 const CMDS = [
-  { key: 'f', label: 'Fit', run: fit, btn: '#fitBtn' },
+  { key: 'f', label: 'Fit', run: fit, btn: '.viewcube-fit' },   // the button beside the view cube
   { label: 'Edges', run: () => toggle('edges', '#edgesBtn'), btn: '#edgesBtn', on: () => ui.edges },
   { key: 'w', label: 'Wireframe', run: () => toggle('wire', '#wireBtn'), btn: '#wireBtn', on: () => ui.wire },
   { key: 'g', label: 'Grid', run: () => toggle('grid', '#gridBtn'), btn: '#gridBtn', on: () => ui.grid },
@@ -3107,7 +3121,7 @@ const CMDS = [
   { sep: true },
   ...BODY_CMDS.map((c) => ({ ...c, label: { h: 'Hide selected', t: 'Selected transparent', s: 'Show only selected' }[c.shift ? '' : c.key] ?? c.label })),
   { sep: true },
-  { key: 'b', label: 'Flip drawing over', btn: '#sideBtn', run: () => { orbit.pitch = -orbit.pitch; } },
+  { label: 'Flip drawing over', btn: '#sideBtn', run: flipDrawing },   // a flat drawing only: its button, no key (B is the pen)
   { key: '[', label: 'Turn left 90°', run: () => { orbit.yaw -= Math.PI / 2; } },
   { key: ']', label: 'Turn right 90°', run: () => { orbit.yaw += Math.PI / 2; } },
   { sep: true },
@@ -3132,7 +3146,7 @@ const CMDS = [
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },
   // P pen and ⇧P pencil, as in Figma ('pen' is the pencil's stroke kind in saved markups, kept for old files)
-  ...[['p', 'path', 'Pen'], ['p', 'pen', 'Pencil', true], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['t', 'text', 'Text', true], ['i', 'image', 'Image', true], ['r', 'erase', 'Erase']].map(([key, t, label, shift]) => ({ key, shift, label, btn: `[data-tool="${t}"]`, run: () => { markup.setTool(t); if ($('[data-tool].on')) setMeasure(false); }, on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
+  ...[['b', 'path', 'Bezier'], ['p', 'pen', 'Pencil'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['t', 'text', 'Text', true], ['i', 'image', 'Image', true], ['r', 'erase', 'Erase']].map(([key, t, label, shift]) => ({ key, shift, label, btn: `[data-tool="${t}"]`, run: () => { markup.setTool(t); if ($('[data-tool].on')) setMeasure(false); }, on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
   { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
   { sep: true },
   { key: 'd', label: 'Background: light / dark / dusk / dawn / night', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.bg !== 'light' },
@@ -3170,7 +3184,7 @@ function commit() {
   if (s === history.list[history.i]) return;
   rerender();
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, color: ui.color, ortho: ui.ortho, mode: ui.mode })); } catch {}
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, scroll: ui.scroll, color: ui.color, ortho: ui.ortho, mode: ui.mode })); } catch {}
 }
 // View preferences outlive the page, like the theme. Section, explode and body
 // visibility belong to a file and start fresh with it.
@@ -3179,6 +3193,7 @@ try {
   const p = JSON.parse(localStorage.getItem(PREFS_KEY));
   if (p?.look in PRESETS) ui.look = document.documentElement.dataset.look = $('#look').value = p.look;
   if (UNIT_MM[p?.units]) { ui.units = $('#unitsSel').value = p.units; }
+  if (p?.scroll === 'mouse') ui.scroll = $('#scrollSel').value = 'mouse';
   for (const k of ['edges', 'wire', 'grid', 'ruler', 'color']) if (typeof p?.[k] === 'boolean' && ui[k] !== p[k]) toggle(k, `#${k}Btn`);
   if (p?.ortho) setOrtho(true);
   if (p?.mode === 'joint') setMode('joint');
@@ -3307,3 +3322,9 @@ document.addEventListener('pointerover', (e) => {
 });
 document.addEventListener('pointerout', (e) => { if (!e.relatedTarget?.closest?.('[data-tip],[title]')) tip.hidden = true; });
 document.addEventListener('pointerdown', () => { tip.hidden = true; });
+/** A tip that follows the mouse over the canvas (a picture that can be adjusted); null hides it. */
+function cursorTip(text, e) {
+  if (!text) { if (tip.dataset.cursor) { tip.hidden = true; delete tip.dataset.cursor; } return; }
+  tip.textContent = text; tip.hidden = false; tip.dataset.cursor = '1';
+  tip.style.left = `${Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 8)}px`; tip.style.top = `${e.clientY + 18}px`;
+}
