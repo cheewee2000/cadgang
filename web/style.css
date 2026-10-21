@@ -246,7 +246,7 @@ select.ghost:hover { opacity: 0.55; }
 .viewcube[hidden] { display: none; }
 .viewcube canvas { pointer-events: auto; cursor: pointer; width: 112px; height: 112px; }
 .viewcube-fit { pointer-events: auto; width: 34px; height: 34px; padding: 5px; border-radius: 50%; background: var(--paper); border: var(--bw-hair) solid var(--rule); color: var(--ink); display: flex; align-items: center; justify-content: center; margin-bottom: 4px; }
-.bodies-grip { position: absolute; top: 0; right: -6px; bottom: 0; width: 6px; cursor: ew-resize; touch-action: none; }
+.bodies-grip { position: absolute; z-index: 3; top: 0; right: -6px; bottom: 0; width: 12px;   /* straddles the edge: grabbable on the border line, over the list scrollbar */ cursor: ew-resize; touch-action: none; }
 .bodies-grip:hover, .bodies-grip:active { background: var(--rule); }
 .hud-tl:has(.bodies.min) > .bodies-grip, .hud-tl:has(.bodies[hidden]) > .bodies-grip { display: none; }
 .bodies label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
