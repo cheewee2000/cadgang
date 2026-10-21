@@ -10,6 +10,8 @@
 export const MATERIALS = {
   plastic: { label: 'Plastic', density: 1.2, color: 0xe8e4dc, metal: 0, rough: 0.7 },
   gloss: { label: 'Gloss plastic', density: 1.2, color: 0xe8e4dc, metal: 0, rough: 0.18 },
+  gloss_black: { label: 'Black gloss', density: 1.2, color: 0x0b0b0d, metal: 0, rough: 0.05 },   // a screen off, piano black
+  powder_white: { label: 'Powder coat, white', density: 2.7, color: 0xf0f0ec, metal: 0, rough: 0.55 },
   aluminum: { label: 'Aluminum', density: 2.7, color: 0xd2d4d7, metal: 1, rough: 0.32 },
   black_al: { label: 'Black anodized', density: 2.7, color: 0x2b2b2e, metal: 1, rough: 0.38 },
   anodized: { label: 'Anodized (file colour)', density: 2.7, color: 0xd2d4d7, metal: 1, rough: 0.38, fileColor: true },
@@ -40,6 +42,8 @@ const GUESS = [
   [/blue (solder ?mask|pcb)/i, 'pcb_blue'],
   [/green (solder ?mask|pcb)|solder ?mask/i, 'pcb'],
   [/black.?anod|anod.*black/i, 'black_al'],
+  [/(black|piano).?gloss|gloss(y)?.?black/i, 'gloss_black'],   // before glass: a screen named for its glass shows black
+  [/powder.?coat/i, 'powder_white'],   // a finish beats the steel or aluminium under it
   [/anodi[sz]/i, 'anodized'],
   [/glass|sapphire|lens|window|mirror/i, 'glass'],
   [/acryl|pmma|perspex|plexi|polycarb|lexan|\bclear\b|transparent/i, 'acrylic'],

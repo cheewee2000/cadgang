@@ -5,6 +5,9 @@
  * share.json and puts the bundle back together (view.js openShare).
  * Visitors orbit, cut, explode and mark up; marks are kept per link in the project's private Blob
  * store by the one function deployed with it (vercel/api/view/markup.js), so every visitor sees them.
+ * The link's preview card (chat unfurls): the page's name, part count and a picture of the view at share
+ * time, as Open Graph tags. Scrapers want an absolute og:image and the deployment's host is not known
+ * until it exists, so /view is served by a tiny function (api/page.js) that stamps the host in.
  * ponytail: personal-scope tokens only; pass ?teamId= on every call if team tokens are ever needed.
  */
 import fs from 'node:fs/promises';
@@ -18,7 +21,7 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const WEB = path.join(ROOT, 'web'), FN = path.join(ROOT, 'vercel');
 const API = 'https://api.vercel.com';
 export const PROJECT = 'cadgang-shares';
-const VERCEL_JSON = JSON.stringify({ rewrites: [{ source: '/view', destination: '/view.html' }] });
+const VERCEL_JSON = JSON.stringify({ rewrites: [{ source: '/view', destination: '/api/page' }] });
 const PART = 64 << 20;   // Vercel refuses files over 100 MB
 
 async function webFiles(dir = WEB, rel = '') {
@@ -34,6 +37,24 @@ async function webFiles(dir = WEB, rel = '') {
   return out;
 }
 
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+/** The bundle's header (name, parts, preview); {} when it is not one. */
+function bundleHead(b) {
+  try { const n = b.readUInt32LE(0); return n && n < b.length ? JSON.parse(b.subarray(4, 4 + n).toString()) : {}; } catch { return {}; }
+}
+/** view.html with the preview card's tags, `__ORIGIN__` left for api/page.js to fill. */
+export function cardPage(html, head) {
+  const name = head.name && head.name !== 'view' ? head.name : 'CAD model';
+  const files = (head.files ?? []).map((f) => f.name).join(', ');
+  const desc = [head.parts ? `${head.parts} part${head.parts === 1 ? '' : 's'}` : '', files && files !== name ? files : '',
+    'orbit, cut, explode and mark up in the browser'].filter(Boolean).join(' · ');
+  const tags = [`<title>${esc(name)} · CADgang</title>`, '<meta property="og:type" content="website" />', '<meta property="og:site_name" content="CADgang" />',
+    `<meta property="og:title" content="${esc(name)}" />`, `<meta property="og:description" content="${esc(desc)}" />`, `<meta name="description" content="${esc(desc)}" />`,
+    ...(head.preview ? ['<meta property="og:image" content="__ORIGIN__/preview.jpg" />', '<meta property="og:image:width" content="1200" />',
+      '<meta property="og:image:height" content="630" />', '<meta name="twitter:card" content="summary_large_image" />'] : [])];
+  return html.replace(/<title>.*?<\/title>/, tags.join('\n  '));
+}
+
 /** Deploys the bundle and resolves to the share link once Vercel says the deployment is ready. */
 export async function deployShare(bundle, token, { fetch = globalThis.fetch, wait = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   const call = async (url, init = {}) => {
@@ -44,7 +65,16 @@ export async function deployShare(bundle, token, { fetch = globalThis.fetch, wai
   const fail = (r, what) => Object.assign(new Error(`Vercel ${what}: ${r.d.error?.message || `HTTP ${r.status}`}`), { status: r.status === 401 || r.status === 403 ? 401 : 502 });
   const gz = await promisify(zlib.gzip)(bundle);
   const parts = Array.from({ length: Math.max(1, Math.ceil(gz.length / PART)) }, (_, i) => ({ file: `share.${i}.bin`, data: gz.subarray(i * PART, (i + 1) * PART) }));
-  const files = [...await webFiles(), ...parts, { file: 'share.json', data: Buffer.from(JSON.stringify({ parts: parts.length, gzip: true })) }, { file: 'vercel.json', data: Buffer.from(VERCEL_JSON) }]
+  const head = bundleHead(bundle), web = await webFiles();
+  const page = web.find((f) => f.file === 'view.html');
+  if (page) {
+    const html = cardPage(page.data.toString(), head);
+    page.data = Buffer.from(html);
+    web.push({ file: 'api/page.js', data: Buffer.from(`const HTML = ${JSON.stringify(html)};\nexport function GET(req) {\n  return new Response(HTML.replaceAll('__ORIGIN__', new URL(req.url).origin), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });\n}\n`) });
+  }
+  const jpg = /^data:image\/jpeg;base64,/.test(head.preview ?? '') && Buffer.from(head.preview.split(',')[1], 'base64');
+  if (jpg) web.push({ file: 'preview.jpg', data: jpg });
+  const files = [...web, ...parts, { file: 'share.json', data: Buffer.from(JSON.stringify({ parts: parts.length, gzip: true })) }, { file: 'vercel.json', data: Buffer.from(VERCEL_JSON) }]
     .map((f) => ({ ...f, sha: crypto.createHash('sha1').update(f.data).digest('hex') }));
   // The project and its Blob store come first: a store's credentials reach deployments made after it is connected.
   let proj = await call(`/v9/projects/${PROJECT}`);

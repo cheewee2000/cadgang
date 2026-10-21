@@ -265,6 +265,16 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     }
     return { snapIds, segs: [...segs.values()] };
   }
+  /** The nearest visible snap (end, mid, centre, quad) within SNAP_PX of the pointer: { kind, p, f }, or null
+   *  (a joint's origin lands on it). */
+  function pointSnapAt(e) {
+    if (dirty) build();
+    const m = local(e), { sp } = screenIndex(), { snapIds } = nearby(m);
+    const near = [];
+    for (const i of snapIds) { const d = Math.hypot(sp[2 * i] - m.x, sp[2 * i + 1] - m.y); if (d < SNAP_PX) near.push([d, snaps[i]]); }
+    for (const [, s] of near.sort((a, b) => a[0] - b[0]).slice(0, 6)) if (unoccluded(s.p)) return s;
+    return null;
+  }
   function pick(e) {
     if (dirty) build();
     const m = local(e);
@@ -513,6 +523,7 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     invalidate() { dirty = true; faceCache.clear(); },
     hover: onHover, click: onClick, projectLabels,
     snapAt: (e) => snapAt(e)?.p.clone() ?? null, showSnap: (e) => !!showSnap(e), clearSnap: () => { if (!on) clearHl(); },
+    pointSnapAt,
     cancel() { const had = !!pending; pending = null; clearSel(); return had; },
     get dims() { return dims; },
     get features() { if (dirty) build(); return features; },   // for headless drives

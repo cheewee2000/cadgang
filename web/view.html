@@ -21,7 +21,7 @@
       <span class="proj-sep">/</span>
       <span class="project-name" id="fileName" title="Open a file: drop it here, ⌘O, or double-click it in Finder">view</span>
     </div>
-    <div class="toolbar">
+    <div class="file-tools">
       <button id="openBtn" class="ghost" title="Open a file (⌘O)">Open</button>
       <span class="recent">
         <button id="recentBtn" class="ghost" title="Files you opened lately">Recent</button>
@@ -30,17 +30,17 @@
       <button id="saveBtn" class="ghost" title="Save the project: model, markups, dimensions, section, explode and view in one .cadgang file (⌘S)">Save</button>
       <button id="newBtn" class="ghost" title="New window, for another file with its own markups">New</button>
       <button id="drawBtn" class="ghost" title="Drawing: Claude asks what the sheet needs, then the viewer renders it">Drawing</button>
+      <button id="sideBtn" class="ghost" hidden title="Flip the drawing over">Flip</button>
+    </div>
+    <div class="toolbar">
       <input id="fileInput" type="file" multiple hidden
         accept=".step,.stp,.iges,.igs,.brep,.stl,.obj,.ply,.3mf,.gltf,.glb,.fbx,.dxf,.cadgang" />
-      <button id="sideBtn" class="ghost" hidden title="Flip the drawing over">Flip</button>
-      <span class="sep"></span>
       <span class="sect" title="What dragging a part does: slide it out (Explode) or move it on its joint (Joint). J switches">Mode
         <button class="ghost on" data-mode="explode">Explode</button><button class="ghost" data-mode="joint">Joint</button><button id="newJointBtn" class="ghost" title="Join two parts: click a face on the part that moves, then one on the part it moves on, then the motion">New joint</button>
       </span>
       <span class="sep"></span>
       <label class="sect" id="explodeSect" title="Slide the bodies apart from the assembly centre">Explode
         <input id="explode" type="range" min="0" max="100" step="any" value="0" />
-        <button id="solveBtn" class="ghost" hidden title="Solve the explode vectors: pins along their bores, parts away from the faces they sit on, nothing through anything">Solve</button>
         <button id="resetBtn" class="ghost" title="Forget dragged positions and chosen axes: back to the solved explode">Reset</button>
       </label>
       <span class="sep"></span>
@@ -83,7 +83,7 @@
       </div>
       <div class="hud hud-bl">
         <button id="fitBtn" class="ghost" title="Fit the model (F)">Fit</button>
-        <button id="edgesBtn" class="ghost on" title="Edges (E)">Edges</button>
+        <button id="edgesBtn" class="ghost on" title="Edges">Edges</button>
         <button id="wireBtn" class="ghost" title="Wireframe (W)">Wire</button>
         <button id="colorBtn" class="ghost" title="A colour per body or layer">Color</button>
         <button id="orthoBtn" class="ghost" title="Orthographic (O)">Ortho</button>
@@ -107,23 +107,27 @@
       <div id="markupTools" class="markup-tools" title="Markup: anchored on the model; Claude sees it through cadgang_screen">
         <button id="measureBtn" class="ghost" title="Measure: snaps to ends, midpoints, centres, quadrants; click an edge for its length, a circle for ⌀, two faces for their gap; ⌥ free point, ⇧ no axis snap (M, Esc to stop)">MEASURE</button>
         <span class="markup-sep"></span>
-        <button class="ghost" data-tool="path" title="Pen, as in Figma: click for corners, drag for curves, click the first point to close, Enter to end">PEN</button>
+        <span class="pen-split">
+          <button class="ghost" data-tool="path" title="Pen, as in Figma: click for corners, drag for curves, click the first point to close, Enter to end">PEN</button>
+          <button id="penMenuBtn" class="ghost" title="Pen colour and thickness">▾</button>
+          <div id="penMenu" class="pen-menu" hidden>
+            <button class="ghost swatch" data-color="#d11d1d" style="--swatch:#d11d1d" title="Red"></button>
+            <button class="ghost swatch" data-color="#111111" style="--swatch:#111111" title="Black"></button>
+            <button class="ghost swatch" data-color="#1d4ed8" style="--swatch:#1d4ed8" title="Blue"></button>
+            <button class="ghost swatch" data-color="#15803d" style="--swatch:#15803d" title="Green"></button>
+            <button class="ghost swatch" data-color="#f59e0b" style="--swatch:#f59e0b" title="Orange"></button>
+            <span class="pen-menu-sep"></span>
+            <button class="ghost" data-width="1" title="Thin stroke (1 px)">S</button>
+            <button class="ghost" data-width="2" title="Medium stroke (2 px)">M</button>
+            <button class="ghost" data-width="4" title="Thick stroke (4 px)">L</button>
+          </div>
+        </span>
         <button class="ghost" data-tool="pen" title="Draw freehand on the model">PENCIL</button>
         <button class="ghost" data-tool="arrow" title="Point at something">ARROW</button>
         <button class="ghost" data-tool="note" title="Pin a note">NOTE</button>
         <button class="ghost" data-tool="text" title="Write on a face: click where, type, Enter">TEXT</button>
         <button class="ghost" data-tool="erase" title="Erase one mark">ERASE</button>
         <button class="ghost" data-clear="1" title="Clear all markup">CLEAR</button>
-        <span class="markup-sep"></span>
-        <button class="ghost swatch" data-color="#d11d1d" style="--swatch:#d11d1d" title="Red"></button>
-        <button class="ghost swatch" data-color="#111111" style="--swatch:#111111" title="Black"></button>
-        <button class="ghost swatch" data-color="#1d4ed8" style="--swatch:#1d4ed8" title="Blue"></button>
-        <button class="ghost swatch" data-color="#15803d" style="--swatch:#15803d" title="Green"></button>
-        <button class="ghost swatch" data-color="#f59e0b" style="--swatch:#f59e0b" title="Orange"></button>
-        <span class="markup-sep"></span>
-        <button class="ghost" data-width="1" title="Thin stroke (1 px)">S</button>
-        <button class="ghost" data-width="2" title="Medium stroke (2 px)">M</button>
-        <button class="ghost" data-width="4" title="Thick stroke (4 px)">L</button>
       </div>
       <div id="drop" class="drop">
         <div id="loadError" class="load-error"></div>

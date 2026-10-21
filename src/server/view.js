@@ -22,6 +22,7 @@ import path from 'node:path';
 import net from 'node:net';
 import os from 'node:os';
 import express from 'express';
+import { execFile } from 'node:child_process';
 import { importCadFileInWorker as importCadFile } from '../core/step.js';
 import { deployShare } from './vercel.js';
 
@@ -92,6 +93,9 @@ export function pack(m) {
  *   GET     /api/view/screen.png        the image alone
  *   POST    /api/view/open {paths}      tell every open page to open these files (the MCP tool)
  *   GET|PUT /api/view/parts?subject=    per-file explode axes and maxima, by body name
+ *   POST    /api/view/ask {what, args, subject}  ask the page showing `subject` to compute something (a joint
+ *                                       sweep) and wait up to ?wait= seconds (default 20) for its answer
+ *   POST    /api/view/answer {id, ...}  the page's answer
  */
 /** The one file in a multipart/form-data body (what a shared-link upload sends; ponytail: one part, no streaming). */
 function multipartFile(buf, ctype) {
@@ -252,6 +256,21 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   // ?dir=: the asking session's folder; the newest frame of a file inside it, else the newest of all.
   const shotFor = (dir) => [...shots.values()].filter((s) => s.subject && dir && inside(s.subject.split('|')[0], dir)).sort((a, b) => b.at.localeCompare(a.at))[0] ?? latest;
   const screenJson = (s) => s && { at: s.at, subject: s.subject, camera: s.camera, png: s.png.toString('base64') };
+  // A question only the page can answer (it holds the meshes): the first page with the file answers.
+  const asks = new Map();   // id → resolve
+  r.post('/ask', async (req, res) => {
+    const id = crypto.randomUUID(), wait = Math.min(120, Math.max(1, parseFloat(req.query.wait || '20')));
+    const answer = await new Promise((done) => {
+      const t = setTimeout(() => { asks.delete(id); done(null); }, wait * 1000);
+      asks.set(id, (v) => { clearTimeout(t); asks.delete(id); done(v); });
+      broadcast({ type: 'ask', id, what: String(req.body?.what || ''), args: req.body?.args ?? {}, subject: subjectOf(req) });
+    });
+    if (!answer) return res.status(504).json({ error: 'No CADgang window with this file answered: is it open?' });
+    if (answer.error) return res.status(400).json({ error: answer.error });
+    res.json(answer.result);
+  });
+  r.post('/answer', (req, res) => { asks.get(String(req.body?.id))?.(req.body); res.json({ ok: true }); });
+
   r.get('/screen', async (req, res) => {
     const dir = req.query.dir ? String(req.query.dir) : null;
     if (req.query.fresh === '1') {
@@ -331,6 +350,30 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       await fs.writeFile(tmp, req.body);
       await fs.rename(tmp, p);
       res.json({ path: p, bytes: req.body.length });
+    } catch (e) { next(e); }
+  });
+
+  // Send to Bambu Studio: the page PUTs one STL per part into a batch folder under the temp dir, then
+  // asks for the batch to open, all at once, in the slicer. Local only, like saving.
+  const slicerDir = (batch) => path.join(os.tmpdir(), 'cadgang-slicer', batch);
+  r.put('/slicer', express.raw({ type: () => true, limit: '1gb' }), async (req, res, next) => {
+    try {
+      if (!mayReadLocal(req)) throw Object.assign(new Error('Sending to the slicer is only available in the desktop app'), { status: 403 });
+      const batch = String(req.query.batch || ''), name = String(req.query.name || '').replace(/[^\w .-]/g, '_');
+      if (!/^\w{8,32}$/.test(batch) || !/\.stl$/i.test(name)) throw Object.assign(new Error('need batch and a .stl name'), { status: 400 });
+      await fs.mkdir(slicerDir(batch), { recursive: true });
+      await fs.writeFile(path.join(slicerDir(batch), name), req.body);
+      res.json({ ok: true });
+    } catch (e) { next(e); }
+  });
+  r.post('/slicer/open', express.json(), async (req, res, next) => {
+    try {
+      if (!mayReadLocal(req)) throw Object.assign(new Error('Sending to the slicer is only available in the desktop app'), { status: 403 });
+      const batch = String(req.body?.batch || '');
+      if (!/^\w{8,32}$/.test(batch)) throw Object.assign(new Error('need batch'), { status: 400 });
+      const files = (await fs.readdir(slicerDir(batch))).map((f) => path.join(slicerDir(batch), f));
+      await new Promise((ok, fail) => execFile('open', ['-a', 'BambuStudio', ...files], (e) => (e ? fail(Object.assign(new Error('Bambu Studio did not open — is it installed?'), { status: 500 })) : ok())));
+      res.json({ files: files.length });
     } catch (e) { next(e); }
   });
 
