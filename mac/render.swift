@@ -19,7 +19,9 @@ final class PathTracer: NSObject, MTKViewDelegate {
     private let queue: MTLCommandQueue
     private let pipe: MTLComputePipelineState
     private var accel: MTLAccelerationStructure?
-    private var vtx: MTLBuffer?, idx: MTLBuffer?, tri: MTLBuffer?, mats: MTLBuffer?
+    private var vtx: MTLBuffer?, idx: MTLBuffer?, tri: MTLBuffer?, mats: MTLBuffer?, uvs: MTLBuffer?
+    private var texs: [MTLTexture] = []   // the bodies' pictures (a glTF's image textures), up to maxTextures
+    static let maxTextures = 8
     private var accum: MTLTexture?
     private var u = RenderUniforms()
     private var cam: [String: Any] = [:]
@@ -53,11 +55,12 @@ final class PathTracer: NSObject, MTKViewDelegate {
 
     private var shown: Bool { view.window?.occlusionState.contains(.visible) ?? false }
 
-    func stop() { view.isHidden = true; view.isPaused = true; accel = nil; vtx = nil; idx = nil; tri = nil; mats = nil }
+    func stop() { view.isHidden = true; view.isPaused = true; accel = nil; vtx = nil; idx = nil; tri = nil; mats = nil; uvs = nil; texs = [] }
 
     /// verts: [x y z nx ny nz] per vertex, world space. idx: 3 per triangle. tri: material per triangle.
-    /// mats: [r g b metalness roughness transmission ior] (linear colour).
-    func setScene(verts: Data, idx idxData: Data, tri triData: Data, mats matList: [[Double]], cap: [Double], bg: [Double]) {
+    /// mats: [r g b metalness roughness transmission ior texture glow] (linear colour; texture: an index into
+    /// pngs or -1, glow: how much the picture lights itself, a screen). uv: [u v] per vertex (zeros where untextured).
+    func setScene(verts: Data, idx idxData: Data, tri triData: Data, mats matList: [[Double]], cap: [Double], bg: [Double], uv uvData: Data? = nil, pngs: [Data] = []) {
         let dev = view.device!
         var v = [Float](repeating: 0, count: verts.count / 4); _ = v.withUnsafeMutableBytes { verts.copyBytes(to: $0) }
         var ix = [UInt32](repeating: 0, count: idxData.count / 4); _ = ix.withUnsafeMutableBytes { idxData.copyBytes(to: $0) }
@@ -71,14 +74,21 @@ final class PathTracer: NSObject, MTKViewDelegate {
         for (x, y) in [(-r, -r), (r, -r), (r, r), (-r, r)] { v += [c.x + x, c.y + y, z, 0, 0, 1] }
         ix += [base, base + 1, base + 2, base, base + 2, base + 3]
         var m = matList.map { $0.map(Float.init) }
-        m.append([0.92, 0.91, 0.89, 0, 0.9, 0, 1.5])                          // floor
+        m.append([0.035, 0.035, 0.035, 0, 0.9, 0, 1.5])                       // floor: dark matte (Oct 21, Che-Wei)
         m.append(cap.map(Float.init) + [0, 0.7, 0, 1.5])                       // section cap
         tm += [UInt32(m.count - 2), UInt32(m.count - 2)]
-        let mats8: [Float] = m.flatMap { [$0[0], $0[1], $0[2], 0, $0[3], $0[4], $0[5], $0.count > 6 ? $0[6] : 1.5] }   // two float4 per material
+        let mats8: [Float] = m.flatMap { [$0[0], $0[1], $0[2], 0, $0[3], $0[4], $0[5], $0.count > 6 ? $0[6] : 1.5,
+                                          $0.count > 7 ? $0[7] : -1, $0.count > 8 ? $0[8] : 0, 0, 0] }   // three float4 per material
+        var uv = [Float](repeating: 0, count: v.count / 6 * 2)   // the floor's four corners included, untextured
+        if let uvData { _ = uv.withUnsafeMutableBytes { uvData.copyBytes(to: $0, count: min(uvData.count, $0.count)) } }
+        let loader = MTKTextureLoader(device: dev)
+        texs = pngs.prefix(Self.maxTextures).compactMap { try? loader.newTexture(data: $0, options: [.SRGB: true, .textureUsage: MTLTextureUsage.shaderRead.rawValue, .textureStorageMode: MTLStorageMode.private.rawValue]) }
+        if texs.count < pngs.prefix(Self.maxTextures).count { NSLog("cadgang render: a picture did not load") }
         vtx = dev.makeBuffer(bytes: v, length: v.count * 4, options: .storageModeShared)
         idx = dev.makeBuffer(bytes: ix, length: ix.count * 4, options: .storageModeShared)
         tri = dev.makeBuffer(bytes: tm, length: tm.count * 4, options: .storageModeShared)
         mats = dev.makeBuffer(bytes: mats8, length: mats8.count * 4, options: .storageModeShared)
+        uvs = dev.makeBuffer(bytes: uv, length: uv.count * 4, options: .storageModeShared)
         u.bg = SIMD4(Float(bg[0]), Float(bg[1]), Float(bg[2]), 1)
         u.scene = SIMD4(diag, diag * 2e-5, z, 0)
         u.info.w = UInt32(ix.count / 3 - 2)
@@ -147,6 +157,8 @@ final class PathTracer: NSObject, MTKViewDelegate {
         enc.setBuffer(vtx, offset: 0, index: 1); enc.setBuffer(idx, offset: 0, index: 2)
         enc.setBuffer(tri, offset: 0, index: 3); enc.setBuffer(mats, offset: 0, index: 4)
         enc.setAccelerationStructure(accel, bufferIndex: 5)
+        enc.setBuffer(uvs, offset: 0, index: 6)
+        for i in 0..<Self.maxTextures { enc.setTexture(i < texs.count ? texs[i] : accum, index: 2 + i) }   // unused slots get any texture; no material points at them
         enc.setTexture(accum, index: 0); enc.setTexture(out, index: 1)
         enc.dispatchThreadgroups(MTLSize(width: (out.width + 7) / 8, height: (out.height + 7) / 8, depth: 1), threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
         enc.endEncoding()
@@ -162,7 +174,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
 
     struct U { float4 camPos, camFwd, camRight, camUp, sunDir, sunCol, skyTop, skyBot, bg, clip, scene; uint4 info; };
     struct Vtx { packed_float3 p; packed_float3 n; };
-    struct Mat { float4 color; float4 prm; };   // prm: metalness, roughness, transmission, ior
+    struct Mat { float4 color; float4 prm; float4 tex; };   // prm: metalness, roughness, transmission, ior; tex: picture index (-1 none), glow
 
     static uint pcg(thread uint& s) { s = s * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
     static float rnd(thread uint& s) { return float(pcg(s)) * (1.0 / 4294967296.0); }
@@ -172,7 +184,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     }
     static float3 sky(constant U& u, float3 d) { return mix(u.skyBot.rgb, u.skyTop.rgb, smoothstep(-0.3, 0.8, d.z)); }
 
-    struct Hit { bool hit; float t; float3 ng; float3 n; uint mat; bool cap; uint prim; };
+    struct Hit { bool hit; float t; float3 ng; float3 n; uint mat; bool cap; uint prim; float2 bc; };
 
     // Closest hit on the KEPT side of the section plane. Hits on the cut-away side are stepped past.
     // A first kept hit on a back face means the ray entered a solid through the cut: that is the cap,
@@ -205,7 +217,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
             float2 bc = x.triangle_barycentric_coord;
             float3 n = normalize(vtx[idx[3 * i]].n * (1.0 - bc.x - bc.y) + vtx[idx[3 * i + 1]].n * bc.x + vtx[idx[3 * i + 2]].n * bc.y);
             if (any(isnan(n))) n = ng;
-            h.hit = true; h.t = x.distance; h.ng = ng; h.n = dot(n, ng) < 0.0 ? -n : n; h.mat = tri[i]; h.prim = i;
+            h.hit = true; h.t = x.distance; h.ng = ng; h.n = dot(n, ng) < 0.0 ? -n : n; h.mat = tri[i]; h.prim = i; h.bc = bc;
             return h;
         }
         return h;
@@ -255,8 +267,10 @@ final class PathTracer: NSObject, MTKViewDelegate {
     kernel void trace(uint2 gid [[thread_position_in_grid]], constant U& u [[buffer(0)]],
                       device const Vtx* vtx [[buffer(1)]], device const uint* idx [[buffer(2)]],
                       device const uint* tri [[buffer(3)]], device const Mat* mats [[buffer(4)]],
-                      primitive_acceleration_structure accel [[buffer(5)]],
-                      texture2d<float, access::read_write> accum [[texture(0)]], texture2d<float, access::write> out [[texture(1)]]) {
+                      primitive_acceleration_structure accel [[buffer(5)]], device const float2* uvs [[buffer(6)]],
+                      texture2d<float, access::read_write> accum [[texture(0)]], texture2d<float, access::write> out [[texture(1)]],
+                      array<texture2d<float>, 8> texs [[texture(2)]]) {
+        constexpr sampler pic(filter::linear, address::clamp_to_edge);
         uint2 size = uint2(out.get_width(), out.get_height());
         if (gid.x >= size.x || gid.y >= size.y) return;
         uint seed = (gid.x * 1973u + gid.y * 9277u + u.info.x * 26699u) | 1u;
@@ -278,6 +292,12 @@ final class PathTracer: NSObject, MTKViewDelegate {
                 if (depth == 0 && isFloor) bgw = smoothstep(diag * 1.5, diag * 10.0, h.t);   // the floor melts into the background
                 Mat m = mats[h.cap ? (u.info.w > 0 ? tri[u.info.w] + 1 : 0) : h.mat];
                 float3 col = m.color.rgb;
+                if (!h.cap && m.tex.x >= 0.0) {   // a picture: its colour at the hit, and a screen lights itself
+                    uint i = h.prim;
+                    float2 uv = uvs[idx[3 * i]] * (1.0 - h.bc.x - h.bc.y) + uvs[idx[3 * i + 1]] * h.bc.x + uvs[idx[3 * i + 2]] * h.bc.y;
+                    col = texs[uint(m.tex.x)].sample(pic, uv, level(0)).rgb;
+                    L += T * col * m.tex.y;
+                }
                 float metal = m.prm.x, a = max(m.prm.y * m.prm.y, 0.002), a2 = a * a, trans = m.prm.z;
                 float3 v = -d;
                 if (trans > 0.5) {   // glass: Fresnel-weighted reflect or refract, IOR 1.5

@@ -248,7 +248,7 @@ function rightSideOut(geo) {
   if (nr && agree < 0) for (let i = 0; i < nr.count; i++) nr.setXYZ(i, -nr.getX(i), -nr.getY(i), -nr.getZ(i));
 }
 
-function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', path = [], color = null, pbr = null, groups = null, material = '', opacity = 1, map = null } = {}) {
+function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', path = [], color = null, pbr = null, groups = null, material = '', opacity = 1, map = null, glow = 0 } = {}) {
   rightSideOut(geo);
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
   const m = new THREE.Mesh(geo);
@@ -263,6 +263,7 @@ function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', pa
   m.userData.material = material;   // the file's own material name ("Steel - Satin"), shown after the body's name
   m.userData.opacity = opacity;     // the file's transparency (a STEP's SURFACE_STYLE_TRANSPARENT)
   m.userData.map = map;             // the file's image texture, drawn on every solid look
+  m.userData.glow = glow;           // and how much it lights itself (RENDER)
   m.userData.tint = tints[file]?.[m.userData.name] ?? null;   // the user's colour for it, kept from last time
   m.userData.finish = finishes[file]?.[m.userData.name] ?? null;   // and the finish
   m.userData.faces = faces;   // B-rep face ranges, when the importer knew them: picked by measure
@@ -2145,7 +2146,7 @@ function collectGeometries(obj, assoc = null, out = []) {
   obj.updateMatrixWorld(true);
   // keep the file's part name and its material's colour, roughness and metalness (glTF carries them)
   const look = (mat) => ({ name: mat?.name || '', color: mat?.color ? mat.color.getRGB(new THREE.Color(), THREE.SRGBColorSpace).toArray() : null,
-    pbr: mat?.isMeshStandardMaterial ? { roughness: mat.roughness, metalness: mat.metalness } : null, map: mat?.map ?? null });   // map: a glTF's image texture (a screen's picture)
+    pbr: mat?.isMeshStandardMaterial ? { roughness: mat.roughness, metalness: mat.metalness } : null, map: mat?.map ?? null, glow: mat?.map && mat.emissiveMap ? Math.max(...mat.emissive.toArray()) : 0 });   // map: a glTF's image texture (a screen's picture); glow: it lights itself (an emissive texture too)
   const geoOf = (o) => o.geometry.clone().applyMatrix4(o.matrixWorld);
   // the named nodes above a body, outermost first: the tree's folders (as a STEP's assembly path)
   const pathOf = (o) => { const p = []; for (let a = o.parent; a && a !== obj; a = a.parent) if (a.name && a.name !== p[0]) p.unshift(a.name); return p; };
@@ -2715,6 +2716,13 @@ const b64 = (a) => {
   for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
   return btoa(s);
 };
+/** A texture's image as base64 PNG for the shell, drawn once and kept. glTF images are top-left first, as Metal's are. */
+function pngOf(t) {
+  if (t.userData.png) return t.userData.png;
+  const { width: w, height: h } = t.image, c = Object.assign(document.createElement('canvas'), { width: w, height: h });
+  c.getContext('2d').drawImage(t.image, 0, 0);
+  return (t.userData.png = c.toDataURL('image/png').split(',')[1]);
+}
 /** The visible bodies as world-space triangles with their materials, to the shell. */
 function nativeScene() {
   model.updateMatrixWorld(true);
@@ -2722,6 +2730,7 @@ function nativeScene() {
   let nv = 0, nt = 0;
   for (const m of meshes) { nv += m.geometry.attributes.position.count; nt += (m.geometry.index?.count ?? m.geometry.attributes.position.count) / 3; }
   const verts = new Float32Array(nv * 6), idx = new Uint32Array(nt * 3), tri = new Uint32Array(nt), mats = [];
+  const uv = new Float32Array(nv * 2), pics = [];   // pictures: texture coordinates per vertex, each image once
   const v = new THREE.Vector3(), nm = new THREE.Matrix3();
   const inGlass = (bbox?.getSize(v).length() || 1) * 2e-4;   // 10× the tracer's ray offset
   let vo = 0, to = 0;
@@ -2735,17 +2744,23 @@ function nativeScene() {
       v.fromBufferAttribute(nrm, i).applyMatrix3(nm).normalize(); verts.set([v.x, v.y, v.z], (vo + i) * 6 + 3);
     }
     const ms = [].concat(m.material), base = mats.length;
+    const map = !ui.color && m.userData.map, uva = map && g.attributes.uv;
+    let pic = -1;
+    if (uva && map.image && pics.length < 8) {   // the tracer binds 8 at most
+      pic = pics.indexOf(map); if (pic < 0) { pics.push(map); pic = pics.length - 1; }
+      for (let i = 0; i < pos.count; i++) uv.set([uva.getX(i), uva.getY(i)], (vo + i) * 2);
+    }
     if (ms.some((x) => (x.transmission ?? 0) > 0.5)) inset(verts, vo, pos.count, inGlass);
     const n = (g.index?.count ?? pos.count);
     for (let i = 0; i < n; i++) idx[to * 3 + i] = vo + (g.index ? g.index.getX(i) : i);
     // a body with a material per group (several finishes) sends one material per group
     if (ms.length > 1) for (const gr of g.groups) tri.fill(base + gr.materialIndex, to + gr.start / 3, to + Math.min(gr.start + gr.count, n) / 3);
     else tri.fill(base, to, to + n / 3);
-    for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5]); }
+    for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5, mat.map === map ? pic : -1, pic >= 0 ? m.userData.glow : 0]); }
     vo += pos.count; to += n / 3;
   });
   const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff);
-  post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b] });
+  post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b], uv: b64(uv), pngs: pics.map(pngOf) });
 }
 // Glass pulled in by `d` along its welded normals (every copy of a corner moves the same way: no cracks), for
 // the tracer only. A pane lying on aluminium shares that face: the tracer took either surface per ray (speckle),
