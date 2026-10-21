@@ -1776,14 +1776,23 @@ async function openBuffers(files) {
 }
 
 /** Open from absolute paths — the macOS shell calls this with what Finder handed it. */
+// A load in flight counts as a file on screen, and only the newest load may add parts: at launch a window still
+// fetching its restored file took a Finder or Claude open in place, and both loads landed in it (wrong file, wrong tab).
+let loadSeq = 0, loading = false;
 window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
   paths = [].concat(paths);
-  // Another file is on screen: this one gets its own tab, or its own window in the Mac app (the shell
-  // turns window.open into a window). A blocked popup falls back to opening in place.
-  if (!keep && model.children.length && paths.join('|') !== subject
+  // Another file is on screen (or on its way): this one gets its own tab, or its own window in the Mac app (the
+  // shell turns window.open into a window). A blocked popup falls back to opening in place.
+  if (!keep && (model.children.length || loading) && paths.join('|') !== subject
       && window.open(`${location.pathname}?open=${encodeURIComponent(paths.join('|'))}`)) return;
+  const my = ++loadSeq, mine = () => my === loadSeq;
+  loading = true;
+  try { await openPaths(paths, keep, mine); } finally { if (mine()) loading = false; }
+};
+async function openPaths(paths, keep, mine) {
   if (paths.length === 1 && PROJECT_EXT.test(paths[0])) {
-    return openProject(await fetchBuffer(`api/view/file?path=${encodeURIComponent(paths[0])}`), paths[0].split('/').pop(), paths[0]);
+    const buf = await fetchBuffer(`api/view/file?path=${encodeURIComponent(paths[0])}`);
+    return mine() && openProject(buf, paths[0].split('/').pop(), paths[0]);
   }
   const sameFile = paths.join('|') === subject;   // the camera stays only for a reload of the file on screen
   const t0 = performance.now();
@@ -1801,14 +1810,16 @@ window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
       const q = `path=${encodeURIComponent(p)}`;
       const cad = CAD_EXT.test(name);
       const buf = await fetchBuffer(cad ? `api/view/tessellate?${q}` : `api/view/file?${q}`, cad ? { method: 'POST' } : undefined);
+      if (!mine()) return;   // a newer open took this window
       const parts = cad ? parseCad(buf) : await parseMesh(name.toLowerCase().split('.').pop(), buf, name);
+      if (!mine()) return;
       sources.push({ name, cad, buffer: buf });
       for (const part of parts) addPart(part, name);
       shown++; label = name; progressEnd(name, performance.now() - tf);
-    } catch (e) { progressEnd(); loadFailed(name, e); return; }
+    } catch (e) { if (mine()) { progressEnd(); loadFailed(name, e); } return; }
   }
   if (shown) finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0), keep && sameFile);
-};
+}
 
 async function filesToBuffers(fileList) {
   return Promise.all([...fileList].map(async (f) => ({ name: f.name, buffer: await f.arrayBuffer() })));
