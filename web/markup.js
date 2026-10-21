@@ -108,6 +108,28 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     return raycaster.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(n, origin), p) ? p.toArray() : null;
   }
 
+  // Square to a view (front, top, right… within a degree): a pen line or path is drawn flat, on the plane
+  // through where it starts that faces the eye, instead of following the model's depth point by point.
+  // Saved on the mark as plane {o (rest frame), n (world)}; its anchors and drags stay on that plane.
+  const SQUARE = Math.cos(Math.PI / 180);
+  function squareAxis() {
+    const d = getCamera().getWorldDirection(new THREE.Vector3());
+    for (const a of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
+      const v = new THREE.Vector3(...a), k = d.dot(v);
+      if (Math.abs(k) > SQUARE) return v.multiplyScalar(-Math.sign(k));   // pointing back at the eye
+    }
+    return null;
+  }
+  const flatPlane = (item) => item.plane && { o: new THREE.Vector3(...toWorld(item, item.plane.o)), n: new THREE.Vector3(...item.plane.n) };
+  /** Where the pointer meets the mark's flat plane (world), or null. */
+  function flatAt(e, item) { const f = flatPlane(item); return f ? onPlane(e, f.o, f.n) : null; }
+  /** A world point pushed onto the mark's flat plane along its normal (a snap stays where it was seen). */
+  function flatten(item, p) {
+    const f = flatPlane(item); if (!f || !p) return p;
+    const q = new THREE.Vector3(...p);
+    return q.addScaledVector(f.n, -q.clone().sub(f.o).dot(f.n)).toArray();
+  }
+
   // ------------------------------------------------------------ geometry
 
   function build(item) {
@@ -334,6 +356,8 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     }
     if (current) build(current);
     if (draft) buildDraft();
+    const sel = selected();
+    if (sel) buildSelection(sel);
   }
 
   // ------------------------------------------------------------- pen (Figma's): anchors and handles
@@ -417,11 +441,16 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       const f = toScreen(toWorld(draft, draft.nodes[0].p)), r = canvas.getBoundingClientRect();
       if (Math.hypot(f.x - (e.clientX - r.left), f.y - (e.clientY - r.top)) < 10) { draft.closed = true; finishDraft(); return; }
     }
-    if (!draft) draft = { id: uid(), kind: 'path', ...body, ...pen, nodes: [] };
+    if (!draft) {
+      draft = { id: uid(), kind: 'path', ...body, ...pen, nodes: [] };
+      const sq = squareAxis();
+      if (sq) draft.plane = { o: toRest(draft, p), n: sq.toArray() };   // square to a view: the path is flat
+    }
+    p = flatten(draft, p);
     const node = { p: toRest(draft, p), in: [0, 0, 0], out: [0, 0, 0] };
     draft.nodes.push(node);
-    const fr = faceFrame(e), n = fr ? V3(fr.normal) : new THREE.Vector3();
-    if (!fr) getCamera().getWorldDirection(n);
+    const fr = draft.plane ? null : faceFrame(e), n = draft.plane ? V3(draft.plane.n) : fr ? V3(fr.normal) : new THREE.Vector3();
+    if (!fr && !draft.plane) getCamera().getWorldDirection(n);
     handle = { node, origin: V3(p), n, id: e.pointerId, x: e.clientX, y: e.clientY };
     canvas.setPointerCapture(e.pointerId);
     rebuild();
@@ -448,6 +477,120 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (!draft || e.target.matches?.('input,textarea')) return;
     if (e.key === 'Enter' || e.key === 'Escape') { finishDraft(); }
     else if (e.key === 'Backspace' || e.key === 'Delete') { draft.nodes.pop(); if (!draft.nodes.length) draft = null; rebuild(); }
+    else return;
+    e.preventDefault(); e.stopImmediatePropagation();
+  }, { capture: true });
+
+  // Esc twice, as in Figma: the first ends the path being drawn (the pen stays up for the next one), the
+  // second, with nothing being drawn, puts the tool down. (The draft's own Esc above runs first and stops here.)
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !tool || draft || current || noteInput || e.target.matches?.('input,textarea')) return;
+    setTool(null);
+    e.preventDefault(); e.stopImmediatePropagation();
+  }, { capture: true });
+
+  // ------------------------------------------------------------- select and edit a line (Figma's)
+  //
+  // With no tool chosen, a click on a pen line or path selects it: its anchors and handles show. Drag the
+  // line to move it, an anchor to move that anchor (its handles come along), a handle to bend the curve
+  // (the opposite handle mirrors its angle; ⌥ moves one alone). ⌫ deletes it, Esc or a click elsewhere
+  // is done. Drags run on the mark's flat plane when it has one, else on the plane through the grabbed
+  // point that faces the eye.
+  let selId = null, selDrag = null, lineCursor = false;
+  const SEL = '#2f5d8a';
+  const selected = () => (selId ? items.find((i) => i.id === selId) ?? null : null);
+  const editable = (it) => it.kind === 'path' || it.kind === 'pen';
+  const pxAt = (e) => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  function segDist(p, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y, l = dx * dx + dy * dy;
+    const t = l ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l)) : 0;
+    return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+  }
+  /** The pen line or path drawn under the pointer (within 6 px of its stroke), topmost first. */
+  function lineAt(e) {
+    const m = pxAt(e);
+    for (const it of [...items].reverse()) {
+      if (!editable(it) || it.points.length < 2) continue;
+      const s = it.points.map((q) => toScreen(toWorld(it, q)));
+      for (let i = 0; i + 1 < s.length; i++) if (!s[i].behind && !s[i + 1].behind && segDist(m, s[i], s[i + 1]) < 6 + (it.width || 1) / 2) return it;
+    }
+    return null;
+  }
+  /** On the selected mark: an anchor or a handle end (paths), else the stroke itself. */
+  function selZone(e, it) {
+    const m = pxAt(e), near = (q) => { const s = toScreen(toWorld(it, q)); return Math.hypot(s.x - m.x, s.y - m.y) < 9; };
+    if (it.kind === 'path') {
+      for (let i = 0; i < it.nodes.length; i++) {
+        const n = it.nodes[i];
+        for (const which of ['out', 'in']) if (V3(n[which]).lengthSq() > 0 && near(V3(n.p).add(V3(n[which])).toArray())) return { kind: 'handle', i, which };
+      }
+      for (let i = 0; i < it.nodes.length; i++) if (near(it.nodes[i].p)) return { kind: 'anchor', i };
+    }
+    return lineAt(e)?.id === it.id ? { kind: 'line' } : null;
+  }
+  function buildSelection(it) {
+    const holder = new THREE.Group();
+    holder.userData.item = it; follow(holder, it);
+    const add = (o) => { o.renderOrder = 8; holder.add(o); };
+    const { line, solid } = matFor(SEL, 1);
+    const r = orbit.dist * 0.004;
+    const dot = (p, size, mat) => { const m = new THREE.Mesh(new THREE.SphereGeometry(size, 10, 8), mat); m.position.copy(p); add(m); };
+    const white = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false });
+    add(fatLine(it.points.map(V3), line));   // the stroke outlined in blue
+    if (it.kind === 'path') {
+      for (const n of it.nodes) {
+        const a = V3(n.p);
+        for (const h of [n.in, n.out]) if (V3(h).lengthSq() > 0) { add(fatLine([a, a.clone().add(V3(h))], line)); dot(a.clone().add(V3(h)), r * 0.7, solid); }
+        dot(a, r * 1.3, solid); dot(a, r * 0.8, white);   // anchors: hollow squares in Figma, hollow dots here
+      }
+    } else {
+      dot(V3(it.points[0]), r, solid); dot(V3(it.points[it.points.length - 1]), r, solid);
+    }
+    group.add(holder);
+  }
+  function selectNone() { if (!selId) return; selId = null; selDrag = null; canvas.style.cursor = tool ? 'crosshair' : ''; rebuild(); }
+  /** Start a drag on the selected mark from this press. */
+  function selStart(e, it, zone) {
+    const f = flatPlane(it);
+    const grab = zone.kind === 'anchor' ? V3(toWorld(it, it.nodes[zone.i].p))
+      : zone.kind === 'handle' ? V3(toWorld(it, V3(it.nodes[zone.i].p).add(V3(it.nodes[zone.i][zone.which])).toArray()))
+      : V3(pointAt(e) ?? toWorld(it, it.points[0]));
+    const n = f ? f.n : getCamera().getWorldDirection(new THREE.Vector3()).negate();
+    const o = f ? V3(flatten(it, grab.toArray())) : grab;
+    const start = onPlane(e, o, n);
+    if (!start) return false;
+    selDrag = { zone, id: e.pointerId, o, n, start: V3(start), orig: JSON.parse(JSON.stringify({ nodes: it.nodes, points: it.points, plane: it.plane })) };
+    canvas.setPointerCapture(e.pointerId);
+    return true;
+  }
+  /** A rest-frame point moved by a world-space delta. */
+  const shifted = (it, rest, d) => toRest(it, V3(toWorld(it, rest)).add(d).toArray());
+  function selMove(e) {
+    const it = selected(); if (!it) { selDrag = null; return; }
+    const q = onPlane(e, selDrag.o, selDrag.n); if (!q) return;
+    const d = V3(q).sub(selDrag.start), { zone, orig } = selDrag;
+    if (zone.kind === 'line') {
+      if (it.kind === 'path') it.nodes = orig.nodes.map((n) => ({ ...n, p: shifted(it, n.p, d) }));
+      else it.points = orig.points.map((p) => shifted(it, p, d));
+      if (orig.plane) it.plane = { ...orig.plane, o: shifted(it, orig.plane.o, d) };
+    } else if (zone.kind === 'anchor') {
+      it.nodes = orig.nodes.map((n, i) => (i === zone.i ? { ...n, p: shifted(it, n.p, d) } : n));
+    } else {   // a handle: its end follows the pointer, kept as an offset from its anchor
+      const n0 = orig.nodes[zone.i], a = V3(n0.p);
+      const end = V3(shifted(it, a.clone().add(V3(n0[zone.which])).toArray(), d));
+      const h = end.sub(a), other = zone.which === 'out' ? 'in' : 'out';
+      const node = { ...n0, [zone.which]: h.toArray().map((v) => +v.toFixed(4)) };
+      const len = V3(n0[other]).length();
+      if (!e.altKey && len > 0 && h.lengthSq() > 0) node[other] = h.clone().normalize().multiplyScalar(-len).toArray().map((v) => +v.toFixed(4));
+      it.nodes = orig.nodes.map((n, i) => (i === zone.i ? node : n));
+    }
+    if (it.kind === 'path') it.points = curvePoints(it.nodes, it.closed);
+    rebuild();
+  }
+  window.addEventListener('keydown', (e) => {
+    if (!selId || e.target.matches?.('input,textarea')) return;
+    if (e.key === 'Backspace' || e.key === 'Delete') { items = items.filter((i) => i.id !== selId); selId = null; selDrag = null; changed(); rebuild(); }
+    else if (e.key === 'Escape' || e.key === 'Enter') selectNone();
     else return;
     e.preventDefault(); e.stopImmediatePropagation();
   }, { capture: true });
@@ -528,6 +671,13 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       }
       endEdit();   // a press elsewhere ends the edit; it goes on to the view or a tool
     }
+    if (e.button === 0 && !toolFor(e) && !current) {   // no tool: a press on a line selects it and starts its drag
+      const sel = selected(), z = sel && selZone(e, sel);
+      if (z) { if (selStart(e, sel, z)) { e.stopImmediatePropagation(); e.preventDefault(); } return; }
+      const it = lineAt(e);
+      if (it) { e.stopImmediatePropagation(); e.preventDefault(); selId = it.id; selStart(e, it, { kind: 'line' }); rebuild(); return; }
+      if (sel) selectNone();   // a press elsewhere is done; it goes on to the view
+    }
     const using = e.button === 0 ? toolFor(e) : null;
     if (!using) return;
     if (current) { e.stopImmediatePropagation(); e.preventDefault(); return; }   // a second finger mid-stroke: neither draws nor orbits
@@ -543,8 +693,11 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     // an arrow's head, or a pen anchor, goes exactly on the corner, centre or edge the hover lit up (⌥: anywhere)
     const s = !locked && (using === 'arrow' || using === 'path') && snap?.snapAt(e);
     if (s) p = s.toArray();
+    // a flat path (drawn square to a view) takes its next anchors anywhere on its plane, on the model or not
+    const flatNext = using === 'path' && draft?.plane && !s && !locked ? flatAt(e, draft) : null;
+    if (flatNext) p = flatNext;
     // a mark lives on the model: pressed on nothing, the press is the view's (orbit), and no mark is made
-    if (!p || (!hitBody && !hitPlane && !s && !locked)) return;
+    if (!p || (!hitBody && !hitPlane && !s && !locked && !flatNext)) return;
     e.stopImmediatePropagation(); e.preventDefault();
     snap?.clearSnap();
     const body = hitBody ? { body: keyOf(hitBody) } : {};
@@ -563,7 +716,11 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     }
     canvas.setPointerCapture(e.pointerId);
     last = { x: e.clientX, y: e.clientY, id: e.pointerId };
-    if (using === 'pen') { current = { id: uid(), kind: 'pen', ...body, ...pen }; current.points = [toRest(current, p)]; }
+    if (using === 'pen') {
+      current = { id: uid(), kind: 'pen', ...body, ...pen }; current.points = [toRest(current, p)];
+      const sq = squareAxis();
+      if (sq) current.plane = { o: current.points[0], n: sq.toArray() };   // square to a view: the stroke is flat
+    }
     else if (using === 'arrow') { current = { id: uid(), kind: 'arrow', ...body, ...pen, ...faceFrame(e) }; const q = toRest(current, p); current.points = [q, q]; }
     else if (using === 'note') { startNote(p, e, null, body.body); }   // startNote reads pen for its colour
     rebuild();
@@ -617,17 +774,28 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       return;
     }
     if (handle && e.pointerId === handle.id) { e.stopImmediatePropagation(); penMove(e); return; }
+    if (selDrag && e.pointerId === selDrag.id) { e.stopImmediatePropagation(); selMove(e); return; }
     if (editId && !imgDrag && !e.buttons) { const ed = editing(); if (ed) canvas.style.cursor = cursorFor(zoneAt(e, ed), e); }
+    else if (!tool && !current && !e.buttons && e.pointerType !== 'touch') {   // no tool: show what a click would pick
+      const sel = selected(), z = sel && selZone(e, sel);
+      const c = z ? (z.kind === 'line' ? 'move' : 'pointer') : lineAt(e) ? 'pointer' : null;
+      if (c) { canvas.style.cursor = c; lineCursor = true; }
+      else if (lineCursor) { canvas.style.cursor = ''; lineCursor = false; }   // only undo our own cursor, not the view's
+    }
     if (!current) {   // ARROW, PEN: light up the point or edge it would land on (not while the view is dragged)
       if ((tool === 'arrow' || tool === 'path') && !e.buttons && e.pointerType !== 'touch') { const lit = snap?.showSnap(e); canvas.style.cursor = lit ? 'cell' : 'crosshair'; }
-      if (draft && tool === 'path' && !e.buttons) { hoverP = penPoint(e) ?? snap?.snapAt(e)?.toArray() ?? pointAt(e); rebuild(); }
+      if (draft && tool === 'path' && !e.buttons) {
+        const lockedP = penPoint(e), snapP = !lockedP && snap?.snapAt(e)?.toArray();
+        hoverP = lockedP ?? (snapP ? flatten(draft, snapP) : null) ?? (draft.plane ? flatAt(e, draft) : pointAt(e));
+        rebuild();
+      }
       return;
     }
     if (!mine(e)) return;
     e.stopImmediatePropagation();
     if (current.kind === 'pen') {
       if (Math.hypot(e.clientX - last.x, e.clientY - last.y) < 3) return;
-      const p = pointAt(e); if (!p) return;
+      const p = current.plane ? flatAt(e, current) : pointAt(e); if (!p) return;
       current.points.push(toRest(current, p)); last.x = e.clientX; last.y = e.clientY;   // keep last.id: it is how the stroke knows its pointer
     } else if (current.kind === 'image') {
       // the drag's reach from the centre is half the picture's width
@@ -657,6 +825,14 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   canvas.addEventListener('pointerup', (e) => {
     if (imgDrag && e.pointerId === imgDrag.id) { e.stopImmediatePropagation(); imgDrag = null; changed(); rebuild(); return; }   // projected again, where it now is
     if (handle && e.pointerId === handle.id) { e.stopImmediatePropagation(); handle = null; rebuild(); return; }
+    if (selDrag && e.pointerId === selDrag.id) {
+      e.stopImmediatePropagation();
+      const it = selected(), o = selDrag.orig;
+      selDrag = null;
+      if (it && JSON.stringify(it.points) !== JSON.stringify(o.points)) changed();   // a click that only selects saves nothing
+      rebuild();
+      return;
+    }
     if (!mine(e)) return;
     e.stopImmediatePropagation();
     if (!current) return;
@@ -745,6 +921,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
 
   function setTool(name) {
     finishDraft();   // leaving (or re-picking) the pen ends its path, open
+    selectNone();
     tool = tool === name ? null : name;
     for (const b of document.querySelectorAll('[data-tool]')) b.classList.toggle('on', b.dataset.tool === tool);   // ADD AN IMAGE sits by the planes, not in the markup bar
     canvas.style.cursor = tool ? 'crosshair' : '';
@@ -760,6 +937,9 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   }
   setPen({});
   tools.addEventListener('click', (e) => {
+    // a clicked tool button gives up focus: the keys that follow (Esc, Enter, ⌫) are the pen's, not a
+    // second press of the button, and no focus ring is left round it
+    e.target.closest('button')?.blur();
     const b = e.target.closest('[data-tool]');
     if (b) { setTool(b.dataset.tool); return; }
     const c = e.target.closest('[data-color]'); if (c) { setPen({ color: c.dataset.color }); return; }
