@@ -455,7 +455,11 @@ function hoverBody(m) {
   for (const r of $('#bodies').querySelectorAll('.hover')) r.classList.remove('hover');
   let row = m && bodyBoxes().find((cb) => cb._body === m)?.closest('label');
   while (row && !row.offsetParent) row = row.parentElement.closest('.group')?.querySelector(':scope > .group-row');
-  if (row) { row.classList.add('hover'); row.scrollIntoView({ block: 'nearest' }); }
+  if (!row) return;
+  row.classList.add('hover');
+  // out of sight: bring it to the top of the list, not the bottom edge where it's easy to miss
+  const box = $('#bodies'), r = row.getBoundingClientRect(), b = box.getBoundingClientRect();
+  if (r.top < b.top || r.bottom > b.bottom) box.scrollTop += r.top - b.top - 4;
 }
 function highlightBody(m) {
   for (const o of hoverOverlay) { o.parent?.remove(o); o.material.dispose(); }
