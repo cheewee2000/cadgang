@@ -1227,9 +1227,10 @@ function startPickJoint() {   // in either mode: an exploded assembly stays expl
   hideMenu();
   pickJoint = {};
   renderer.domElement.classList.add('picking');
+  $('#newJointBtn').classList.add('on');
   say('new joint: click a face on the part that moves · Esc cancels');
 }
-function endPickJoint() { pickJoint = null; axisArrow.visible = false; renderer.domElement.classList.remove('picking'); }
+function endPickJoint() { pickJoint = null; axisArrow.visible = false; renderer.domElement.classList.remove('picking'); $('#newJointBtn').classList.remove('on'); }
 // The face under the pointer and the axis it gives, its origin moved onto the snap near the pointer, as
 // Fusion's joint origins: a circle's centre (its axis is the circle's: a hole picked by its rim), an edge's
 // end or middle. A round face keeps its axis and slides along it to the snap; a ball keeps its centre.
@@ -1370,7 +1371,7 @@ function setMode(mode) {
   say(mode === 'joint' ? 'joint mode: drag a jointed part to move it · ⌘-drag sets its offset · New joint (J) joins two parts' : 'explode mode: drag a part to slide it out · right-click a part for its explode axis');
 }
 for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('click', () => setMode(b.dataset.mode));
-$('#newJointBtn').addEventListener('click', () => startPickJoint());
+$('#newJointBtn').addEventListener('click', () => (pickJoint ? endPickJoint() : startPickJoint()));   // on while picking; a second click backs out
 document.documentElement.dataset.mode = ui.mode;
 
 // The panel: one row per joint, a slider to drive it, its parent and limits; how to make and move them under.
