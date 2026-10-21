@@ -2389,6 +2389,10 @@ const CMDS = [
   { sep: true },
   { key: 'n', label: 'New joint', btn: '#newJointBtn', run: () => startPickJoint() },
   { key: 'j', label: 'Joint / explode mode', btn: '[data-mode="joint"]', run: () => setMode(ui.mode === 'joint' ? 'explode' : 'joint'), on: () => ui.mode === 'joint' },
+  { key: 'v', label: 'Explode direction of the part under the mouse (or the one selected)', run: () => {
+    const m = hovered ?? (selected.size === 1 ? [...selected][0] : null);
+    if (m?.isMesh) startPickAxis(m); else say('point at a part, or select one, then press V');
+  } },
   { key: '0', label: 'Explode all / none', btn: '#explode', run: () => setExplode(+$('#explode').value ? 0 : 100), on: () => +$('#explode').value > 0 },
   { key: '=', label: 'Explode more', run: () => setExplode(+$('#explode').value + 10) },
   { key: '-', label: 'Explode less', run: () => setExplode(+$('#explode').value - 10) },
@@ -2488,7 +2492,7 @@ function partCmds(m) {
     ...(window.cadgangServerless ? [] : [{ label: selected.has(m) && selected.size > 1 ? `Send ${selected.size} selected to Bambu Studio` : 'Send to Bambu Studio', run: () => sendToSlicer(selected.has(m) ? [...selected] : [m]) }]),
     ...(ui.mode === 'joint' ? jointCmds(m) : [
     { label: `Explode auto${auto}`, run: () => set(undefined), on: () => !m.userData.axis },
-    { label: 'Explode direction: pick a face…', run: () => startPickAxis(m), on: () => !!m.userData.axis },
+    { key: 'v', label: 'Explode direction: pick a face…', run: () => startPickAxis(m), on: () => !!m.userData.axis },
     { label: 'New joint…', run: startPickJoint },
     { sep: true },
     ]),
