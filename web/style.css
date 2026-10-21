@@ -250,9 +250,8 @@ select.ghost:hover { opacity: 0.55; }
 .bodies-grip:hover, .bodies-grip:active { background: var(--rule); }
 .bodies.min .bodies-grip { display: none; }
 .bodies label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.bodies label > .body-name, .bodies label.group-row > span:not(.fold-gap):not(.mat-tag) { flex: 0 1 auto; min-width: 4em; overflow: visible; white-space: normal; overflow-wrap: anywhere; }   /* a part's whole name: a long one goes on to a second line, lined up with the first; it never pushes the columns */
-.bodies label { align-items: flex-start; }
-.bodies label > input, .bodies label > .fold, .bodies label > .fold-gap, .bodies label > .see, .bodies label > .body-edit { margin-top: 2px; }
+.bodies label > .body-name, .bodies label.group-row > span:not(.fold-gap):not(.mat-tag) { flex: 0 1 auto; min-width: 2.5em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }   /* one line: a long name ends in …, its tip has it whole */
+.bodies label { align-items: center; }
 .bodies .mat-tag select.fin-word { font: inherit; font-size: 10px; color: var(--ink-faint); border: 0; background: none; padding: 0; height: auto; cursor: pointer; appearance: none; -webkit-appearance: none; text-decoration: underline dotted; text-underline-offset: 2px; }
 .bodies .mat-tag button.swatch-pick { width: 11px; height: 11px; min-width: 0; padding: 0; border: var(--bw-hair) solid var(--rule); cursor: pointer; flex: none; }
 .bodies .group-body { display: flex; flex-direction: column; gap: 2px; padding-left: 12px; }
@@ -347,9 +346,14 @@ footer > * { white-space: nowrap; }
 .color-other-input { position: absolute; width: 0; height: 0; opacity: 0; border: 0; padding: 0; pointer-events: none; }
 .selbar .sel-swatch { width: 40px; min-width: 0; padding: 0; border: var(--bw-hair) solid var(--rule); }
 /* material · finish · colour in columns: each a fixed width, the tag at the row's right, so every row lines up */
-.bodies .mat-tag select.mat-word { width: 9em; text-overflow: ellipsis; }
-.bodies .mat-tag select.fin-word { width: 5em; }
-.bodies .mat-tag .col { width: 5.5em; overflow: hidden; text-overflow: ellipsis; }
+.bodies .mat-tag select.mat-word { width: var(--mat-w, auto); }
+.bodies .mat-tag .fin-word, .bodies .mat-tag .fin { width: var(--fin-w, auto); flex: none; white-space: nowrap; }
+.bodies .mat-tag .col { width: var(--col-w, auto); flex: none; white-space: nowrap; overflow: visible; }
+/* the columns never cut their words; the space between them shrinks instead (fitNames sets it) */
+.bodies .mat-tag, .bodies .mat-tag .bits { gap: var(--col-gap, 12px); }
+.bodies .mat-tag { padding-left: var(--col-gap, 12px); }
+.bodies .mat-tag .bits { min-width: calc(var(--fin-w, 0px) + var(--col-w, 0px) + 11px + 2 * var(--col-gap, 12px)); }   /* a row with no finish keeps the columns' place */
+.bodies .mat-tag .bits > .swatch-pick, .bodies .mat-tag .bits > .swatch { margin-right: calc(4px - var(--col-gap, 12px)); }   /* the swatch sits close to its colour */
 .bodies label:has(.mat-tag) .see { margin-left: 0; }   /* the tag takes the slack, so its columns sit at the right */
 .bodies .mat-tag .col.pick { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }   /* reads as a word; a click opens the colours */
 /* the header's buttons are the HUD's smaller size */
@@ -365,3 +369,35 @@ header { justify-content: flex-start; column-gap: var(--sp-4); }
 .pen-menu[hidden] { display: none; }
 .pen-menu-sep { width: var(--bw-hair); background: var(--rule); margin: 0 var(--sp-1); }
 .joint .jl input { accent-color: var(--ink); margin: 0; flex: none; }
+/* Planes and Add an image: no box round them, so they sit on the same line, at the same height, as Measure and the markup tools on the right */
+.hud .hud-row { gap: var(--sp-3); }
+.hud .hud-row > .sect { border: 0; padding: 0; background: none; gap: var(--sp-1); }
+.hud .hud-row > .sect > button { background: var(--paper); }
+/* The header is one line, always: the file's name gives way (…), and the toolbar never wraps under it. */
+header { flex-wrap: nowrap; column-gap: var(--sp-3); }
+header .brand { flex: 0 1 auto; min-width: 6em; overflow: hidden; }
+header .project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+header .file-tools, header .toolbar > * { flex: none; }
+header .toolbar { flex: none; flex-wrap: nowrap; }   /* never squeezed: Safari would let the slider run under Rotate */
+header .toolbar { gap: var(--sp-2); }
+header .toolbar .sect { gap: var(--sp-1); }
+header .toolbar > button, header .toolbar .sect button, header .toolbar > .share > button, header .toolbar select { padding: 4px 8px; }
+header #explode { width: 100px; }
+/* a window too narrow for the header's words drops them (Mode, Explode, Rotate): the buttons and their tips still say it */
+@media (max-width: 1720px) { header .sect-label { display: none; } }
+/* beside the view cube: the scale reference (a split button, ▾ picks the object) and Fit in a row, both like the other buttons */
+.viewcube-side { pointer-events: auto; display: flex; flex-direction: row; align-items: stretch; gap: var(--sp-1); margin-bottom: 4px; }   /* the scale reference and Fit, side by side, one height */
+.viewcube .viewcube-fit { width: auto; height: auto; padding: 4px 8px; border-radius: 0; margin: 0; background: var(--paper); }
+.scaleref { position: relative; display: flex; }
+.scaleref button { background: var(--paper); font-size: var(--fs-12); padding: 4px 8px; display: flex; align-items: center; }
+.scaleref .scaleref-more { border-left: 0; padding: 4px 5px; }
+.scaleref .scaleref-btn.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.scaleref-menu { position: absolute; right: 0; bottom: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; gap: 2px; min-width: 220px; background: var(--paper); border: var(--bw-hair) solid var(--rule); padding: 4px; }
+.scaleref-menu[hidden] { display: none; }
+.scaleref-menu button { justify-content: space-between; gap: var(--sp-3); text-align: left; width: 100%; }
+.scaleref-menu button.on { border-color: var(--ink); }
+.scaleref-size { color: var(--ink-faint); font-size: 10px; }
+.bodies label > .mat-tag { overflow: visible; min-width: max-content; }   /* never cut: the name gives way */
+/* the view cube centred in the space over the section bar left of its buttons (scale reference, Fit), which sit at the right */
+.hud-br > .viewcube { align-self: stretch; }
+.hud-br > .viewcube > canvas { margin: 0 auto; }
