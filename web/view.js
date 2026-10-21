@@ -783,7 +783,7 @@ function drawJointLinks() {
     const pts = [centre(m), o, ...(p ? [centre(p)] : [])];
     const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat());
     line.computeLineDistances(); line.renderOrder = 6;
-    const len = size * 0.12, arrow = new THREE.ArrowHelper(n, o, len, 0xd11d1d, len * 0.25, len * 0.12);
+    const len = size * 0.06, arrow = new THREE.ArrowHelper(n, o, len, 0xd11d1d, len * 0.25, len * 0.12);
     arrow.line.material.depthTest = arrow.cone.material.depthTest = false; arrow.renderOrder = 6;
     jointLinks.add(line, arrow);
     if (!LIMITED[j.type]) continue;
@@ -793,9 +793,11 @@ function drawJointLinks() {
     track.computeLineDistances(); track.renderOrder = 6;
     jointLinks.add(track);
     for (const which of ['min', 'max']) {
-      const pt = limitPoint(j, f, which === 'min' ? lo : hi);
-      const dot = new THREE.Mesh(new THREE.SphereGeometry(size * 0.012, 12, 8), new THREE.MeshBasicMaterial({ color: 0xd11d1d, depthTest: false, transparent: true, opacity: j[which] == null ? 0.35 : 1 }));
-      dot.position.copy(pt); dot.renderOrder = 7;
+      // a square stop across the motion at each end: across the axis for a travel, across the arc for a turn
+      const at = which === 'min' ? lo : hi, pt = limitPoint(j, f, at);
+      const across = f.d0 ? limitPoint(j, f, at + 0.5).sub(limitPoint(j, f, at - 0.5)).normalize() : f.n;
+      const dot = new THREE.Mesh(new THREE.PlaneGeometry(size * 0.014, size * 0.014), new THREE.MeshBasicMaterial({ color: 0xd11d1d, side: THREE.DoubleSide, depthTest: false, transparent: true, opacity: j[which] == null ? 0.35 : 1 }));
+      dot.position.copy(pt); dot.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), across); dot.renderOrder = 7;
       jointLinks.add(dot);
       limitHandles.push({ j, which, p: pt });
     }

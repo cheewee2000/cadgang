@@ -134,9 +134,11 @@ export const eulerOf = (q) => new THREE.Euler().setFromQuaternion(q, 'XYZ').toAr
 
 /**
  * A copy of `geo` pulled in by `tol`: each corner (welded by position, so a flat-shaded mesh's split edges move
- * together) goes `tol` along the inward average of the faces it touches. A face moves in by tol·cos of its angle
- * to that average (a box's corner: tol/√3). Never further than `tol`: amplifying it to clear every face sent the
- * corners of sharp edges sideways, out through the part (v0.14.104); where the faces cancel (a knife edge) it stays.
+ * together) moves in until it is at least `tol` behind every face it touches (a box's corner goes in along all
+ * three), found by projecting onto each face's constraint in turn. So every face moves in its full `tol`, edges
+ * included: two faces sliding flush read as clear right up to their edges (v0.14.105 moved a corner only tol along
+ * the faces' average, so a face near its edge went in a fraction of it). A knife edge, which no move of 3·tol
+ * clears, goes 3·tol and stops; the move is never outward of any face it touches.
  */
 function insetGeometry(geo, tol) {
   const src = geo.getAttribute('position'), g = new THREE.BufferGeometry().setAttribute('position', src.clone());
@@ -159,7 +161,14 @@ function insetGeometry(geo, tol) {
   const d = normals.map((list) => {
     if (!list.length) return new THREE.Vector3();
     const m = list.reduce((s, v) => s.add(v), new THREE.Vector3());
-    return m.length() < 0.3 ? m.set(0, 0, 0) : m.normalize().multiplyScalar(tol);
+    const v = m.length() < 1e-6 ? m.set(0, 0, 0) : m.normalize().multiplyScalar(tol);
+    for (let it = 0; it < 16; it++) {
+      let ok = true;
+      for (const nrm of list) { const short = tol - nrm.dot(v); if (short > tol * 1e-3) { v.addScaledVector(nrm, short); ok = false; } }
+      if (ok) break;
+    }
+    if (list.some((nrm) => nrm.dot(v) < 0)) return m.multiplyScalar(tol);   // did not settle: the plain average, never outward
+    return v.length() > 3 * tol ? v.setLength(3 * tol) : v;
   });
   for (let i = 0; i < p.count; i++) { const v = d[id[i]]; p.setXYZ(i, p.getX(i) - v.x, p.getY(i) - v.y, p.getZ(i) - v.z); }
   return g;
@@ -181,10 +190,11 @@ export function sweepJoints(meshes, joints, { steps = 36, gap = 0, tol = 0, only
   const bvh = new Map();
   for (const [k, m] of meshes) {
     m.geometry.computeBoundingBox();
-    // every body keeps a BVH on its own geometry: the still side of a test is walked through it. Without one,
-    // three-mesh-bvh 0.8.3's raw-geometry path read a crash at every step (v0.14.104)
+    // the still side's own BVH, and the moving side's (pulled in by tol). Tested pair by pair with bvhcast:
+    // three-mesh-bvh 0.8.3's intersectsGeometry read crashes no triangle pair has (with no BVH on the other side,
+    // at every step; with one, on faces sliding flush), and bvhcast agrees with testing every triangle by hand.
     m.geometry.boundsTree = new MeshBVH(m.geometry, { indirect: true });
-    bvh.set(k, tol > 0 ? new MeshBVH(insetGeometry(m.geometry, tol), { indirect: true }) : m.geometry.boundsTree);
+    bvh.set(k, { still: m.geometry.boundsTree, moving: tol > 0 ? new MeshBVH(insetGeometry(m.geometry, tol), { indirect: true }) : m.geometry.boundsTree });
   }
   const boxAt = (k, M) => meshes.get(k).geometry.boundingBox.clone().applyMatrix4(M).expandByScalar(gap / 2);
   const out = [];
@@ -205,7 +215,8 @@ export function sweepJoints(meshes, joints, { steps = 36, gap = 0, tol = 0, only
         const A = at(P, a), B = at(P, b);
         if (!boxAt(a, A).intersectsBox(boxAt(b, B))) continue;
         const BtoA = A.clone().invert().multiply(B), g = meshes.get(b).geometry;
-        const touch = bvh.get(a).intersectsGeometry(g, BtoA) || (gap > 0 && bvh.get(a).closestPointToGeometry(g, BtoA, {}, {}, 0, gap));
+        const touch = bvh.get(a).moving.bvhcast(bvh.get(b).still, BtoA, { intersectsTriangles: (t1, t2) => t1.intersectsTriangle(t2) })
+          || (gap > 0 && bvh.get(a).moving.closestPointToGeometry(g, BtoA, {}, {}, 0, gap));
         if (touch) hits.set(b, [...new Set([...(hits.get(b) ?? []), i])]);
       }
     });
