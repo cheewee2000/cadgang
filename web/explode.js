@@ -88,7 +88,9 @@ export function explodeOffsets(bodies, centre, hints = new Map()) {
   // A BVH per body (indirect: the index, and so the B-rep face ranges, stay as they are). Without one every ray
   // walked every triangle: a 200k-triangle STL opened with a 90-part STEP took over three minutes.
   // Built fresh each solve: a turn of the model rewrites the geometry, and a kept tree would answer for the old pose.
-  for (const m of bodies) m.geometry.boundsTree = new MeshBVH(m.geometry, { indirect: true });
+  // (The viewer keeps one per body for its own rays and drops it on a turn, so one that is there is current.)
+  const made = bodies.filter((m) => !m.geometry.boundsTree);
+  for (const m of made) m.geometry.boundsTree = new MeshBVH(m.geometry, { indirect: true });
   const probe = bodies.map((m) => Object.assign(new THREE.Mesh(m.geometry), { raycast: acceleratedRaycast }));
   const extOf = (half, v) => Math.abs(v.x) * half.x + Math.abs(v.y) * half.y + Math.abs(v.z) * half.z;   // half-extent along unit v
   // Probe body i's travel along d: a ray from each of its sampled surface points, front faces only, the
@@ -363,5 +365,5 @@ export function explodeOffsets(bodies, centre, hints = new Map()) {
   };
   for (const P of plan) P.stage = Math.min(depth(P.i), 5);
   for (const P of plan) { P.m.userData.offset = P.offset; P.m.userData.parent = P.parent; P.m.userData.stage = P.stage; }
-  for (const m of bodies) delete m.geometry.boundsTree;
+  for (const m of made) delete m.geometry.boundsTree;   // the viewer's own trees stay
 }

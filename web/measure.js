@@ -109,7 +109,7 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     return out;
   }
   function build() {
-    features = []; snaps = []; dirty = false;
+    features = []; snaps = []; dirty = false; scr = null;
     const box = new THREE.Box3().setFromObject(model);
     const scale = box.isEmpty() ? 1 : box.getSize(new THREE.Vector3()).length();
     scaleHint = scale;
@@ -215,29 +215,79 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     return !hit || hit.distance >= raycaster.ray.origin.distanceTo(p) - scaleHint * 1e-3;
   }
   let scaleHint = 1;
-  /** The nearest visible snap (end, mid, centre, quad) within SNAP_PX of the pointer: { kind, p, f }, or null. */
-  function snapAt(e) {
+
+  // Screen index: every snap and edge point projected once per view into flat arrays, and bucketed
+  // in a CELL-pixel grid, so a pointer move looks only at the cells around it. (Projecting each of a
+  // board's ~340k edge points on every move took ~200 ms a move.) Rebuilt when the view, the canvas
+  // or the model changes; hovering never changes the view, so a move costs microseconds.
+  const CELL = 24;
+  let scr = null;
+  function screenIndex() {
+    const cam = getCamera(), r = canvas.getBoundingClientRect();
+    cam.updateMatrixWorld();
+    const key = `${cam.matrixWorld.elements.join()}|${cam.projectionMatrix.elements.join()}|${r.width}x${r.height}|${features.length}`;
+    if (scr?.key === key) return scr;
+    const M = new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse).elements;
+    const W = r.width, H = r.height, cols = Math.ceil(W / CELL) + 1, rows = Math.ceil(H / CELL) + 1;
+    // screen x, y of a world point, or NaN when behind the eye or past the far plane
+    const proj = (p, out, o) => {
+      const w = M[3] * p.x + M[7] * p.y + M[11] * p.z + M[15];
+      const z = (M[2] * p.x + M[6] * p.y + M[10] * p.z + M[14]) / w;
+      if (w <= 0 || z > 1) { out[o] = out[o + 1] = NaN; return; }
+      out[o] = ((M[0] * p.x + M[4] * p.y + M[8] * p.z + M[12]) / w + 1) / 2 * W;
+      out[o + 1] = (1 - (M[1] * p.x + M[5] * p.y + M[9] * p.z + M[13]) / w) / 2 * H;
+    };
+    const grid = new Map();   // cell → [kind, index…]: 0 snap i, 1 segment (feature f, point k)
+    const put = (cx, cy, ...v) => { if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return; const c = cy * cols + cx; let a = grid.get(c); if (!a) grid.set(c, a = []); a.push(...v); };
+    const sp = new Float32Array(snaps.length * 2);
+    snaps.forEach((s, i) => { proj(s.p, sp, 2 * i); if (sp[2 * i] === sp[2 * i]) put(Math.floor(sp[2 * i] / CELL), Math.floor(sp[2 * i + 1] / CELL), 0, i); });
+    const fp = features.map((f) => { const a = new Float32Array(f.pts.length * 2); f.pts.forEach((p, k) => proj(p, a, 2 * k)); return a; });
+    fp.forEach((a, fi) => {
+      for (let k = 0; k + 1 < a.length / 2; k++) {
+        const x0 = a[2 * k], y0 = a[2 * k + 1], x1 = a[2 * k + 2], y1 = a[2 * k + 3];
+        if (x0 !== x0 || x1 !== x1) continue;
+        const c0 = Math.max(0, Math.floor(Math.min(x0, x1) / CELL)), c1 = Math.min(cols - 1, Math.floor(Math.max(x0, x1) / CELL));
+        const r0 = Math.max(0, Math.floor(Math.min(y0, y1) / CELL)), r1 = Math.min(rows - 1, Math.floor(Math.max(y0, y1) / CELL));
+        if ((c1 - c0 + 1) * (r1 - r0 + 1) > 4096) continue;   // a segment across the whole screen: too close to the eye to pick
+        for (let cy = r0; cy <= r1; cy++) for (let cx = c0; cx <= c1; cx++) put(cx, cy, 1, fi, k);
+      }
+    });
+    return (scr = { key, sp, fp, grid, cols });
+  }
+  /** What is in the grid cells around a screen point: snap indices and [feature, point] segments. */
+  function nearby(m) {
+    const { grid, cols } = screenIndex(), cx = Math.floor(m.x / CELL), cy = Math.floor(m.y / CELL), snapIds = new Set(), segs = new Map();
+    for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) {
+      if (x < 0 || y < 0 || x >= cols) continue;
+      const a = grid.get(y * cols + x);
+      if (!a) continue;
+      for (let i = 0; i < a.length;) { if (a[i] === 0) { snapIds.add(a[i + 1]); i += 2; } else { segs.set(`${a[i + 1]}:${a[i + 2]}`, [a[i + 1], a[i + 2]]); i += 3; } }
+    }
+    return { snapIds, segs: [...segs.values()] };
+  }
+  /** The nearest visible snap (end, mid, centre, quad) within SNAP_PX of the pointer: { kind, p, f }, or null
+   *  (a joint's origin lands on it). */
+  function pointSnapAt(e) {
     if (dirty) build();
-    const m = local(e);
+    const m = local(e), { sp } = screenIndex(), { snapIds } = nearby(m);
     const near = [];
-    for (const s of snaps) { const q = toScreen(s.p); if (q.z > 1) continue; const d = Math.hypot(q.x - m.x, q.y - m.y); if (d < SNAP_PX) near.push([d, s]); }
+    for (const i of snapIds) { const d = Math.hypot(sp[2 * i] - m.x, sp[2 * i + 1] - m.y); if (d < SNAP_PX) near.push([d, snaps[i]]); }
     for (const [, s] of near.sort((a, b) => a[0] - b[0]).slice(0, 6)) if (unoccluded(s.p)) return s;
     return null;
   }
   function pick(e) {
-    const s = snapAt(e);
-    if (s) return { snap: s, f: s.f, p: s.p };
+    if (dirty) build();
     const m = local(e);
-    const curves = [];
-    for (const f of features) {
-      let bd = CURVE_PX;
-      for (let k = 0; k + 1 < f.pts.length; k++) {
-        const a = toScreen(f.pts[k]), b = toScreen(f.pts[k + 1]);
-        if (a.z > 1 || b.z > 1) continue;
-        bd = Math.min(bd, segDist(m, a, b));
-      }
-      if (bd < CURVE_PX) curves.push([bd, f]);
+    const { sp, fp } = screenIndex(), { snapIds, segs } = nearby(m);
+    const near = [];
+    for (const i of snapIds) { const d = Math.hypot(sp[2 * i] - m.x, sp[2 * i + 1] - m.y); if (d < SNAP_PX) near.push([d, snaps[i]]); }
+    for (const [, s] of near.sort((a, b) => a[0] - b[0]).slice(0, 6)) if (unoccluded(s.p)) return { snap: s, f: s.f, p: s.p };
+    const best = new Map();   // feature → its closest segment's distance
+    for (const [fi, k] of segs) {
+      const a = fp[fi], d = segDist(m, { x: a[2 * k], y: a[2 * k + 1] }, { x: a[2 * k + 2], y: a[2 * k + 3] });
+      if (d < CURVE_PX && d < (best.get(fi) ?? Infinity)) best.set(fi, d);
     }
+    const curves = [...best].map(([fi, d]) => [d, features[fi]]);
     for (const [, f] of curves.sort((a, b) => a[0] - b[0]).slice(0, 6)) { const p = nearestOn(f, e); if (unoccluded(p)) return { f, p }; }
     // a face, or any surface
     const r = canvas.getBoundingClientRect();
@@ -287,6 +337,22 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
       if (r) { polyline([r.a, r.b], hl); say(`${fmt(r.a.distanceTo(r.b))}  ${deltas(r.a, r.b)}`); }
     }
     canvas.style.cursor = hover ? 'crosshair' : 'not-allowed';
+  }
+  // Snapping for other tools (the markup arrow): the same points and edges, without measuring.
+  // snapAt: the corner/midpoint/centre, or the point on the edge, under the pointer (null: none,
+  // so the caller uses the surface); showSnap lights it up as measure's hover does, faces left out.
+  function snapAt(e) {
+    if (e.altKey) return null;   // ⌥: free, as in measure
+    const h = pick(e);
+    return h?.snap || h?.f ? h : null;
+  }
+  function showSnap(e) {
+    clearHl();
+    const h = e && snapAt(e);
+    if (h?.f) polyline(h.f.closed ? [...h.f.pts, h.f.pts[0]] : h.f.pts, hl);
+    if (h?.snap) marker(h.snap.p, hl, 0.005);
+    else if (h?.f) marker(h.p, hl, 0.0035);   // where on the edge it lands
+    return h;
   }
   const entity = (h, e) => (h.face && !h.snap && !h.f && !e.altKey ? { face: faceData(h.face), raw: h.face } : { p: h.p.clone() });
 
@@ -455,7 +521,9 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     get on() { return on; },
     setOn(v) { on = v; pending = null; clearHl(); clearSel(); canvas.style.cursor = v ? 'crosshair' : ''; if (v) dirty = true; },
     invalidate() { dirty = true; faceCache.clear(); },
-    hover: onHover, click: onClick, projectLabels, snapAt,
+    hover: onHover, click: onClick, projectLabels,
+    snapAt: (e) => snapAt(e)?.p.clone() ?? null, showSnap: (e) => !!showSnap(e), clearSnap: () => { if (!on) clearHl(); },
+    pointSnapAt,
     cancel() { const had = !!pending; pending = null; clearSel(); return had; },
     get dims() { return dims; },
     get features() { if (dirty) build(); return features; },   // for headless drives

@@ -6,30 +6,31 @@
  */
 
 // color: sRGB hex. metal 0/1, rough 0..1, trans 0/1 (clear: refracts), ior for the clear ones.
+// density: g/cm³, for the weight estimate (plastic as PLA/ABS, tin plate as the steel under it, PCB as FR-4)
 export const MATERIALS = {
-  plastic: { label: 'Plastic', color: 0xe8e4dc, metal: 0, rough: 0.7 },
-  gloss: { label: 'Gloss plastic', color: 0xe8e4dc, metal: 0, rough: 0.18 },
-  gloss_black: { label: 'Black gloss', color: 0x0b0b0d, metal: 0, rough: 0.05 },   // a screen off, piano black
-  powder_white: { label: 'Powder coat, white', color: 0xf0f0ec, metal: 0, rough: 0.55 },
-  aluminum: { label: 'Aluminum', color: 0xd2d4d7, metal: 1, rough: 0.32 },
-  black_al: { label: 'Black anodized', color: 0x2b2b2e, metal: 1, rough: 0.38 },
-  anodized: { label: 'Anodized (file colour)', color: 0xd2d4d7, metal: 1, rough: 0.38, fileColor: true },
-  steel: { label: 'Steel', color: 0xc6c7c8, metal: 1, rough: 0.22 },
-  tin: { label: 'Tin plate', color: 0xc9cbcd, metal: 1, rough: 0.35 },
-  gold: { label: 'Gold plate', color: 0xe8c36a, metal: 1, rough: 0.2 },
-  nickel: { label: 'Nickel', color: 0xd3cdc4, metal: 1, rough: 0.14 },
-  brass: { label: 'Brass', color: 0xdcb46a, metal: 1, rough: 0.25 },
-  copper: { label: 'Copper', color: 0xe3a17c, metal: 1, rough: 0.28 },
-  glass: { label: 'Glass', color: 0xffffff, metal: 0, rough: 0, trans: 1, ior: 1.52 },
-  acrylic: { label: 'Acrylic', color: 0xf7fbff, metal: 0, rough: 0.02, trans: 1, ior: 1.49 },
-  rubber: { label: 'Rubber', color: 0x2a2a2a, metal: 0, rough: 0.95 },
-  wood: { label: 'Wood', color: 0xb98a5a, metal: 0, rough: 0.75 },
-  pcb: { label: 'PCB green', color: 0x1f5a2e, metal: 0, rough: 0.45 },
-  pcb_black: { label: 'PCB black', color: 0x141516, metal: 0, rough: 0.4 },
-  pcb_white: { label: 'PCB white', color: 0xf1f1ec, metal: 0, rough: 0.45 },
-  pcb_blue: { label: 'PCB blue', color: 0x1c3f8c, metal: 0, rough: 0.45 },
-  ceramic: { label: 'Ceramic', color: 0xd9cfb4, metal: 0, rough: 0.55, fileColor: true },
-  epoxy: { label: 'Epoxy (IC body)', color: 0x1c1c1e, metal: 0, rough: 0.6, fileColor: true },
+  plastic: { label: 'Plastic', density: 1.2, color: 0xe8e4dc, metal: 0, rough: 0.7 },
+  gloss: { label: 'Gloss plastic', density: 1.2, color: 0xe8e4dc, metal: 0, rough: 0.18 },
+  gloss_black: { label: 'Black gloss', density: 1.2, color: 0x0b0b0d, metal: 0, rough: 0.05 },   // a screen off, piano black
+  powder_white: { label: 'Powder coat, white', density: 2.7, color: 0xf0f0ec, metal: 0, rough: 0.55 },
+  aluminum: { label: 'Aluminum', density: 2.7, color: 0xd2d4d7, metal: 1, rough: 0.32 },
+  black_al: { label: 'Black anodized', density: 2.7, color: 0x2b2b2e, metal: 1, rough: 0.38 },
+  anodized: { label: 'Anodized (file colour)', density: 2.7, color: 0xd2d4d7, metal: 1, rough: 0.38, fileColor: true },
+  steel: { label: 'Steel', density: 7.85, color: 0xc6c7c8, metal: 1, rough: 0.22 },
+  tin: { label: 'Tin plate', density: 7.85, color: 0xc9cbcd, metal: 1, rough: 0.35 },
+  gold: { label: 'Gold plate', density: 8.9, color: 0xe8c36a, metal: 1, rough: 0.2 },
+  nickel: { label: 'Nickel', density: 8.9, color: 0xd3cdc4, metal: 1, rough: 0.14 },
+  brass: { label: 'Brass', density: 8.5, color: 0xdcb46a, metal: 1, rough: 0.25 },
+  copper: { label: 'Copper', density: 8.96, color: 0xe3a17c, metal: 1, rough: 0.28 },
+  glass: { label: 'Glass', density: 2.5, color: 0xffffff, metal: 0, rough: 0, trans: 1, ior: 1.52 },
+  acrylic: { label: 'Acrylic', density: 1.18, color: 0xf7fbff, metal: 0, rough: 0.02, trans: 1, ior: 1.49 },
+  rubber: { label: 'Rubber', density: 1.2, color: 0x2a2a2a, metal: 0, rough: 0.95 },
+  wood: { label: 'Wood', density: 0.6, color: 0xb98a5a, metal: 0, rough: 0.75 },
+  pcb: { label: 'PCB green', density: 1.85, color: 0x1f5a2e, metal: 0, rough: 0.45 },
+  pcb_black: { label: 'PCB black', density: 1.85, color: 0x141516, metal: 0, rough: 0.4 },
+  pcb_white: { label: 'PCB white', density: 1.85, color: 0xf1f1ec, metal: 0, rough: 0.45 },
+  pcb_blue: { label: 'PCB blue', density: 1.85, color: 0x1c3f8c, metal: 0, rough: 0.45 },
+  ceramic: { label: 'Ceramic', density: 3.9, color: 0xd9cfb4, metal: 0, rough: 0.55, fileColor: true },
+  epoxy: { label: 'Epoxy (IC body)', density: 1.9, color: 0x1c1c1e, metal: 0, rough: 0.6, fileColor: true },
 };
 
 // First match wins: material words beat part words ("clear anodized" is aluminium, a screw
@@ -66,15 +67,19 @@ const GUESS = [
 // The body's own name decides first; its groups only fill in, and a group named "PCB" holds the
 // parts on the board, not more board.
 const guess = (text, skip) => GUESS.find(([re, k]) => k !== skip && re.test(text))?.[1];
-export const guessMaterial = (name, path = []) => guess(name) ?? guess(path.join(' '), 'pcb') ?? 'plastic';
+// The file's own material name ("Steel - Satin", a STEP's fill style) says it outright, before any name.
+export const guessMaterial = (name, path = [], material = '') => (material ? guess(material) : undefined) ?? guess(name) ?? guess(path.join(' '), 'pcb') ?? 'plastic';
 
 const KEY = 'cadgang-materials';
 let picks = {};
 try { picks = JSON.parse(localStorage.getItem(KEY)) || {}; } catch {}
+/** The user's pick for a body in this file, or undefined (then materialOf is a guess). */
+export const pickedMaterial = (m) => picks[m.userData.file]?.[m.userData.name];
 /** The material key for a body: the user's pick for it in this file, else the guess. */
-export const materialOf = (m) => picks[m.userData.file]?.[m.userData.name] ?? guessMaterial(m.userData.name, m.userData.path);
+export const materialOf = (m) => picks[m.userData.file]?.[m.userData.name] ?? guessMaterial(m.userData.name, m.userData.path, m.userData.material);
 export function pickMaterial(m, key) {
-  (picks[m.userData.file] ??= {})[m.userData.name] = key;
+  if (key) (picks[m.userData.file] ??= {})[m.userData.name] = key;
+  else delete picks[m.userData.file]?.[m.userData.name];   // back to the guess
   try { localStorage.setItem(KEY, JSON.stringify(picks)); } catch {}
 }
 

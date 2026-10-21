@@ -35,6 +35,14 @@ body { display: flex; flex-direction: column; }
 /* RENDER in the Mac app: the native render view sits under the page; the viewport lets it through. */
 :root.native-render, :root.native-render body { background: transparent; }
 .share { position: relative; }
+.recent { position: relative; }
+.recent .share-menu { left: 0; right: auto; min-width: 260px; max-width: 480px; max-height: 70vh; overflow-y: auto; }
+.recent-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-transform: none; }
+.recent-item span { font-size: var(--fs-12); color: var(--ink); }
+.recent-item small { font-size: 10px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.recent-empty { padding: 6px 8px; font-size: var(--fs-12); color: var(--ink-faint); }
+.recent .share-menu hr { border: 0; border-top: var(--bw-hair) solid var(--rule); margin: 2px 0; width: 100%; }
+.recent-clear { font-size: var(--fs-12); color: var(--ink-faint); }
 .share-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; gap: 2px; background: var(--paper); border: var(--bw-hair) solid var(--rule); padding: 4px; white-space: nowrap; }
 .share-menu[hidden] { display: none; }
 .share-menu button { text-align: left; }
@@ -70,8 +78,8 @@ header {
 .proj-sep { color: var(--ink-faint); font-size: var(--fs-16); }
 .project-name {
   font-weight: 400; font-size: var(--fs-14); color: var(--ink-soft);
-  letter-spacing: var(--ls-label); cursor: pointer; white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis; max-width: 260px;
+  letter-spacing: var(--ls-label); cursor: pointer;
+  overflow-wrap: anywhere;   /* the whole name, always: a long one wraps rather than ends in … */
   transition: opacity var(--dur-fast) var(--ease);
 }
 .project-name:hover { opacity: 0.55; color: var(--ink); }
@@ -82,6 +90,11 @@ header {
   text-transform: uppercase; font-size: var(--fs-12); letter-spacing: var(--ls-label);
 }
 .toolbar .sep { width: 1px; height: 20px; background: var(--rule); }
+/* The header's own row: compact, as the viewport's buttons are, so it fits on one line; on a window too
+   narrow for that, the toolbar wraps to the right under the title, not to the left. */
+header .toolbar { gap: var(--sp-2); margin-left: auto; justify-content: flex-end; }
+header .toolbar > button, header .toolbar > .recent > button, header .toolbar > .share > button, header .toolbar select { padding: 6px 10px; font-size: var(--fs-12); }
+header .toolbar > button.icon, header .toolbar > .share > button.icon { padding: 5px 8px; }
 
 .version { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
 .version .idcode {
@@ -135,6 +148,7 @@ footer {
 .drop-hint { font-size: var(--fs-12); }
 #viewport.dragover { outline: var(--bw-bold) solid var(--ink); outline-offset: -2px; }
 button.ghost.on:not(.swatch) { background: var(--ink); color: var(--paper); border-color: var(--ink); }   /* a tool or toggle that is on reads inverted */
+#orthoBtn.on { border-color: #fff; box-shadow: 0 0 0 1px #fff, 0 0 0 2px var(--ink); }   /* ORTHO on: a white stroke, so the flat view is never mistaken for perspective */
 /* the preset dropdown dresses as a toolbar button */
 select.ghost {
   appearance: none; -webkit-appearance: none; cursor: pointer;
@@ -168,6 +182,7 @@ select.ghost:hover { opacity: 0.55; }
 .progress.guess .track > div { width: 30%; transition: none; animation: progress-slide 1.2s linear infinite; }
 @keyframes progress-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 .markup-tools { position: absolute; right: var(--sp-3); top: var(--sp-3); display: flex; gap: var(--sp-1); z-index: 2; }
+#sendBtn { border-color: var(--ink); font-weight: 700; }   /* Ask Claude, beside Share: the one action that hands the view on */
 .markup-tools button { font-size: var(--fs-12); padding: 4px 8px; background: var(--paper); }
 .markup-tools .swatch { width: 22px; padding: 0; background: var(--swatch); }
 .markup-tools .swatch.on { box-shadow: inset 0 0 0 2px var(--paper); border-color: var(--ink); }
@@ -177,6 +192,7 @@ select.ghost:hover { opacity: 0.55; }
 .note-label { position: absolute; left: 0; top: 0; max-width: 220px; box-sizing: border-box; background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--rule); border-left: 3px solid var(--tag, var(--signal-red)); padding: 4px 8px; font: inherit; font-size: var(--fs-12); line-height: 16px; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; box-shadow: 0 1px 6px rgba(0,0,0,.12); will-change: transform; }
 .note-input { pointer-events: auto; width: 180px; outline: none; border-radius: 0; white-space: pre-wrap; resize: none; overflow: hidden; line-height: 16px; box-sizing: border-box; }
 .note-label[hidden] { display: none; }
+.note-label.done { opacity: 0.3; }   /* acted on by Claude: kept as a record, in Infinite Machine green */
 /* body list */
 /* HUD clusters over the viewport: section + bodies top-left, view/render buttons bottom-left */
 .hud { position: absolute; left: var(--sp-3); z-index: 2; display: flex; gap: var(--sp-1); }
@@ -195,17 +211,50 @@ select.ghost:hover { opacity: 0.55; }
 .tabs button { font-size: var(--fs-12); padding: 4px 8px; white-space: nowrap; }
 .bodies label { display: flex; align-items: center; gap: var(--sp-2); cursor: pointer; white-space: nowrap; }
 .bodies input { accent-color: var(--ink); margin: 0; }
-.bodies .mat-pick { display: none; flex: none; width: 10em; font: inherit; font-size: var(--fs-12); height: 20px; padding: 0 18px 0 4px; margin-left: auto; background-position: right 4px center; }
 .bodies label > span { flex: none; }
 .bodies label > span:not(.fold-gap):not(.body-edit) { flex: 0 1 auto; }   /* names give way, ellipsed, so the material picker stays right */
 .bodies label.hover { outline: var(--bw-hair) solid #ff5a1f; outline-offset: 1px; }   /* the body under the mouse, same orange as its overlay */
-:root[data-look="materials"] .bodies .mat-pick { display: block; }
+.bodies .mat-tag { flex: none; margin-left: auto; padding-left: var(--sp-3); padding-top: 1px; display: inline-flex; align-items: center; gap: 4px; color: var(--ink-faint); font-size: 10px; white-space: nowrap; }   /* material · finish · colour */
+.bodies .mat-tag select.mat-word { font: inherit; font-size: 10px; color: var(--ink-soft); border: 0; background: none; padding: 0 2px; height: auto; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; appearance: none; -webkit-appearance: none; }   /* reads as a word; a click lists the materials */
+.bodies .mat-tag select.mat-word.guess { font-style: italic; opacity: 0.7; }   /* the file names none: cadgang's guess */
+.bodies .mat-tag .bits, .bodies .finish-row { display: inline-flex; align-items: center; gap: 4px; }
+.bodies .mat-tag .fin::before, .bodies .mat-tag .swatch::before { content: none; }
+.bodies .swatch { width: 9px; height: 9px; border: var(--bw-hair) solid var(--rule); flex: none; }
+.bodies .finish-rows { display: flex; flex-direction: column; gap: 1px; padding-left: 34px; }
+.bodies .finish-rows[hidden] { display: none; }
+.bodies .finish-row { font-size: 10px; color: var(--ink-faint); white-space: nowrap; }
+.bodies .finish-row .fname { color: var(--ink-soft); max-width: 16em; overflow: hidden; text-overflow: ellipsis; }
 .bodies span:hover { text-decoration: underline; }
+.bodies label.sel > span:not(.fold-gap):not(.mat-tag) { background: var(--ink); color: var(--paper); padding: 0 3px; }   /* selected: the body or the whole part */
+.bodies label.ghosted > span { opacity: 0.45; }
+.bodies .see { flex: none; margin-left: auto; border: 0; padding: 0 2px; font-size: var(--fs-12); line-height: 1; opacity: 0.3; }
+.bodies label.ghosted .see, .bodies .see:hover { opacity: 1; }
 .bodies { box-sizing: border-box; min-width: 120px; max-width: 70vw; }
+.hud-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+/* reference planes, beside Section: Front / Top / Right toggles and the + menu (offset, on a face, yours) */
+.planes { position: relative; }
+.planes-menu { position: absolute; left: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; gap: 6px; min-width: 280px; background: var(--paper); border: var(--bw-hair) solid var(--ink); padding: 8px; font-size: var(--fs-12); white-space: nowrap; }
+.planes-menu[hidden] { display: none; }
+.planes-menu .row { display: flex; align-items: center; gap: 6px; }
+.planes-menu input[type=number] { width: 64px; font: inherit; }
+.planes-menu input.name { flex: 1; font: inherit; border: 0; border-bottom: var(--bw-hair) solid var(--rule); background: none; color: var(--ink); }
+.planes-menu hr { border: 0; border-top: var(--bw-hair) solid var(--rule); margin: 2px 0; width: 100%; }
+/* view cube, lower right of the viewport (Bambu Studio's): faces, edges and corners pick a view; the button fits */
+.hud-br { left: auto; right: var(--sp-3); bottom: var(--sp-3); flex-direction: column; align-items: flex-end; gap: var(--sp-2); pointer-events: none; }   /* view cube over the section bar */
+.hud-br > .sect { pointer-events: auto; background: var(--paper); }
+.viewcube { z-index: 3; display: flex; align-items: flex-end; gap: var(--sp-1); pointer-events: none; }
+.viewcube[hidden] { display: none; }
+.viewcube canvas { pointer-events: auto; cursor: pointer; width: 112px; height: 112px; }
+.viewcube-fit { pointer-events: auto; width: 34px; height: 34px; padding: 5px; border-radius: 50%; background: var(--paper); border: var(--bw-hair) solid var(--rule); color: var(--ink); display: flex; align-items: center; justify-content: center; margin-bottom: 4px; }
 .bodies-grip { position: absolute; top: 0; right: 0; bottom: 0; width: 6px; cursor: ew-resize; touch-action: none; }
 .bodies-grip:hover, .bodies-grip:active { background: var(--rule); }
 .bodies.min .bodies-grip { display: none; }
 .bodies label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.bodies label > .body-name, .bodies label.group-row > span:not(.fold-gap):not(.mat-tag) { flex: 0 1 auto; min-width: 4em; overflow: visible; white-space: normal; overflow-wrap: anywhere; }   /* a part's whole name: a long one goes on to a second line, lined up with the first; it never pushes the columns */
+.bodies label { align-items: flex-start; }
+.bodies label > input, .bodies label > .fold, .bodies label > .fold-gap, .bodies label > .see, .bodies label > .body-edit { margin-top: 2px; }
+.bodies .mat-tag select.fin-word { font: inherit; font-size: 10px; color: var(--ink-faint); border: 0; background: none; padding: 0; height: auto; cursor: pointer; appearance: none; -webkit-appearance: none; text-decoration: underline dotted; text-underline-offset: 2px; }
+.bodies .mat-tag button.swatch-pick { width: 11px; height: 11px; min-width: 0; padding: 0; border: var(--bw-hair) solid var(--rule); cursor: pointer; flex: none; }
 .bodies .group-body { display: flex; flex-direction: column; gap: 2px; padding-left: 12px; }
 .bodies .group-body[hidden] { display: none; }
 .bodies .fold, .bodies .fold-gap { flex: none; width: 9px; height: 9px; }
@@ -220,7 +269,19 @@ select.ghost:hover { opacity: 0.55; }
 .load-error:empty { display: none; }
 
 /* right-click menu and hover tips */
-#ctx { position: fixed; z-index: 20; display: flex; flex-direction: column; min-width: 200px; max-height: calc(100vh - 16px); overflow-y: auto; background: var(--paper); border: var(--bw-hair) solid var(--ink); padding: 2px; }
+/* the selection's menu: hide, see-through, show only, the part around; material and colour */
+#bodyMenu { position: fixed; z-index: 20; display: flex; flex-direction: column; min-width: 200px; background: var(--paper); border: var(--bw-hair) solid var(--ink); padding: 2px; }
+#bodyMenu[hidden] { display: none; }
+#bodyMenu .hd { padding: 4px 8px; font-size: var(--fs-12); color: var(--ink-faint); border-bottom: var(--bw-hair) solid var(--rule); max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#bodyMenu button { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-4); border: 0; border-left: 2px solid transparent; padding: 5px 8px; font-size: var(--fs-12); text-align: left; }
+#bodyMenu button.on { border-left-color: var(--ink); }
+#bodyMenu kbd { font: inherit; color: var(--ink-faint); }
+#bodyMenu .appear { display: flex; gap: var(--sp-2); align-items: center; padding: 5px 8px; border-top: var(--bw-hair) solid var(--rule); }
+#bodyMenu .appear select { flex: 1; font-size: var(--fs-12); }
+#bodyMenu .appear input[type=color] { width: 28px; height: 22px; padding: 0; border: var(--bw-hair) solid var(--rule); background: none; }
+#bodyMenu .appear button { padding: 0 4px; border-left: 0; }
+#ctx { position: fixed; z-index: 20; display: flex; flex-direction: column; min-width: 200px; max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; background: var(--paper); border: var(--bw-hair) solid var(--ink); padding: 2px; }   /* taller than the window: it scrolls */
+#ctx > * { flex: none; }
 #ctx[hidden] { display: none; }
 #ctx button { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-4); border: 0; border-left: 2px solid transparent; padding: 5px 8px; font-size: var(--fs-12); text-align: left; }
 #ctx button.on { border-left-color: var(--ink); }
@@ -229,9 +290,11 @@ select.ghost:hover { opacity: 0.55; }
 #ctx kbd, #tip kbd { font: inherit; color: var(--ink-faint); }
 #tip { position: fixed; z-index: 21; background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--ink); padding: 3px 7px; font-size: var(--fs-12); letter-spacing: var(--ls-label); pointer-events: none; white-space: nowrap; }
 #tip[hidden] { display: none; }
-#measures { flex: 1 1 auto; min-width: 0; }
+#measures { flex: 0 1 auto; min-width: 0; }
+#weight { flex: 1 1 auto; min-width: 0; white-space: nowrap; cursor: help; }
 footer .foot-tools { display: flex; align-items: center; gap: var(--sp-1); }
 footer button.ghost { font-size: var(--fs-12); padding: 4px 8px; }
+footer select.ghost { font-size: var(--fs-12); padding: 6px 18px 6px 8px; height: auto; background-position: right 5px center; }   /* mm / in: the size of the buttons beside it */
 #stats { flex: 0 0 auto; text-align: right; color: var(--ink-soft); text-transform: uppercase; letter-spacing: var(--ls-label); font-variant-numeric: tabular-nums; }
 .status { color: var(--ink-soft); font-size: var(--fs-12); min-width: 84px; max-width: 40vw; text-align: right; text-transform: uppercase; letter-spacing: var(--ls-label); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 footer > * { white-space: nowrap; }
@@ -265,7 +328,7 @@ footer > * { white-space: nowrap; }
 
 /* Selection: rows, the action bar, and the shift-drag window */
 .bodies label.sel { outline: var(--bw-hair) solid #1d6bff; outline-offset: 1px; }
-.selbar { position: absolute; top: var(--sp-3); left: 50%; transform: translateX(-50%); z-index: 3; display: flex; align-items: center; gap: var(--sp-2); background: var(--paper); border: var(--bw-hair) solid #1d6bff; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); white-space: nowrap; }
+.selbar { position: absolute; top: calc(var(--sp-3) + 34px); right: var(--sp-3); z-index: 3; display: flex; align-items: center; gap: var(--sp-2); background: var(--paper); border: var(--bw-hair) solid #1d6bff; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); white-space: nowrap; }
 .selbar[hidden] { display: none; }
 .selbar button, .selbar select { font-size: var(--fs-12); height: 22px; padding: 0 var(--sp-2); }
 .selbar select { padding-right: 22px; background-position: right 4px center; }
@@ -273,6 +336,22 @@ footer > * { white-space: nowrap; }
 .marquee[hidden] { display: none; }
 .marquee.crossing { border-style: dashed; background: rgba(29, 107, 255, 0.06); }
 .selbar select { width: 8.5em; }
+
+/* the colour menu a swatch opens: the model's colours, then Other… (the system picker) */
+.color-menu { position: fixed; z-index: 50; background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--rule); box-shadow: 0 4px 16px rgba(0,0,0,.15); padding: var(--sp-2); font-size: var(--fs-12); width: 176px; }
+.color-menu-head { color: var(--ink-faint); font-size: 10px; letter-spacing: var(--ls-label); text-transform: uppercase; margin-bottom: 6px; }
+.color-menu-grid { display: grid; grid-template-columns: repeat(8, 18px); gap: 4px; margin-bottom: var(--sp-2); }
+.color-chip { width: 18px; height: 18px; min-width: 0; padding: 0; border: var(--bw-hair) solid var(--rule); cursor: pointer; }
+.color-chip.on, .color-chip:hover { outline: 2px solid #1d6bff; outline-offset: 1px; }
+.color-other { width: 100%; }
+.color-other-input { position: absolute; width: 0; height: 0; opacity: 0; border: 0; padding: 0; pointer-events: none; }
+.selbar .sel-swatch { width: 40px; min-width: 0; padding: 0; border: var(--bw-hair) solid var(--rule); }
+/* material · finish · colour in columns: each a fixed width, the tag at the row's right, so every row lines up */
+.bodies .mat-tag select.mat-word { width: 9em; text-overflow: ellipsis; }
+.bodies .mat-tag select.fin-word { width: 5em; }
+.bodies .mat-tag .col { width: 5.5em; overflow: hidden; text-overflow: ellipsis; }
+.bodies label:has(.mat-tag) .see { margin-left: 0; }   /* the tag takes the slack, so its columns sit at the right */
+.bodies .mat-tag .col.pick { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }   /* reads as a word; a click opens the colours */
 /* the header's buttons are the HUD's smaller size */
 header button, header select.ghost { font-size: var(--fs-12); padding: 4px 8px; height: auto; }
 header select.ghost { padding-right: 22px; background-position: right 7px center; }

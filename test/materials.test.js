@@ -25,3 +25,9 @@ test('material words in the name win', () => {
     ['UR controller, steel, white powder coat', [], 'powder_white'],
   ]) assert.equal(guessMaterial(name, path), want, name);
 });
+
+test("the file's own material name decides before the body's name", () => {
+  assert.equal(guessMaterial('Frame', ['Speaker'], 'Aluminum - Satin'), 'aluminum');
+  assert.equal(guessMaterial('Surround', [], 'Rubber - Soft'), 'rubber');
+  assert.equal(guessMaterial('M3 screw', [], 'Coating - Black Oxide'), 'steel');   // a material name that says nothing falls back to the name
+});

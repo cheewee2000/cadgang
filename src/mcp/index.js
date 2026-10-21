@@ -45,7 +45,7 @@ server.registerTool(
 
 The user never has to take a screenshot: the open CADgang window renders itself and posts the PNG here. Call this whenever they point at something — "this", "here", "the edge I circled", "the hole I noted" — or to check what is on their screen.
 
-Markups are anchored on the model in 3D (points are world coordinates in mm), so a stroke or an arrow tells you WHERE on the part; notes carry text. Kinds: 'pen' (points: a polyline), 'arrow' (points: [tail, head]; the head is what it points at, the tail holds its text; the head is drawn as a dot, tail == head is a dot alone; with 'normal', the text lies on that face's plane). A mark with 'body' ("name#n") rides that part: its points are in the part's rest position (unexploded), 'note' (points: [anchor], text). The subject is the file path (or dropped file name) on screen; the camera is yaw/pitch/dist/target.
+Markups are anchored on the model in 3D (points are world coordinates in mm), so a stroke or an arrow tells you WHERE on the part; notes carry text. Kinds: 'pen' (points: a polyline), 'arrow' (points: [tail, head]; the head is what it points at, the tail holds its text; the head is drawn as a dot, tail == head is a dot alone; with 'normal', the text lies on that face's plane). A mark with 'body' ("name#n") rides that part: its points are in the part's rest position (unexploded), 'note' (points: [anchor], text), 'path' (drawn with the pen: nodes [{p, in, out}] are its anchors and their curve handles as offsets from them, points the curve sampled; closed: true for a closed shape). 'pen' is a freehand pencil stroke. 'text' (points: [anchor], text lying on that face's plane, size = line height in mm), 'image' (a picture the user put on the surface: points: [centre], size = its width in mm, name = its file; the picture itself shows in the screenshot). A mark with done: true is one you (or an earlier session) already acted on: it shows in green at 30% as a record. Work on the others; when you have made a mark's change, call cadgang_markup_done with its id. The subject is the file path (or dropped file name) on screen; the camera is yaw/pitch/dist/target.
 
 If no window is open you get the last snapshot (if any) and fresh:false — say so.
 
@@ -57,7 +57,8 @@ Args:
   async ({ fresh }) => {
     try {
       const { screen, markups, fresh: got, pendingFeedback } = await call(`/view/screen?dir=${encodeURIComponent(process.cwd())}${fresh ? '&fresh=1&wait=4' : ''}`);
-      const text = { fresh: got, at: screen?.at ?? null, subject: screen?.subject ?? null, camera: screen?.camera ?? null, markups, pendingFeedback: pendingFeedback || 0 };
+      const slim = (markups || []).map(({ src, ...m }) => (src ? { ...m, image: `${Math.round(src.length * 0.75 / 1024)} KB` } : m));   // a picture's bytes are in the screenshot, not the JSON
+      const text = { fresh: got, at: screen?.at ?? null, subject: screen?.subject ?? null, camera: screen?.camera ?? null, markups: slim, pendingFeedback: pendingFeedback || 0 };
       const content = [{ type: 'text', text: JSON.stringify(text, null, 2) }];
       if (screen?.png) content.push({ type: 'image', data: screen.png, mimeType: 'image/png' });
       else content[0].text += '\n\nNo window has posted a frame yet — open the CADgang app (or /view in a browser) with a file.';
@@ -80,7 +81,8 @@ server.registerTool(
       if (!pending.length) return ok({ pending: 0, note: 'Nothing waiting — the user has not pressed FEEDBACK since you last looked. cadgang_screen shows the live view.' });
       const content = [];
       for (const f of pending) {
-        content.push({ type: 'text', text: JSON.stringify({ at: f.at, subject: f.subject, camera: f.camera, markups: f.markups }, null, 2) });
+        const markups = (f.markups || []).map(({ src, ...m }) => (src ? { ...m, image: `${Math.round(src.length * 0.75 / 1024)} KB` } : m));
+        content.push({ type: 'text', text: JSON.stringify({ at: f.at, subject: f.subject, camera: f.camera, markups }, null, 2) });
         content.push({ type: 'image', data: f.png, mimeType: 'image/png' });
       }
       return { content };
@@ -89,10 +91,30 @@ server.registerTool(
 );
 
 server.registerTool(
+  'cadgang_markup_done',
+  {
+    title: 'Mark the user\'s markups done',
+    description: 'Once you have made the change a markup asked for, mark it done: it stays on the model as a record, drawn in green at 30% opacity, and cadgang_screen reports it with done: true. Pass the ids of the markups you acted on (from cadgang_screen), or none to mark every open one done. Use this, not cadgang_markup_clear, after acting on markups.',
+    inputSchema: { ids: z.array(z.string()).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async ({ ids }) => {
+    try {
+      const { subject, markups } = await call('/view/markup');
+      const at = new Date().toISOString(), want = ids?.length ? new Set(ids) : null;
+      const unknown = want ? [...want].filter((id) => !markups.some((m) => m.id === id)) : [];
+      const next = markups.map((m) => (!m.done && (!want || want.has(m.id)) ? { ...m, done: true, doneAt: at } : m));
+      await call(`/view/markup?subject=${encodeURIComponent(subject)}`, { method: 'PUT', body: { markups: next } });
+      return ok({ subject, marked: next.filter((m, i) => m.done && !markups[i].done).map((m) => m.id), open: next.filter((m) => !m.done).length, ...(unknown.length && { unknown }) });
+    } catch (e) { return fail(e); }
+  }
+);
+
+server.registerTool(
   'cadgang_markup_clear',
   {
     title: 'Clear the user\'s markups',
-    description: 'Remove every markup from the file on screen once you have acted on them, so the next round starts clean. Tell the user you did.',
+    description: 'Remove every markup from the file on screen, done or not. Only when the user asks to clear them: after acting on markups, use cadgang_markup_done, which keeps them as a record.',
     inputSchema: {},
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   },

@@ -23,8 +23,13 @@
     </div>
     <div class="file-tools">
       <button id="openBtn" class="ghost" title="Open a file (⌘O)">Open</button>
+      <span class="recent">
+        <button id="recentBtn" class="ghost" title="Files you opened lately">Recent</button>
+        <div id="recentMenu" class="share-menu" hidden></div>
+      </span>
       <button id="saveBtn" class="ghost" title="Save the project: model, markups, dimensions, section, explode and view in one .cadgang file (⌘S)">Save</button>
       <button id="newBtn" class="ghost" title="New window, for another file with its own markups">New</button>
+      <button id="drawBtn" class="ghost" title="Drawing: Claude asks what the sheet needs, then the viewer renders it">Drawing</button>
       <button id="sideBtn" class="ghost" hidden title="Flip the drawing over">Flip</button>
     </div>
     <div class="toolbar">
@@ -45,9 +50,12 @@
         <button id="rotReset" class="ghost" title="Back to the file's own orientation">Reset</button>
       </span>
       <span class="sep"></span>
+      <button class="ghost send" id="sendBtn" title="Ask Claude Code to make the changes in your markups: it sees this view and your marks, edits the model's source and marks each one done">Ask Claude</button>
       <span class="share">
         <button id="shareBtn" class="ghost icon" title="Share this view" aria-label="Share"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1.5v9M4.5 5 8 1.5 11.5 5M3 8v6.5h10V8"/></svg></button>
         <div id="shareMenu" class="share-menu" hidden>
+          <button id="shareShot" class="ghost" title="Copy a picture of the view, with your markups, to the clipboard: paste it anywhere">Copy screenshot</button>
+          <button id="shareShotSave" class="ghost" title="Save a picture of the view, with your markups, as a PNG">Save screenshot</button>
           <button id="shareWeb" class="ghost" title="Deploy a frozen copy of this view to your own Vercel account and copy its link: anyone opens it in a browser">Share to web</button>
           <form id="vercelForm" class="vercel-form" hidden>
             <label for="vercelToken">Vercel token, from <a href="https://vercel.com/account/tokens" target="_blank" rel="noopener">vercel.com/account/tokens</a>. Shares deploy to a project of yours named cadgang-shares.</label>
@@ -100,7 +108,7 @@
         <button id="measureBtn" class="ghost" title="Measure: snaps to ends, midpoints, centres, quadrants; click an edge for its length, a circle for ⌀, two faces for their gap; ⌥ free point, ⇧ no axis snap (M, Esc to stop)">MEASURE</button>
         <span class="markup-sep"></span>
         <span class="pen-split">
-          <button class="ghost" data-tool="pen" title="Draw on the model">PEN</button>
+          <button class="ghost" data-tool="path" title="Pen, as in Figma: click for corners, drag for curves, click the first point to close, Enter to end">PEN</button>
           <button id="penMenuBtn" class="ghost" title="Pen colour and thickness">▾</button>
           <div id="penMenu" class="pen-menu" hidden>
             <button class="ghost swatch" data-color="#d11d1d" style="--swatch:#d11d1d" title="Red"></button>
@@ -114,24 +122,29 @@
             <button class="ghost" data-width="4" title="Thick stroke (4 px)">L</button>
           </div>
         </span>
+        <button class="ghost" data-tool="pen" title="Draw freehand on the model">PENCIL</button>
         <button class="ghost" data-tool="arrow" title="Point at something">ARROW</button>
         <button class="ghost" data-tool="note" title="Pin a note">NOTE</button>
+        <button class="ghost" data-tool="text" title="Write on a face: click where, type, Enter">TEXT</button>
         <button class="ghost" data-tool="erase" title="Erase one mark">ERASE</button>
         <button class="ghost" data-clear="1" title="Clear all markup">CLEAR</button>
       </div>
       <div id="drop" class="drop">
         <div id="loadError" class="load-error"></div>
         <div>Drop a STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, FBX, DXF or saved .cadgang file here.</div>
-        <div class="drop-hint">Drag a part: slide it out · Right-click a part: its axis · Scroll: rotate · Shift-scroll: pan · Pinch: zoom · Double-click: centre · Right-click: menu and hotkeys · ⌘Z undo · DXF: pan, spin to turn, B to flip over</div>
+        <div class="drop-hint">Click a part: select it · Drag: rotate · Exploded, drag a part: move where it explodes to · Right or wheel drag: pan · Wheel or pinch: zoom · ⌥-drag a part: slide it out · Right-click a part: its axis · Two fingers: pan · ⇧ two fingers: rotate · Double-click: centre · Right-click: menu and hotkeys · ⌘Z undo · DXF: pan, spin to turn, B to flip over</div>
       </div>
     </div>
   </main>
 
   <footer>
     <div id="measures"></div>
+    <span id="weight" class="weight"></span>
     <span id="status" class="status"></span>
     <div class="foot-tools">
       <button id="gridBtn" class="ghost on" title="Grid (G)">Grid</button>
+      <button id="rulerBtn" class="ghost" title="Ruler: the grid's scale along its edges, from 0 (⇧G)">Ruler</button>
+      <select id="unitsSel" class="ghost" title="Units for the grid and the ruler: in inches the grid steps every ½&quot;, darker every inch"><option value="mm">mm</option><option value="in">in</option></select>
       <button id="defaultBtn" class="ghost" hidden title="Make CADgang the Finder's default app for every CAD file type it reads">Default</button>
       <button id="themeToggle" class="ghost" title="Background: light, dark, dusk, dawn, night (D)">LIGHT</button>
     </div>

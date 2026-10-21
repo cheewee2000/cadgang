@@ -263,6 +263,22 @@ export default ({ brep }) => brep.compound(brep.box(10, 10, 10), brep.translate(
   await api('/asm', { method: 'DELETE' });
 });
 
+test('a STEP export names each solid for the cell that made it', async () => {
+  await api('/', { method: 'POST', body: { id: 'tray', prompt: 'a tray', code: 'export default ({ brep }) => brep.box(30, 20, 5);' } });
+  await api('/', { method: 'POST', body: { id: 'lid', prompt: 'a lid', code: 'export default ({ brep }) => brep.translate(brep.box(30, 20, 2), [0, 0, 5]);' } });
+  await api('/', { method: 'POST', body: { id: 'case', prompt: 'tray and lid kept apart', refs: ['tray', 'lid'], code: 'export default ({ brep, inputs }) => brep.compound(inputs.tray, inputs.lid);' } });
+  for (const pass of ['fresh', 'cached']) {
+    const step = await api('/export/step?cell=case');
+    assert.equal(step.status, 200, `${pass}: ${JSON.stringify(step.data.error ?? '')}`);
+    const names = [...step.data.toString().matchAll(/PRODUCT\('([^']*)'/g)].map((m) => m[1]);
+    assert.ok(names.includes('tray') && names.includes('lid'), `${pass}: ${names.join(', ')}`);
+    assert.ok(!names.some((n) => /Open CASCADE/.test(n)), `${pass}: ${names.join(', ')}`);
+  }
+  const one = await api('/export/step?cell=lid');
+  assert.ok([...one.data.toString().matchAll(/PRODUCT\('([^']*)'/g)].some((m) => m[1] === 'lid'));
+  for (const id of ['case', 'lid', 'tray']) await api(`/${id}`, { method: 'DELETE' });
+});
+
 test('a delete that would orphan a reference is refused', async () => {
   await api('/round', { method: 'PATCH', body: { refs: ['body'] } });
   const r = await api('/body', { method: 'DELETE' });
