@@ -18,10 +18,12 @@ export function createViewCube({ THREE, container, getCamera, onView, onFit }) {
   renderer.setSize(SIZE, SIZE);
   renderer.domElement.title = 'Click a face, an edge or a corner for that view';
   const fit = Object.assign(document.createElement('button'), { className: 'ghost viewcube-fit', title: 'Fit the model (F)' });
-  fit.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
+  fit.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
     + '<path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><path d="M12 7.5l4 2.2v4.6l-4 2.2-4-2.2V9.7z"/><path d="M8 9.7l4 2.2 4-2.2M12 11.9v4.6"/></svg>';
   fit.addEventListener('click', () => onFit());
-  wrap.append(renderer.domElement, fit);
+  const side = Object.assign(document.createElement('div'), { className: 'viewcube-side' });   // buttons beside the cube in a row, Fit last
+  side.append(fit);
+  wrap.append(renderer.domElement, side);
   container.appendChild(wrap);
 
   const scene = new THREE.Scene();
@@ -85,5 +87,5 @@ export function createViewCube({ THREE, container, getCamera, onView, onFit }) {
     rig.quaternion.copy(inv.copy(getCamera().quaternion).invert());
     renderer.render(scene, cam);
   }
-  return { render, el: wrap, set hidden(v) { wrap.hidden = v; } };
+  return { render, el: wrap, side, set hidden(v) { wrap.hidden = v; } };
 }

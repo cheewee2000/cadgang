@@ -31,6 +31,7 @@ import { MATERIALS, materialOf, pickMaterial, pickedMaterial, materialFor } from
 import { silhouetteEdges, silhouetteFor } from './silhouette.js';
 import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
 import { createViewCube } from './viewcube.js';
+import { createScaleRef } from './scaleref.js';
 import { createPlanes } from './planes.js';
 import { turnAbout as turnOrbit, yawPitchOf, offsetOf } from './orbitmath.js';
 
@@ -368,7 +369,7 @@ function listBodies() {
       cb.addEventListener('change', () => { for (const m of members) setBodyVisible(m, cb.checked); syncRows(); });
       cb._members = members;
       const nm = document.createElement('span'); nm.textContent = `${g} (${members.length})`;
-      nm.title = 'Click: only this group · Shift-click: add its bodies to the selection';
+      nm.title = `${nm.textContent}\nClick: only this group · Shift-click: add its bodies to the selection`;   // the whole name, when the row cuts it short
       nm.addEventListener('click', (e) => {
         e.preventDefault();
         if (e.shiftKey || e.metaKey || e.ctrlKey) { selectBodies(members, members.every((o) => selected.has(o)) ? 'toggle' : 'add'); return; }
@@ -388,7 +389,7 @@ function listBodies() {
       cb._body = m;
       cb.addEventListener('change', () => { setBodyVisible(m, cb.checked); syncRows(); });
       const nm = document.createElement('span'); nm.className = 'body-name'; nm._body = m; nm.textContent = labelOf(m);
-      nm.title = 'Click: only this body · Shift-click: add it to the selection';
+      nm.title = `${labelOf(m)}\nClick: only this body · Shift-click: add it to the selection`;   // the whole name, when the row cuts it short
       nm.addEventListener('click', (e) => {
         e.preventDefault();
         if (e.shiftKey || e.metaKey || e.ctrlKey) { selectBodies([m], 'toggle'); return; }
@@ -445,28 +446,32 @@ function listBodies() {
   return dups.join(' · ');
 }
 /**
- * A long name takes two lines at most: each name gets the least width that does it, and the panel
- * grows (to 70% of the window) so the widest row still fits, its columns where every other row has them.
+ * The rows' columns: material, finish and colour each as wide as its widest entry, so every row has them
+ * in the same place and none is ever cut short. As the panel narrows the space between them shrinks
+ * (14px down to 4px), then the name gives way: one line, cut with … (its tip has the whole name).
  */
 function fitNames() {
   const panel = $('#bodies');
   if (!panel || panel.hidden || panel.classList.contains('min')) return;
-  panel.style.minWidth = '';
-  let over = 0;
-  for (const el of panel.querySelectorAll('label > .body-name, label.group-row > span:not(.fold-gap):not(.mat-tag)')) {
-    el.style.minWidth = '';
-    if (!el.offsetParent) continue;   // in a folded folder
-    el.style.whiteSpace = 'nowrap';
-    const full = el.scrollWidth, line = el.offsetHeight;
-    el.style.whiteSpace = '';
-    if (el.offsetHeight <= line * 2 + 1) continue;
-    let w = Math.ceil(full / 2);
-    el.style.minWidth = `${w}px`;
-    while (el.offsetHeight > line * 2 + 1 && w < full) { w += 4; el.style.minWidth = `${w}px`; }
-    const row = el.parentElement;
-    over = Math.max(over, row.scrollWidth - row.clientWidth);
-  }
-  if (over > 0) panel.style.minWidth = `${Math.min(innerWidth * 0.7, panel.offsetWidth + over)}px`;
+  // a list's own width is its longest option's; what shows is the chosen one, so that is what is measured
+  const probe = Object.assign(document.createElement('span'), { style: 'position:absolute;visibility:hidden;white-space:nowrap;left:-9999px' });
+  document.body.append(probe);
+  const widest = (sel) => {
+    let w = 0;
+    for (const el of panel.querySelectorAll(sel)) {
+      if (!el.offsetParent) continue;   // in a folded folder
+      const cs = getComputedStyle(el);
+      for (const k of ['font', 'letterSpacing', 'textTransform', 'fontStyle']) probe.style[k] = cs[k];
+      probe.textContent = el.tagName === 'SELECT' ? el.selectedOptions[0]?.textContent ?? '' : el.textContent;
+      w = Math.max(w, Math.ceil(probe.getBoundingClientRect().width + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)) + 1);
+    }
+    return w;
+  };
+  panel.style.setProperty('--mat-w', `${widest('.mat-tag select.mat-word')}px`);
+  panel.style.setProperty('--fin-w', `${widest('.mat-tag .fin-word, .mat-tag .fin')}px`);
+  panel.style.setProperty('--col-w', `${widest('.mat-tag .col')}px`);
+  probe.remove();
+  panel.style.setProperty('--col-gap', `${Math.round(Math.min(14, Math.max(4, (panel.clientWidth - 380) / 12)))}px`);
 }
 new ResizeObserver(() => { clearTimeout(fitNames.t); fitNames.t = setTimeout(fitNames, 60); }).observe($('#bodies'));
 /**
@@ -814,7 +819,7 @@ function finishBits(f, m = null) {
     frag.append(fin, sw, col);
     return frag;
   } else {
-    if (f.finish) frag.append(Object.assign(document.createElement('span'), { className: 'fin', textContent: f.finish }));
+    frag.append(Object.assign(document.createElement('span'), { className: 'fin', textContent: f.finish || '' }));   // there even when empty: it holds the column
     const sw = Object.assign(document.createElement('span'), { className: 'swatch', title: hexOfRGB(f.color) }); sw.style.background = hexOfRGB(f.color);
     frag.append(sw);
   }
@@ -846,6 +851,7 @@ function paintFinishes() {
     if (bits.contains(document.activeElement)) continue;   // a list or picker open in it: leave it be
     bits.replaceChildren(finishBits(f, m));
   }
+  fitNames();   // a new word can widen its column
 }
 /** The body under the pointer: visible, on the kept side of a section, solid ones before see-through ones. */
 function bodyAt(e) {
@@ -957,7 +963,7 @@ const maxTravel = (m) => m.userData.pull ?? explodeVec(m).length() * 2;   // the
 const nameOf = (m) => m.userData.label || m.userData.name.replace(/_part$/, '');   // cadquery's leaf suffix
 const labelOfKey = (key) => { const m = bodyOfKey(key); return m ? nameOf(m) : key.replace(/#0$/, ''); };
 function refreshNames() {
-  for (const el of document.querySelectorAll('#bodies .body-name')) if (!el.querySelector('input')) el.textContent = labelOf(el._body);
+  for (const el of document.querySelectorAll('#bodies .body-name')) if (!el.querySelector('input')) { el.textContent = labelOf(el._body); el.title = `${el.textContent}\nClick: only this body · Shift-click: add it to the selection`; }
   renderJoints();
 }
 function renameBody(m, label) {
@@ -1200,7 +1206,7 @@ function bakeRot(q) {
   }
   rot.copy(q);
   bbox = new THREE.Box3(); for (const m of model.children) bbox.union(m.geometry.boundingBox);
-  placeGrid(); setupSection(); applyExplode(); planes.render();
+  placeGrid(); scaleRef.place(); setupSection(); applyExplode(); planes.render();
   return d;
 }
 function turnModel(q) {
@@ -1263,6 +1269,7 @@ function finishLoad(name, ms, keep = false) {
   $('#stats').textContent = `${model.children.length} BOD${model.children.length === 1 ? 'Y' : 'IES'} · ${segs ? `${segs.toLocaleString()} SEGS · ` : ''}${tris ? `${tris.toLocaleString()} TRIS · ` : ''}${verts.toLocaleString()} VERTS · ${ms} MS`;
   $('#drop').hidden = true; $('#loadError').textContent = '';
   placeGrid();
+  scaleRef.place();
   planes.load();   // this file's planes, sized to it
   const dups = listBodies();
   warmRays();
@@ -1389,6 +1396,7 @@ function applyCamera() {
 function fit() {
   if (!bbox) return;
   const b = new THREE.Box3().setFromObject(model);   // what is on screen now, exploded or not
+  const ref = scaleRef.box(); if (ref) b.union(ref);   // and the thing beside it for scale
   b.getCenter(orbit.target);
   const r = b.getSize(new THREE.Vector3()).length() / 2;
   orbit.dist = r / Math.sin(THREE.MathUtils.degToRad(persp.fov / 2)) * 1.1;
@@ -2843,6 +2851,9 @@ const viewCube = createViewCube({ THREE, container: viewport, getCamera: () => c
 const hudBR = Object.assign(document.createElement('div'), { className: 'hud hud-br' });
 viewport.append(hudBR);
 hudBR.append(viewCube.el, $('#sectAxis'));
+// For scale: a quarter, a tennis ball, a sheet of looseleaf or a basketball beside the model, above Fit.
+const scaleRef = createScaleRef({ THREE, scene, getBox: () => bbox, onChange: () => rerender() });
+viewCube.side.prepend(scaleRef.el);
 
 // MATERIALS needs something for metal and glass to reflect in the live view: a soft studio room.
 let roomEnv = null;
@@ -3135,7 +3146,8 @@ const CMDS = [
 const keyLabel = (c) => (c.shift ? '⇧' : '') + (c.meta ? '⌘' : '') + ({ Escape: 'Esc', Backspace: '⌫', Enter: '↵', ArrowLeft: '←', ArrowRight: '→' }[c.key] ?? c.key.toUpperCase());
 
 window.addEventListener('keydown', (e) => {
-  if ((e.target.matches?.('input,select,textarea') && !((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's')) || e.altKey || $('#shareDialog').open) return;   // typing keeps its keys, but ⌘S saves from inside a field
+  const nudge = e.target.id === 'explode' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');   // the focused slider's own arrows would step it, not scrub
+  if ((e.target.matches?.('input,select,textarea') && !nudge && !((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's')) || e.altKey || $('#shareDialog').open) return;   // typing keeps its keys, but ⌘S saves from inside a field
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const c = CMDS.find((c) => c.key === key && !!c.meta === (e.metaKey || e.ctrlKey) && !!c.shift === e.shiftKey);
   if (!c) return;
