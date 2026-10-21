@@ -318,6 +318,7 @@ server.registerTool(
       joint: z.string().optional().describe('a joint id: only that one (default: every joint)'),
       steps: z.number().int().min(2).max(360).optional().describe('samples across the range (default 36)'),
       gap: z.number().min(0).optional().describe('also report parts closer than this, mm (default 0: only overlaps)'),
+      tol: z.number().min(0).optional().describe('overlap up to this deep is a fit, not a crash, mm (default 0.1: tight fits and tessellation error); 0 counts any touch'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },

@@ -132,3 +132,14 @@ test('a joint held at one value (min = max) is still checked where it sits', () 
   const [r] = sweepJoints(meshes, [j], { steps: 4 });
   assert.deepEqual(r.contacts.map((c) => [c.body, c.always, c.spans]), [['base#0', false, [[3, 3]]]]);
 });
+
+test('tol: a block sliding seated on a face, 0.05 mm into it, is clear; a real crash still counts', () => {
+  const box = (w, h, d, x, y, z) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z); return new THREE.Mesh(g); };
+  const meshes = new Map([['base#0', box(40, 10, 2, 0, 0, 0)], ['wall#0', box(2, 10, 10, 15, 0, 5)], ['block#0', box(4, 4, 4, 0, 0, 2.95)]]);
+  const j = J({ type: 'slider', body: 'block#0', axis: [1, 0, 0], min: -5, max: 13 });
+  const [tight] = sweepJoints(meshes, [j], { steps: 18 });
+  assert.ok(tight.contacts.some((c) => c.body === 'base#0'));   // no tolerance: the seat reads as a crash
+  const [loose] = sweepJoints(meshes, [j], { steps: 18, tol: 0.1 });
+  assert.deepEqual(loose.contacts.map((c) => c.body), ['wall#0']);   // the block's face reaches the wall at x = 12
+  assert.equal(loose.contacts[0].spans[0][0], 13);
+});

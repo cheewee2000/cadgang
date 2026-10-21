@@ -133,18 +133,56 @@ export function valueRange(j, size = 100, second = false) {
 export const eulerOf = (q) => new THREE.Euler().setFromQuaternion(q, 'XYZ').toArray().slice(0, 3).map((r) => +THREE.MathUtils.radToDeg(r).toFixed(4));
 
 /**
+ * A copy of `geo` with every face pulled in `tol` along its normal. Corners are welded by position and each
+ * moves so it sits `tol` inside every face it touches (a box's corner goes in along all three), so a flat-shaded
+ * mesh's split edges move with their faces and nothing is left poking out at the old surface.
+ */
+function insetGeometry(geo, tol) {
+  const src = geo.getAttribute('position'), g = new THREE.BufferGeometry().setAttribute('position', src.clone());
+  if (geo.index) g.setIndex(geo.index.clone());
+  const p = g.getAttribute('position'), ix = g.index, n = ix ? ix.count : p.count, at = (i) => (ix ? ix.getX(i) : i);
+  geo.computeBoundingBox();
+  const q = 1e6 / (geo.boundingBox.getSize(new THREE.Vector3()).length() || 1), weld = new Map(), id = new Int32Array(p.count);
+  for (let i = 0; i < p.count; i++) {
+    const key = `${Math.round(p.getX(i) * q)},${Math.round(p.getY(i) * q)},${Math.round(p.getZ(i) * q)}`;
+    let w = weld.get(key); if (w === undefined) weld.set(key, (w = weld.size));
+    id[i] = w;
+  }
+  const normals = Array.from({ length: weld.size }, () => []), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), fn = new THREE.Vector3();
+  for (let t = 0; t + 2 < n; t += 3) {
+    a.fromBufferAttribute(p, at(t)); b.fromBufferAttribute(p, at(t + 1)); c.fromBufferAttribute(p, at(t + 2));
+    THREE.Triangle.getNormal(a, b, c, fn);
+    if (fn.lengthSq() < 0.5) continue;   // degenerate
+    for (let e = 0; e < 3; e++) { const list = normals[id[at(t + e)]]; if (list.length < 8 && !list.some((v) => v.dot(fn) > 0.999)) list.push(fn.clone()); }
+  }
+  const d = normals.map((list) => {
+    if (!list.length) return new THREE.Vector3();
+    const m = list.reduce((s, v) => s.add(v), new THREE.Vector3()).normalize();
+    return m.multiplyScalar(tol / Math.max(0.3, Math.min(...list.map((v) => m.dot(v)))));
+  });
+  for (let i = 0; i < p.count; i++) { const v = d[id[i]]; p.setXYZ(i, p.getX(i) - v.x, p.getY(i) - v.y, p.getZ(i) - v.z); }
+  return g;
+}
+
+/**
  * Drive each joint through its range (its limits, else valueRange) in `steps` and find where the parts it moves
  * run into, or come within `gap` mm of, the parts it does not move. The assembly is together (no explode); every
  * other joint stays where it is. `meshes` maps a body key to its mesh, geometry in the file frame.
  *   [{ id, name, body, range: [lo, hi], unit, current, contacts: [{ body, spans: [[a, b], ...], always, first }] }]
  * `always`: touching at every step — a pin in its bore, a part on its face: a fit, not a crash. `first`: the
  * sampled value nearest the current one where they meet. Ball and fixed joints have no one value to sweep.
+ * `tol` mm: overlap up to this deep is not a crash — the moving parts are tested pulled in along their normals
+ * by `tol`, so a tight fit or a seated face, and the tessellation's own chordal error, read as clear.
  * ponytail: sampled, so a thin part can pass between steps; moving-vs-moving pairs (a stacked joint's own
  * parts) are not tested. Add both if a real assembly misses a crash.
  */
-export function sweepJoints(meshes, joints, { steps = 36, gap = 0, only = null, size = 100 } = {}) {
+export function sweepJoints(meshes, joints, { steps = 36, gap = 0, tol = 0, only = null, size = 100 } = {}) {
   const bvh = new Map();
-  for (const [k, m] of meshes) { m.geometry.boundsTree = new MeshBVH(m.geometry, { indirect: true }); bvh.set(k, m.geometry.boundsTree); m.geometry.computeBoundingBox(); }
+  for (const [k, m] of meshes) {
+    m.geometry.computeBoundingBox();
+    if (!(tol > 0)) { m.geometry.boundsTree = new MeshBVH(m.geometry, { indirect: true }); bvh.set(k, m.geometry.boundsTree); continue; }
+    bvh.set(k, new MeshBVH(insetGeometry(m.geometry, tol), { indirect: true }));
+  }
   const boxAt = (k, M) => meshes.get(k).geometry.boundingBox.clone().applyMatrix4(M).expandByScalar(gap / 2);
   const out = [];
   for (const j of joints) {

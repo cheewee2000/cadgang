@@ -1394,10 +1394,11 @@ function renderJoints() {
  * last clear step and the first hit). The joint is driven to the limit nearest its first crash, so you see it.
  */
 const CHECK_STEPS = 120, REFINE_STEPS = 16;
+const CHECK_TOL = 0.1;   // mm of overlap that is a fit, not a crash: tight tolerances and tessellation error (raise it if fits still crash)
 function checkJoints() {
   say('checking joints…', false, true);
   setTimeout(() => {   // let the status paint before the sweep holds the thread
-    const res = sweep({ steps: CHECK_STEPS }), fmt = (r, [a, b]) => (a === b ? `${a}` : `${a}…${b}`) + r.unit;
+    const res = sweep({ steps: CHECK_STEPS, tol: CHECK_TOL }), fmt = (r, [a, b]) => (a === b ? `${a}` : `${a}…${b}`) + r.unit;
     const crash = res.flatMap((r) => r.contacts.filter((c) => !c.always).map((c) => ({ r, c })));
     const fits = res.flatMap((r) => r.contacts.filter((c) => c.always).map((c) => `${r.label} on ${c.label}`));
     const text = crash.map(({ r, c }) => `${r.label} hits ${c.label} at ${c.spans.map((s) => fmt(r, s)).join(', ')}`);
@@ -1421,7 +1422,7 @@ function snapLimits(res) {
     const hitBodies = new Set(crashes.map((c) => c.body)), spans = crashes.flatMap((c) => c.spans), step = (r.range[1] - r.range[0]) / CHECK_STEPS, v = j.value;
     // between the last clear sample and the first hit, the first hit again at a finer step; the limit is the sample before it
     const edge = (clear, hit) => {
-      const sub = sweepJoints(meshes, joints.map((x) => (x === j ? { ...x, min: Math.min(clear, hit), max: Math.max(clear, hit) } : x)), { steps: REFINE_STEPS, only: j.id, size })[0];
+      const sub = sweepJoints(meshes, joints.map((x) => (x === j ? { ...x, min: Math.min(clear, hit), max: Math.max(clear, hit) } : x)), { steps: REFINE_STEPS, tol: CHECK_TOL, only: j.id, size })[0];
       const hs = (sub?.contacts ?? []).filter((c) => hitBodies.has(c.body)).flatMap((c) => c.spans.flat());
       const first = hs.length ? (hit > clear ? Math.min(...hs) : Math.max(...hs)) : hit, back = (hit - clear) / REFINE_STEPS;
       return hit > clear ? Math.floor((first - back) * 10) / 10 : Math.ceil((first - back) * 10) / 10;
@@ -1999,10 +2000,10 @@ function answer({ id, what, args }) {
   fetch('api/view/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
 }
 /** Every joint (or `joint`, an id) through its range: what its parts run into. Labels in, so Claude names parts as the user sees them. */
-function sweep({ joint = null, steps = 36, gap = 0 } = {}) {
+function sweep({ joint = null, steps = 36, gap = 0, tol = CHECK_TOL } = {}) {
   const keys = bodyKeys(), meshes = new Map([...keys].map(([m, k]) => [k, m]));
   const size = bbox ? bbox.getSize(new THREE.Vector3()).length() : 100;
-  const res = sweepJoints(meshes, joints, { steps: Math.min(360, Math.max(2, steps)), gap: Math.max(0, gap), only: joint, size });
+  const res = sweepJoints(meshes, joints, { steps: Math.min(360, Math.max(2, steps)), gap: Math.max(0, gap), tol: Math.max(0, tol), only: joint, size });
   for (const r of res) { r.label = labelOfKey(r.body); for (const c of r.contacts) c.label = labelOfKey(c.body); }
   return res;
 }
