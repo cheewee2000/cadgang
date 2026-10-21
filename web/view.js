@@ -186,7 +186,27 @@ function faceBorderEdges(pos, idx, faces) {
   return new Float32Array(out);
 }
 
+// An inside-out mesh (negative volume: a mirrored Blender object, a flipped export) has front and
+// back swapped, so the section cap painted its outside dark and left the cut hollow. Turn it right
+// side out once, here: reverse each triangle, then point the normals the way the winding now does.
+function rightSideOut(geo) {
+  const p = geo.getAttribute('position'), nr = geo.getAttribute('normal'), ix = geo.index, n = ix ? ix.count : p.count;
+  const at = (k) => (ix ? ix.getX(k) : k), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  let vol = 0, agree = 0;
+  for (let k = 0; k + 2 < n; k += 3) {
+    a.fromBufferAttribute(p, at(k)); b.fromBufferAttribute(p, at(k + 1)); c.fromBufferAttribute(p, at(k + 2));
+    vol += a.dot(new THREE.Vector3().crossVectors(b, c));
+    if (nr) agree += c.sub(a).cross(b.sub(a)).dot(a.fromBufferAttribute(nr, at(k)));   // >0: normal opposes the winding
+  }
+  if (vol >= 0) return;
+  if (ix) for (let k = 0; k + 2 < n; k += 3) { const t = ix.getX(k + 1); ix.setX(k + 1, ix.getX(k + 2)); ix.setX(k + 2, t); }
+  else for (const attr of Object.values(geo.attributes)) for (let k = 0; k + 2 < n; k += 3)
+    for (let d = 0; d < attr.itemSize; d++) { const t = attr.getComponent(k + 1, d); attr.setComponent(k + 1, d, attr.getComponent(k + 2, d)); attr.setComponent(k + 2, d, t); }
+  if (nr && agree < 0) for (let i = 0; i < nr.count; i++) nr.setXYZ(i, -nr.getX(i), -nr.getY(i), -nr.getZ(i));
+}
+
 function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', path = [], color = null, pbr = null, groups = null } = {}) {
+  rightSideOut(geo);
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
   const m = new THREE.Mesh(geo);
   m.userData.flat = flat;
