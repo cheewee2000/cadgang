@@ -352,15 +352,16 @@ function listBodies() {
 }
 /**
  * The panel's title row: − folds it to just the title, + brings it back. The grip on the
- * panel's right edge drags its width (CSS resize had an invisible corner and no touch).
+ * panel's right edge drags the width of the whole left column, so Section, Bodies and Joints stay
+ * one width (CSS resize had an invisible corner and no touch).
  * Both are remembered per browser.
  */
 const BODIES_KEY = 'cadgang.bodies';
 function bodiesHead() {
-  const panel = $('#bodies');
+  const panel = $('#bodies'), column = panel.parentElement;
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(BODIES_KEY) || '{}'); } catch {}
-  if (saved.width) panel.style.width = `${saved.width}px`;
+  if (saved.width) column.style.width = `${saved.width}px`;
   panel.classList.toggle('min', !!saved.min);
   const head = document.createElement('div'); head.className = 'bodies-head';
   const btn = document.createElement('button'); btn.className = 'ghost';
@@ -373,8 +374,8 @@ function bodiesHead() {
   grip.addEventListener('pointerdown', (e) => {
     e.preventDefault(); e.stopPropagation();
     grip.setPointerCapture(e.pointerId);
-    const x0 = e.clientX, w0 = panel.offsetWidth;
-    const move = (ev) => { panel.style.width = `${Math.min(innerWidth * 0.7, Math.max(120, w0 + ev.clientX - x0))}px`; };
+    const x0 = e.clientX, w0 = column.offsetWidth;
+    const move = (ev) => { column.style.width = `${Math.min(innerWidth * 0.7, Math.max(120, w0 + ev.clientX - x0))}px`; };
     const up = () => {
       for (const [t, f] of [['pointermove', move], ['pointerup', up], ['pointercancel', up]]) grip.removeEventListener(t, f);
       saveBodies();
@@ -385,8 +386,8 @@ function bodiesHead() {
   return head;
 }
 function saveBodies() {
-  const panel = $('#bodies');
-  try { localStorage.setItem(BODIES_KEY, JSON.stringify({ min: panel.classList.contains('min'), width: panel.style.width ? panel.offsetWidth : null })); } catch {}
+  const panel = $('#bodies'), column = panel.parentElement;
+  try { localStorage.setItem(BODIES_KEY, JSON.stringify({ min: panel.classList.contains('min'), width: column.style.width ? column.offsetWidth : null })); } catch {}
 }
 
 /** Solve the explode vectors from the bodies at rest, then put the explode back. */

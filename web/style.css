@@ -180,7 +180,7 @@ select.ghost:hover { opacity: 0.55; }
 /* body list */
 /* HUD clusters over the viewport: section + bodies top-left, view/render buttons bottom-left */
 .hud { position: absolute; left: var(--sp-3); z-index: 2; display: flex; gap: var(--sp-1); }
-.hud-tl { top: var(--sp-3); flex-direction: column; align-items: flex-start; gap: var(--sp-2); max-height: calc(100% - 2 * var(--sp-3)); }
+.hud-tl { top: var(--sp-3); flex-direction: column; align-items: stretch; max-width: 70vw; gap: var(--sp-2); max-height: calc(100% - 2 * var(--sp-3)); }
 .hud-bl { bottom: var(--sp-3); }
 .hud .sect, .hud > button, .hud > select { background: var(--paper); }
 .hud .sect { border: var(--bw-hair) solid var(--rule); padding: var(--sp-1) var(--sp-2); }
@@ -214,7 +214,6 @@ select.ghost:hover { opacity: 0.55; }
 .bodies-tools { display: flex; gap: var(--sp-1); }
 .bodies-all { align-self: flex-start; margin-top: var(--sp-1); padding: 0 var(--sp-1); line-height: 1; font-size: var(--fs-12); }
 .bodies.min .bodies-all { display: none; }
-.bodies.min { width: auto !important; min-width: 0; }
 .bodies.min label, .bodies.min .group { display: none; }
 .load-error { color: var(--signal-red); max-width: 60ch; }
 .load-error:empty { display: none; }
