@@ -131,6 +131,7 @@ function styleMesh(m) {
     if (m.userData.finish && FINISHES[m.userData.finish] && 'roughness' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.roughness = FINISHES[m.userData.finish].rough;
     if (m.userData.opacity < 1 && SOLID_LOOKS.has(ui.look)) Object.assign(mat, { transparent: true, opacity: m.userData.opacity, depthWrite: false });
     if (m.userData.ghost) Object.assign(mat, { transparent: true, opacity: Math.min(mat.opacity, 0.15), depthWrite: false, transmission: 0 });
+    if (m.userData.map && !ui.color && 'map' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) { mat.map = m.userData.map; mat.color?.set(0xffffff); }
     mat.side = section.axis && bbox ? THREE.FrontSide : THREE.DoubleSide;
     mat.flatShading = !!m.userData.flat;
     // WIRE is a CAD wireframe: the model's real edges (a B-rep's face borders, a mesh's creases) with the
@@ -247,7 +248,7 @@ function rightSideOut(geo) {
   if (nr && agree < 0) for (let i = 0; i < nr.count; i++) nr.setXYZ(i, -nr.getX(i), -nr.getY(i), -nr.getZ(i));
 }
 
-function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', path = [], color = null, pbr = null, groups = null, material = '', opacity = 1 } = {}) {
+function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', path = [], color = null, pbr = null, groups = null, material = '', opacity = 1, map = null } = {}) {
   rightSideOut(geo);
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
   const m = new THREE.Mesh(geo);
@@ -261,6 +262,7 @@ function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', pa
   m.userData.groups = groups; // [{color, pbr}] per geometry group: one body, several finishes (glTF multi-material mesh)
   m.userData.material = material;   // the file's own material name ("Steel - Satin"), shown after the body's name
   m.userData.opacity = opacity;     // the file's transparency (a STEP's SURFACE_STYLE_TRANSPARENT)
+  m.userData.map = map;             // the file's image texture, drawn on every solid look
   m.userData.tint = tints[file]?.[m.userData.name] ?? null;   // the user's colour for it, kept from last time
   m.userData.finish = finishes[file]?.[m.userData.name] ?? null;   // and the finish
   m.userData.faces = faces;   // B-rep face ranges, when the importer knew them: picked by measure
@@ -617,7 +619,8 @@ function hoverBody(m) {
   highlightBody(m);
   for (const r of $('#bodies').querySelectorAll('.hover')) r.classList.remove('hover');
   let row = m && bodyBoxes().find((cb) => cb._body === m)?.closest('label');
-  while (row && !row.offsetParent) row = row.parentElement.closest('.group')?.querySelector(':scope > .group-row');
+  // up one folder at a time: from a group's own row, closest('.group') is that same group, so climb via the folder body it sits in
+  while (row && !row.offsetParent) row = row.closest('.group-body')?.closest('.group')?.querySelector(':scope > .group-row');
   if (!row) return;
   row.classList.add('hover');
   // out of sight: bring it to the top of the list, not the bottom edge where it's easy to miss
@@ -2142,7 +2145,7 @@ function collectGeometries(obj, assoc = null, out = []) {
   obj.updateMatrixWorld(true);
   // keep the file's part name and its material's colour, roughness and metalness (glTF carries them)
   const look = (mat) => ({ name: mat?.name || '', color: mat?.color ? mat.color.getRGB(new THREE.Color(), THREE.SRGBColorSpace).toArray() : null,
-    pbr: mat?.isMeshStandardMaterial ? { roughness: mat.roughness, metalness: mat.metalness } : null });
+    pbr: mat?.isMeshStandardMaterial ? { roughness: mat.roughness, metalness: mat.metalness } : null, map: mat?.map ?? null });   // map: a glTF's image texture (a screen's picture)
   const geoOf = (o) => o.geometry.clone().applyMatrix4(o.matrixWorld);
   // the named nodes above a body, outermost first: the tree's folders (as a STEP's assembly path)
   const pathOf = (o) => { const p = []; for (let a = o.parent; a && a !== obj; a = a.parent) if (a.name && a.name !== p[0]) p.unshift(a.name); return p; };

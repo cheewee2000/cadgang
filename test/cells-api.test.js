@@ -279,6 +279,26 @@ test('a STEP export names each solid for the cell that made it', async () => {
   for (const id of ['case', 'lid', 'tray']) await api(`/${id}`, { method: 'DELETE' });
 });
 
+test('a STEP export keeps groups as sub-assemblies and every copy its own part', async () => {
+  await api('/', { method: 'POST', body: { id: 'rig', prompt: 'two groups of two', code: `
+export default ({ brep }) => { const b = brep.box(10, 10, 10), at = (x, z) => brep.translate(b, [x, 0, z]);
+  return brep.compound(brep.compound(at(0, 0), at(0, 20)), brep.compound(at(20, 0), at(20, 20))); };
+` } });
+  const step = (await api('/export/step?cell=rig')).data.toString();
+  const count = (re) => [...step.matchAll(re)].length;
+  assert.equal(count(/MANIFOLD_SOLID_BREP/g), 4);
+  assert.equal(count(/NEXT_ASSEMBLY_USAGE_OCCURRENCE/g), 6);   // the root holds 2 groups, each group 2 boxes
+  const names = [...step.matchAll(/PRODUCT\('([^']*)'/g)].map((m) => m[1]);
+  assert.deepEqual(names, ['rig', 'rig group 1', 'rig', 'rig 2', 'rig group 2', 'rig 3', 'rig 4']);   // root, then each group and its parts
+  // a boolean's result (one solid, sometimes wrapped in a compound) is a part, not a group of one
+  await api('/rig', { method: 'PATCH', body: { code: `
+export default ({ brep }) => brep.compound(brep.subtract(brep.box(10, 10, 10), brep.cylinder(2, 20)), brep.union(brep.box(4, 4, 4), brep.translate(brep.box(4, 4, 4), [0, 0, 4])));
+` } });
+  const flat = (await api('/export/step?cell=rig')).data.toString();
+  assert.equal([...flat.matchAll(/NEXT_ASSEMBLY_USAGE_OCCURRENCE/g)].length, 2);
+  await api('/rig', { method: 'DELETE' });
+});
+
 test('a delete that would orphan a reference is refused', async () => {
   await api('/round', { method: 'PATCH', body: { refs: ['body'] } });
   const r = await api('/body', { method: 'DELETE' });

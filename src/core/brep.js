@@ -988,7 +988,15 @@ export function nameParts(shape, name) {
 
 /** Several shapes kept as separate bodies in one compound: an assembly, nothing fused. */
 export function brepCompound(shapes) {
-  return attempt('compound', () => track(rc.compoundShapes(shapes)));
+  // a boolean often hands back its one solid wrapped in a compound: add the solid, so only a real group (two or more) becomes a sub-assembly in the STEP
+  const one = (s) => {
+    if (s.wrapped.ShapeType() !== OC.TopAbs_ShapeEnum.TopAbs_COMPOUND) return s;
+    const solids = [...rc.iterTopo(s.wrapped, 'solid')];
+    if (solids.length !== 1) return s;
+    s.delete();
+    return rc.cast(solids[0]);
+  };
+  return attempt('compound', () => track(rc.compoundShapes(shapes.map(one))));
 }
 
 /** How many separate solids a result holds: a union of bodies that do not touch is two. */
@@ -1057,10 +1065,20 @@ function namedStep(shape, name) {
   try {
     OC.XCAFDoc_ShapeTool.SetAutoNaming(false);
     const tool = OC.XCAFDoc_DocumentTool.ShapeTool(doc.Main()).get();
+    // the shape as it was built: a compound is an assembly, a compound inside it a sub-assembly (a cell's groups), the solids its parts
+    const root = tool.AddShape(shape.wrapped, true, false);
+    OC.TDataStd_Name.Set_1(root, str(name));
+    let g = 0;   // sub-assemblies by walking the components (child labels 1, 2, …): an explorer stops at the first compound it meets
+    const groups = (asm) => {
+      for (let t = 1, comp; !(comp = asm.FindChild(t, false)).IsNull(); t++) {
+        const ref = new OC.TDF_Label();
+        if (OC.XCAFDoc_ShapeTool.GetReferredShape(comp, ref) && OC.XCAFDoc_ShapeTool.IsAssembly(ref)) { OC.TDataStd_Name.Set_1(ref, str(`${name} group ${++g}`)); groups(ref); }
+      }
+    };
+    groups(root);
     for (const { solid, name: n } of namedSolids(shape, name)) {
-      const label = tool.NewShape();
-      tool.SetShape(label, solid);
-      OC.TDataStd_Name.Set_1(label, str(n));
+      const label = tool.FindShape_2(solid, false);
+      if (!label.IsNull()) OC.TDataStd_Name.Set_1(label, str(n));
     }
     tool.UpdateAssemblies();
     // the session and the document belong to the handles made from them: nothing here is freed by hand (freeing them broke the next export)
