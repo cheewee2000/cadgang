@@ -124,3 +124,11 @@ test('a sweep finds where an arm swings into its base, and that the other way is
   assert.deepEqual(c.spans, [[10, 90]]);   // +y turns +x down into the base; −90…0 swings up, clear
   assert.equal(c.first, 10);
 });
+
+test('a joint held at one value (min = max) is still checked where it sits', () => {
+  const box = (w, h, d, x, y, z) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z); return new THREE.Mesh(g); };
+  const meshes = new Map([['base#0', box(20, 10, 2, 0, 0, 0)], ['pin#0', box(1, 1, 4, 0, 0, 3)]]);
+  const j = J({ type: 'slider', body: 'pin#0', axis: [0, 0, -1], min: 3, max: 3 });   // pushed 3 mm down: into the base
+  const [r] = sweepJoints(meshes, [j], { steps: 4 });
+  assert.deepEqual(r.contacts.map((c) => [c.body, c.always, c.spans]), [['base#0', false, [[3, 3]]]]);
+});

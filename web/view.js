@@ -974,7 +974,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
   if (pickJoint) {
-    const h = faceAt(e), a = h && faceAxis(h);
+    const { h, a } = jointFaceAt(e) ?? {};
     axisArrow.visible = !!a;
     if (a) {   // the axis it would take, drawn where the face's own frame puts it
       const len = 0.35 * (h.body.geometry.boundingBox?.getSize(new THREE.Vector3()).length() || 10);
@@ -1188,16 +1188,32 @@ function startPickJoint() {   // in either mode: an exploded assembly stays expl
   say('new joint: click a face on the part that moves · Esc cancels');
 }
 function endPickJoint() { pickJoint = null; axisArrow.visible = false; renderer.domElement.classList.remove('picking'); }
-function pickJointFace(e) {
+// The face under the pointer and the axis it gives, its origin moved onto the snap near the pointer, as
+// Fusion's joint origins: a circle's centre (its axis is the circle's: a hole picked by its rim), an edge's
+// end or middle. A round face keeps its axis and slides along it to the snap; a ball keeps its centre.
+function jointFaceAt(e) {
   const h = faceAt(e);
+  if (!h) return null;
+  let a = faceAxis(h);
+  const s = a.kind !== 'sphere' && measure.snapAt(e);
+  if (s && new THREE.Box3().setFromObject(h.body).expandByScalar(1e-3 * (bbox ? bbox.getSize(new THREE.Vector3()).length() : 1)).containsPoint(s.p)) {   // a snap on this part, not one behind it
+    const inv = h.body.matrixWorld.clone().invert(), p = s.p.clone().applyMatrix4(inv);
+    if (s.kind === 'centre') a = { kind: 'cyl', origin: p, axis: s.f.n.clone().transformDirection(inv), radius: s.f.r };
+    else if (a.kind === 'cyl') a = { ...a, origin: a.origin.clone().addScaledVector(a.axis, p.clone().sub(a.origin).dot(a.axis)) };
+    else a = { ...a, origin: p };
+  }
+  return { h, a };
+}
+function pickJointFace(e) {
+  const { h, a: picked } = jointFaceAt(e) ?? {};
   if (!pickJoint.first) {
     if (!h) return say('click a face on the part that moves · Esc cancels');
-    pickJoint.first = { m: h.body, a: faceAxis(h) };
+    pickJoint.first = { m: h.body, a: picked };
     selectBodies([h.body], 'set');
     return say(`${nameOf(h.body)} moves: click a face on the part it moves on, or empty space for the ground · Esc cancels`);
   }
   if (h?.body === pickJoint.first.m) return say('click a face on another part, or empty space for the ground');
-  const { m, a: a1 } = pickJoint.first, parent = h?.body ?? null, a2 = h && faceAxis(h);
+  const { m, a: a1 } = pickJoint.first, parent = h?.body ?? null, a2 = h && picked;
   const round = (a) => a && a.kind !== 'plane';
   const align = parent && !jointsOf(bodyKeys().get(m)).length ? snapFace(a1, a2) : null;   // a part already jointed is where its joints put it: only its first joint snaps
   const a = round(a2) ? a2 : round(a1) ? moved(a1, align) : a2 ?? a1;   // the joint lives on the parent: the faces meet there
@@ -1377,7 +1393,7 @@ function jointRow(j) {
       applyExplode(); saveJoints();
     };
     i.addEventListener('input', take);
-    i.addEventListener('change', () => { take(); renderJoints(); });   // done: redraw so the sliders take the new range
+    i.addEventListener('change', () => { take(); syncJointRow(j); });   // done: the slider takes the new range. Not a whole redraw: the blur that fires this is the press on × or Flip, and a redraw swapped that button out before its click landed
     return mk('label', {}, label, i);
   };
   const keys = bodyKeys(), sel = mk('select', { className: 'ghost' }, mk('option', { value: '', textContent: 'ground' }),
@@ -1397,7 +1413,12 @@ function jointRow(j) {
 function syncJointRow(j) {
   const row = document.querySelector(`#joints .joint[data-id="${j.id}"]`);
   if (!row) return;
-  for (const i of row.querySelectorAll('[data-key]')) { const v = jointVal(j, i.dataset.key); if (i.type === 'range') i.value = v; else if (document.activeElement !== i) i.value = +v.toFixed(3); }
+  const size = bbox ? bbox.getSize(new THREE.Vector3()).length() : 100;
+  for (const i of row.querySelectorAll('[data-key]')) {
+    const v = jointVal(j, i.dataset.key);
+    if (i.type === 'range') { if (i.dataset.key === 'value') [i.min, i.max] = valueRange(j, size); i.value = v; }   // min/max moved its range
+    else if (document.activeElement !== i) i.value = +v.toFixed(3);
+  }
 }
 
 // Joints are kept per file on the server, so a reload brings them back and Claude can read and write them

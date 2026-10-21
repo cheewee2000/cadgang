@@ -215,12 +215,19 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     return !hit || hit.distance >= raycaster.ray.origin.distanceTo(p) - scaleHint * 1e-3;
   }
   let scaleHint = 1;
-  function pick(e) {
+  /** The nearest visible snap (end, mid, centre, quad) within SNAP_PX of the pointer: { kind, p, f }, or null. */
+  function snapAt(e) {
     if (dirty) build();
     const m = local(e);
     const near = [];
     for (const s of snaps) { const q = toScreen(s.p); if (q.z > 1) continue; const d = Math.hypot(q.x - m.x, q.y - m.y); if (d < SNAP_PX) near.push([d, s]); }
-    for (const [, s] of near.sort((a, b) => a[0] - b[0]).slice(0, 6)) if (unoccluded(s.p)) return { snap: s, f: s.f, p: s.p };
+    for (const [, s] of near.sort((a, b) => a[0] - b[0]).slice(0, 6)) if (unoccluded(s.p)) return s;
+    return null;
+  }
+  function pick(e) {
+    const s = snapAt(e);
+    if (s) return { snap: s, f: s.f, p: s.p };
+    const m = local(e);
     const curves = [];
     for (const f of features) {
       let bd = CURVE_PX;
@@ -448,7 +455,7 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     get on() { return on; },
     setOn(v) { on = v; pending = null; clearHl(); clearSel(); canvas.style.cursor = v ? 'crosshair' : ''; if (v) dirty = true; },
     invalidate() { dirty = true; faceCache.clear(); },
-    hover: onHover, click: onClick, projectLabels,
+    hover: onHover, click: onClick, projectLabels, snapAt,
     cancel() { const had = !!pending; pending = null; clearSel(); return had; },
     get dims() { return dims; },
     get features() { if (dirty) build(); return features; },   // for headless drives

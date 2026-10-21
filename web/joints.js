@@ -153,7 +153,9 @@ export function sweepJoints(meshes, joints, { steps = 36, gap = 0, only = null, 
     const poses = vals.map((v) => solvePoses(joints.map((x) => (x === j ? { ...x, value: v } : x))));
     const keys = [...meshes.keys()], I = new THREE.Matrix4();
     const at = (P, k) => P.get(k) ?? I;
-    const moving = keys.filter((k) => poses.some((P) => !at(P, k).equals(at(poses[0], k))));
+    const carried = new Set([j.body]);   // the joint's part and every part riding on it: a range of one value (min = max) moves nothing, yet sits somewhere
+    for (let grew = true; grew;) { grew = false; for (const x of joints) if (x.parent && carried.has(x.parent) && !carried.has(x.body)) { carried.add(x.body); grew = true; } }
+    const moving = keys.filter((k) => carried.has(k));
     const still = keys.filter((k) => !moving.includes(k));
     const hits = new Map();   // still body → [value index, ...]
     poses.forEach((P, i) => {
@@ -169,7 +171,7 @@ export function sweepJoints(meshes, joints, { steps = 36, gap = 0, only = null, 
       const spans = [];
       for (const i of is) { const s = spans.at(-1); if (s && s[2] === i - 1) { s[1] = vals[i]; s[2] = i; } else spans.push([vals[i], vals[i], i]); }
       const first = is.map((i) => vals[i]).sort((x, y) => Math.abs(x - j.value) - Math.abs(y - j.value))[0];
-      return { body: b, spans: spans.map(([x, y]) => [x, y]), always: is.length === vals.length, first };
+      return { body: b, spans: spans.map(([x, y]) => [x, y]), always: hi > lo && is.length === vals.length, first };
     });
     out.push({ id: j.id, name: j.name, body: j.body, range: [lo, hi], unit: turns(j.type) ? '°' : 'mm', current: j.value, contacts });
   }
