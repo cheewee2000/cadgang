@@ -164,6 +164,7 @@ select.ghost:hover { opacity: 0.55; }
 #viewport canvas.oncap:active { cursor: grabbing; }
 #viewport canvas.onsect { cursor: ns-resize; }
 #viewport canvas.picking { cursor: crosshair; }
+#viewport canvas.drawing, #viewport canvas.drawing.oncap { cursor: crosshair; }   /* a markup tool: never the hand */
 .sect { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); }
 .sect input[type=range] { width: 120px; accent-color: var(--ink); }
 .sect button { font-size: var(--fs-12); padding: 4px 8px; }

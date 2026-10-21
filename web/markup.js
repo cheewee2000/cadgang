@@ -931,6 +931,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     tool = tool === name ? null : name;
     for (const b of document.querySelectorAll('[data-tool]')) b.classList.toggle('on', b.dataset.tool === tool);   // ADD AN IMAGE sits by the planes, not in the markup bar
     canvas.style.cursor = tool ? 'crosshair' : '';
+    canvas.classList.toggle('drawing', !!tool);   // under the view's grab hand over parts, even after measure clears the cursor
     if (tool !== 'arrow' && tool !== 'path') snap?.clearSnap();   // (and the IMAGE tool's lit face)
     if (tool === 'image') { picked = null; fileInput.click(); }   // choose the picture, then click (or drag) on a face
     if (!tool) { current = null; rebuild(); }
