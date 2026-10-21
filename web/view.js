@@ -32,6 +32,7 @@ import { silhouetteEdges, silhouetteFor } from './silhouette.js';
 import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
 import { createViewCube } from './viewcube.js';
 import { createScaleRef } from './scaleref.js';
+import { createTriad } from './triad.js';
 import { createPlanes } from './planes.js';
 import { turnAbout as turnOrbit, yawPitchOf, offsetOf } from './orbitmath.js';
 
@@ -711,7 +712,7 @@ function showAllBodies() { for (const m of model.children) setBodyVisible(m, tru
 const selActions = {
   hide: hideSelected,
   show: () => eachSelected((m) => setBodyVisible(m, true)),
-  only: () => { for (const m of model.children) setBodyVisible(m, selected.has(m)); syncRows(); commit(); },
+  only: () => { if (!selected.size) return say('select a part first'); for (const m of model.children) setBodyVisible(m, selected.has(m)); syncRows(); commit(); },   // nothing selected hides nothing
   clear: () => selectBodies([], 'set'),
 };
 for (const b of document.querySelectorAll('[data-sel]')) b.addEventListener('click', () => selActions[b.dataset.sel]());
@@ -885,6 +886,7 @@ function ghostSelected() { const on = !sel().every((m) => m.userData.ghost); for
 const BODY_CMDS = [
   { key: 't', label: 'Selected transparent', run: ghostSelected, on: () => selected.size && sel().every((m) => m.userData.ghost) },
   { key: 's', label: 'Show only selected', run: () => selActions.only() },
+  { key: 'q', label: 'Move triad', run: () => setTriad(!triadOn), on: () => triadOn },
 ];
 // the selection bar gets Transparent, and a colour with its reset
 {
@@ -894,6 +896,7 @@ const BODY_CMDS = [
   color.addEventListener('click', () => openColorMenu(color, color.dataset.hex, (rgb) => { setTint(sel(), rgb); rerender(); paintFinishes(); color.style.background = color.dataset.hex = hexOfRGB(rgb); }, () => commit()));   // the rows' swatches and colour names follow
   const reset = btn('↺', "Back to the file's colour", () => { setTint(sel(), null); rerender(); paintFinishes(); paintSelection(); commit(); });
   bar.insertBefore(btn('Transparent', 'Make them transparent (T)', ghostSelected), clear);
+  bar.insertBefore(btn('Reset move', 'Put the selected parts back where the file put them', () => resetPlacement()), clear);
   bar.insertBefore(color, clear); bar.insertBefore(reset, clear);
 }
 // A body's explode vector at full slider: the solver's offset, or along the axis the
@@ -1007,7 +1010,7 @@ const partKey = (m) => { const all = model.children; return `${m.userData.name}#
 let partsReady = false, partsSaved = '{}', partsTimer = null;
 function partsState() {
   const out = {};
-  for (const m of model.children) if (m.userData.axis || m.userData.pull != null || m.userData.exTo || m.userData.fixStage != null) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null, ...(m.userData.exTo && { exTo: m.userData.exTo.toArray().map((v) => +v.toFixed(4)) }), ...(m.userData.fixStage != null && { stage: m.userData.fixStage }) };
+  for (const m of model.children) if (m.userData.axis || m.userData.pull != null || m.userData.exTo || m.userData.place || m.userData.fixStage != null) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null, ...(m.userData.exTo && { exTo: m.userData.exTo.toArray().map((v) => +v.toFixed(4)) }), ...(m.userData.place && { place: placeArr(m) }), ...(m.userData.fixStage != null && { stage: m.userData.fixStage }) };
   if (rot.w < 1 - 1e-9) out['@rot'] = rotArr();   // the axes and marks above are in this turned frame
   const names = namesOf();
   if (Object.keys(names).length) out['@names'] = names;
@@ -1033,11 +1036,32 @@ function loadParts() {
     const r = d.parts?.['@rot'];
     if (r) { bakeRot(new THREE.Quaternion().fromArray(r)); history.list = []; history.i = -1; queueMicrotask(commit); }   // undo never goes back past the saved turn
     if (d.parts?.['@names']) { applyNames(d.parts['@names']); history.list = []; history.i = -1; queueMicrotask(commit); }
-    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; m.userData.exTo = p.exTo ? new THREE.Vector3(...p.exTo) : undefined; m.userData.fixStage = p.stage ?? undefined; } }
+    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; m.userData.exTo = p.exTo ? new THREE.Vector3(...p.exTo) : undefined; m.userData.place = placeOf(p.place); m.userData.fixStage = p.stage ?? undefined; } }
     partsSaved = JSON.stringify(partsState()); partsReady = true;
     applyExplode();
   }).catch(() => { partsReady = true; });
 }
+/**
+ * A part moved with the triad keeps that as its placement, userData.place = { t, q }: turned by q about its
+ * own centre, then moved by t, before any explode or joint. The matrix that does it, in the model's frame.
+ */
+const restCentre = (m) => (m.geometry.boundingBox ?? (m.geometry.computeBoundingBox(), m.geometry.boundingBox)).getCenter(new THREE.Vector3());
+function placeMatrix(m) {
+  const pl = m.userData.place;
+  if (!pl) return new THREE.Matrix4();
+  const c = restCentre(m);
+  return new THREE.Matrix4().compose(c.clone().add(pl.t).sub(c.clone().applyQuaternion(pl.q)), pl.q, new THREE.Vector3(1, 1, 1));
+}
+/** Set a part's placement from a matrix of the placeMatrix kind (identity drops it). */
+function setPlaceMatrix(m, M) {
+  const P = new THREE.Vector3(), Q = new THREE.Quaternion(), S = new THREE.Vector3();
+  M.decompose(P, Q, S);
+  const c = restCentre(m), t = P.sub(c).add(c.clone().applyQuaternion(Q));
+  m.userData.place = t.lengthSq() < 1e-12 && Math.abs(Q.w) > 1 - 1e-12 ? undefined : { t, q: Q };
+}
+const placeArr = (m) => (m.userData.place ? [...m.userData.place.t.toArray(), ...m.userData.place.q.toArray()].map((v) => +v.toFixed(6)) : null);
+const placeOf = (a) => (a ? { t: new THREE.Vector3(a[0], a[1], a[2]), q: new THREE.Quaternion(a[3], a[4], a[5], a[6]) } : undefined);
+
 function applyExplode() {
   const k = ui.mode === 'joint' ? 0 : parseFloat($('#explode').value) / 100;   // in joint mode the assembly is together: only joints move parts
   const done = new Set();
@@ -1060,6 +1084,10 @@ function applyExplode() {
     const w = keys && poses.get(keys.get(m));
     m.position.copy(m.userData.exPos);
     if (w) { w.decompose(P, Q, S); m.position.add(P); m.quaternion.copy(Q); } else m.quaternion.identity();
+    if (m.userData.place) {   // moved with the triad: that placement first, then the joint's pose, then the explode
+      const M = (w ? w.clone() : new THREE.Matrix4()).multiply(placeMatrix(m));
+      M.decompose(P, Q, S); m.position.copy(m.userData.exPos).add(P); m.quaternion.copy(Q);
+    }
     const e = m.userData.edges;
     if (e) { e.position.copy(m.position); e.quaternion.copy(m.quaternion); }
   }
@@ -1205,6 +1233,8 @@ function bakeRot(q) {
     if (m.userData.sil?.line) { m.remove(m.userData.sil.line); m.userData.sil.line.geometry.dispose(); }
     delete m.userData.sil;          // the silhouette candidates were in the old pose too
     m.userData.offset?.applyQuaternion(d);
+    m.userData.exTo?.applyQuaternion(d);   // where it was dragged while exploded turns with it
+    if (m.userData.place) { m.userData.place.t.applyQuaternion(d); m.userData.place.q.premultiply(d).multiply(d.clone().invert()); }   // and so does a triad placement
   }
   rot.copy(q);
   bbox = new THREE.Box3(); for (const m of model.children) bbox.union(m.geometry.boundingBox);
@@ -1436,6 +1466,18 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
     endPickAxis();
     return;
   }
+  const th = e.button === 0 && triad.hit(e);
+  if (th) {   // the triad: an arrow slides the selection along its axis, a ring turns it about the triad's centre
+    const origin = triad.group.position.clone(), axis = th.axis.clone();
+    const ref = new THREE.Vector3(axis.y, axis.z, axis.x);   // a direction square to the axis (x → y, y → z, z → x): where a ring's angle counts from
+    const from = th.kind === 'move' ? triad.along(e, origin, axis) : triad.angle(e, origin, axis, ref);
+    if (from != null) {
+      const bodies = sel().filter((m) => m.isMesh);
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, downX: e.clientX, downY: e.clientY, triad: { kind: th.kind, key: th.key, axis, origin, ref, from, bodies, starts: bodies.map((m) => placeMatrix(m)) } };
+      renderer.domElement.setPointerCapture(e.pointerId);
+      return;
+    }
+  }
   if (e.pointerType === 'touch') {
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     renderer.domElement.setPointerCapture(e.pointerId);
@@ -1448,7 +1490,11 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   const tooling = measure.on || !!$('[data-tool].on');   // a markup or measure tool owns shift
   drag = { id: e.pointerId, x: e.clientX, y: e.clientY, pan: e.button === 2 || e.button === 1 || (e.shiftKey && tooling), downX: e.clientX, downY: e.clientY, click: e.button === 0 };
   if (e.button === 0 && e.shiftKey && !tooling && e.pointerType !== 'touch') drag.marquee = true;
-  const slide = ui.scroll === 'trackpad' ? !e.altKey : e.altKey;   // trackpad scheme: a plain drag slides the part along its axis, ⌥ places it freely; mouse: the other way round
+  // ⌥-drag slides a part along its explode axis; a plain drag places it freely when exploded and turns the
+  // view when not. A plain drag
+  // that slid the part made it the explode slider's handle, so pressing on a part to turn the view, or to
+  // place it, sent the whole assembly out along the slider instead.
+  const slide = e.altKey;
   if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
   else if (e.button === 0 && !e.shiftKey && !measure.on && e.pointerType !== 'touch') {
     const hit = partAt(e);
@@ -1508,6 +1554,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     return;
   }
   if (!drag) {
+    if (triad.hover(e)) { renderer.domElement.classList.add('oncap'); hoverBody(null); return; }   // over the triad: its handle lights up
     if (measure.on) { measure.hover(e); return; }
     // A press on a cut face drags the section, anywhere else on a part drags the part: over a cut face the
     // caps light up and the cursor turns to an up-down arrow, over a part it gets its outline and a hand.
@@ -1540,6 +1587,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     return;
   }
   if (drag.joint) { driveJoint(drag.joint, dx, dy, e.altKey); return; }   // ⌘ was read at the press
+  if (drag.triad) { dragTriad(e, drag.triad); return; }
   if (drag.part) {
     const m = drag.part.m, max = maxTravel(m), S = stageCount();
     const d = Math.max(0, max * stageFrac(m, +$('#explode').value / 100) + dx * drag.part.sx + dy * drag.part.sy);
@@ -1586,7 +1634,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   }
   if (e.button === 2 && still) showMenu(e.clientX, e.clientY, partAt(e)?.body);
   if (drag?.limit) renderJoints();   // the min/max fields take the dragged limit
-  if (drag?.sect || drag?.part || drag?.joint || drag?.limit || drag?.move) commit();
+  if (drag?.sect || drag?.part || drag?.joint || drag?.limit || drag?.move || drag?.triad) commit();
   drag = null;
   touches.delete(e.pointerId);
 });
@@ -1600,7 +1648,7 @@ function hitAt(e) {
   raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   return raycaster.intersectObjects(model.children, false)[0]?.point ?? null;
 }
-attachOrbitInput(renderer.domElement, { orbit, getCamera: () => camera, THREE, hitAt, isFlat: () => ui.flat, scheme: () => ui.scroll });
+attachOrbitInput(renderer.domElement, { orbit, getCamera: () => camera, THREE, hitAt, isFlat: () => ui.flat });
 
 // Is the pointer over a cut face? The first hit on the kept side of the plane
 // being a back face means the ray entered the solid through the cut.
@@ -2409,16 +2457,6 @@ function setUnits(u) {
 function flipDrawing() { orbit.pitch = -orbit.pitch; }
 $('#sideBtn').addEventListener('click', () => { flipDrawing(); commit(); });
 $('#unitsSel').addEventListener('change', (e) => { setUnits(e.target.value); commit(); });
-ui.scroll = 'trackpad';
-$('#scrollSel').addEventListener('change', (e) => {
-  ui.scroll = e.target.value;
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(PREFS_KEY)), scroll: ui.scroll })); } catch {}
-});
-// another tab changed it: follow, or this tab's next save would write its stale choice back
-window.addEventListener('storage', (e) => {
-  if (e.key !== PREFS_KEY) return;
-  try { const v = JSON.parse(e.newValue)?.scroll; if (v === 'mouse' || v === 'trackpad') ui.scroll = $('#scrollSel').value = v; } catch {}
-});
 $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
 $('#gridBtn').addEventListener('click', () => toggle('grid', '#gridBtn'));
@@ -2790,19 +2828,36 @@ new ResizeObserver(resize).observe(viewport);
 // WIRE draws a curved surface's outline where it turns away from the eye, as SolidWorks does
 // (silhouette.js). A body's candidate edges are found the first time the wireframe shows it; the
 // outline is redone only when the eye moves relative to the body (orbit, explode, a turn).
+// Big models: the work is spread over frames, a few milliseconds each, carrying on round the bodies
+// from where the last frame stopped, and a body off screen waits until it is on it. So turning a
+// model of hundreds of bodies stays smooth; their outlines catch up within a few frames.
 const silEye = new THREE.Vector3(), silDir = new THREE.Vector3(), silInv = new THREE.Matrix4();
+const silFrustum = new THREE.Frustum(), silSphere = new THREE.Sphere(), SIL_BUDGET_MS = 6;
+let silNext = 0;   // the body the next frame starts at
 function updateSilhouettes() {
-  for (const m of model.children) {
+  const list = model.children, t0 = performance.now();
+  if (ui.wire) camera.updateMatrixWorld();
+  if (ui.wire) silFrustum.setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  let step = 0;
+  for (; step < list.length; step++) {
+    if (ui.wire && performance.now() - t0 > SIL_BUDGET_MS) break;   // the rest next frame
+    const m = list[(silNext + step) % list.length];
     if (!m.isMesh) continue;
     const show = ui.wire && m.visible && !!m.userData.edges;
     let sil = m.userData.sil;
     if (!show) { if (sil?.line) sil.line.visible = false; continue; }
+    m.updateMatrixWorld();
+    if (!m.geometry.boundingSphere) m.geometry.computeBoundingSphere();
+    if (!silFrustum.intersectsSphere(silSphere.copy(m.geometry.boundingSphere).applyMatrix4(m.matrixWorld))) continue;   // off screen: later
     if (!sil) {
       const found = silhouetteEdges(m.geometry, m.userData.faces?.length ? { faces: m.userData.faces } : { creases: true });
       sil = m.userData.sil = { found, key: '' };
       if (found) {
         const g = new THREE.BufferGeometry();
         g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(found.pos.length), 3).setUsage(THREE.DynamicDrawUsage));
+        // the buffer is zeros past what is drawn: its bounds are the body's own, or Fit and the floor take in the origin
+        if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+        g.boundingBox = m.geometry.boundingBox.clone(); g.boundingSphere = m.geometry.boundingSphere.clone();
         sil.line = new THREE.LineSegments(g, edgeMaterial);
         sil.line.raycast = () => {};   // never a pick, measure or markup target
         sil.line.frustumCulled = false;   // its points change every view: a bounds check would go stale
@@ -2812,7 +2867,6 @@ function updateSilhouettes() {
     }
     if (!sil.line) continue;
     sil.line.visible = true;
-    m.updateMatrixWorld();
     silInv.copy(m.matrixWorld).invert();
     silEye.copy(camera.position).applyMatrix4(silInv);
     if (ui.ortho) silDir.copy(camera.getWorldDirection(new THREE.Vector3())).transformDirection(silInv);
@@ -2824,6 +2878,7 @@ function updateSilhouettes() {
     attr.needsUpdate = true;
     sil.line.geometry.setDrawRange(0, n / 3);
   }
+  silNext = (silNext + Math.max(1, step % Math.max(1, list.length))) % Math.max(1, list.length);   // the next frame carries on where this one stopped
 }
 
 // The view cube (lower right): a face, edge or corner turns the view to look from there, over a
@@ -2869,6 +2924,73 @@ hudBR.append(viewCube.el, $('#sectAxis'));
 const scaleRef = createScaleRef({ THREE, scene, getBox: () => bbox, onChange: () => rerender() });
 viewCube.side.prepend(scaleRef.el);
 
+// THE TRIAD (Q, or its button beside the scale reference, by the view cube): SolidWorks' move triad on the selected parts. An arrow
+// slides them along x, y or z, a ring turns them about it (⇧: grid steps, 15° steps). Each part keeps it as
+// its placement (saved, undone with ⌘Z); Reset move puts the selected parts back.
+const TRIAD_KEY = 'cadgang.triad';
+let triadOn = false;
+try { triadOn = localStorage.getItem(TRIAD_KEY) === '1'; } catch {}
+const triad = createTriad({ THREE, scene, getCamera: () => camera, canvas: renderer.domElement });
+{   // its button, between the scale reference and Fit: three arrows from a corner, a ring round one
+  const b = Object.assign(document.createElement('button'), { id: 'triadBtn', className: 'ghost triad-btn', title: 'Move triad: select parts, then drag an arrow to slide them along x, y or z, a ring to turn them (⇧ snaps). Q' });
+  b.innerHTML = '<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M7 13V3M5 5l2-2 2 2"/><path d="M7 13h10M15 11l2 2-2 2"/><path d="M7 13l-4.5 4.5M2.5 14.5v3h3"/><ellipse cx="7" cy="13" rx="5" ry="1.8" stroke-width="1"/></svg>';
+  b.addEventListener('click', () => setTriad(!triadOn));
+  b.classList.toggle('on', triadOn);
+  scaleRef.el.after(b);
+}
+function setTriad(on) {
+  triadOn = on;
+  try { localStorage.setItem(TRIAD_KEY, on ? '1' : '0'); } catch {}
+  $('#triadBtn')?.classList.toggle('on', on);
+  if (on && !selected.size) say('triad on: select a part to move it');
+}
+/** Each frame: on the selection's centre while it is on and something is selected. */
+function updateTriad() {
+  const ms = triadOn && !ui.flat ? sel().filter((m) => m.isMesh && m.visible) : [];
+  if (!ms.length) { triad.place(null); return; }
+  if (!drag?.triad) {   // held still while it is dragged: the drag reads against where it was pressed
+    const b = new THREE.Box3();
+    for (const m of ms) { m.updateMatrixWorld(); b.expandByObject(m); }
+    triad.place(b.getCenter(new THREE.Vector3()));
+  }
+  triad.frame();
+}
+function dragTriad(e, t) {
+  if (t.kind === 'move') {
+    const now = triad.along(e, t.origin, t.axis);
+    if (now == null) return;
+    let d = now - t.from;
+    if (e.shiftKey && gridStep) d = Math.round(d / gridStep) * gridStep;
+    const T = new THREE.Matrix4().makeTranslation(t.axis.x * d, t.axis.y * d, t.axis.z * d);
+    t.bodies.forEach((m, i) => setPlaceMatrix(m, T.clone().multiply(t.starts[i])));
+    triad.group.position.copy(t.origin).addScaledVector(t.axis, d);
+    say(`moved ${fmtLen(d)} along ${t.key}`);
+  } else {
+    const now = triad.angle(e, t.origin, t.axis, t.ref);
+    if (now == null) return;
+    let a = now - t.from;
+    a = Math.atan2(Math.sin(a), Math.cos(a));   // the short way round
+    t.total = (t.total ?? 0) + (a - (t.last ?? 0)); t.last = a;
+    let turn = t.total;
+    if (e.shiftKey) turn = Math.round(turn / (Math.PI / 12)) * (Math.PI / 12);
+    const Rq = new THREE.Quaternion().setFromAxisAngle(t.axis, turn);
+    t.bodies.forEach((m, i) => {   // about the triad's centre, in the part's own (unexploded) frame
+      const pr = t.origin.clone().sub(m.userData.exPos ?? new THREE.Vector3());
+      const M = new THREE.Matrix4().makeTranslation(pr.x, pr.y, pr.z).multiply(new THREE.Matrix4().makeRotationFromQuaternion(Rq)).multiply(new THREE.Matrix4().makeTranslation(-pr.x, -pr.y, -pr.z));
+      setPlaceMatrix(m, M.multiply(t.starts[i]));
+    });
+    say(`turned ${(turn * 180 / Math.PI).toFixed(1)}° about ${t.key}`);
+  }
+  applyExplode();
+}
+function resetPlacement() {
+  const ms = sel().filter((m) => m.userData.place);
+  if (!ms.length) return say('the selected parts are where the file put them');
+  for (const m of ms) m.userData.place = undefined;
+  applyExplode(); commit();
+  say(`${ms.length} part${ms.length === 1 ? '' : 's'} back where the file put ${ms.length === 1 ? 'it' : 'them'}`);
+}
+
 // MATERIALS needs something for metal and glass to reflect in the live view: a soft studio room.
 let roomEnv = null;
 (function loop() {
@@ -2884,6 +3006,7 @@ let roomEnv = null;
   planes.follow();
   applyCamera();
   updateSilhouettes();
+  updateTriad();
   // The ground goes as soon as it would hide the model: seen from under it (camera below it, or an ortho view
   // looking up, whose rays start below it). The grid, and the WebGL render's floor; the Metal render drops its own.
   const above = (z) => (ui.ortho ? camera.getWorldDirection(new THREE.Vector3()).z < 0 : camera.position.z >= z);
@@ -3084,7 +3207,7 @@ async function openShare(id) {
   } catch (e) { progressEnd(); loadFailed('shared view', e); }
 }
 // For headless drives: the scene objects behind the page.
-window.__view = { fitNames, selected, selectBodies, bodiesInWindow, model, section, orbit, ui, measure, rt, THREE, planes, get joints() { return joints; }, get poses() { return poses; }, jointLinks, get limitHandles() { return limitHandles; }, addJoint, setJointValue, faceAxis, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
+window.__view = { fitNames, get triad() { return triad; }, updateTriad: () => updateTriad(), selected, selectBodies, bodiesInWindow, model, section, orbit, ui, measure, rt, THREE, planes, get joints() { return joints; }, get poses() { return poses; }, jointLinks, get limitHandles() { return limitHandles; }, addJoint, setJointValue, faceAxis, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
   project: (x, y, z) => { const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3(x, y, z).project(camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; } };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
@@ -3146,7 +3269,7 @@ const CMDS = [
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },
   // P pen and ⇧P pencil, as in Figma ('pen' is the pencil's stroke kind in saved markups, kept for old files)
-  ...[['b', 'path', 'Bezier'], ['p', 'pen', 'Pencil'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['t', 'text', 'Text', true], ['i', 'image', 'Image', true], ['r', 'erase', 'Erase']].map(([key, t, label, shift]) => ({ key, shift, label, btn: `[data-tool="${t}"]`, run: () => { markup.setTool(t); if ($('[data-tool].on')) setMeasure(false); }, on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
+  ...[['b', 'path', 'Pen'], ['p', 'pen', 'Pencil'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['t', 'text', 'Text', true], ['i', 'image', 'Image', true], ['r', 'erase', 'Erase']].map(([key, t, label, shift]) => ({ key, shift, label, btn: `[data-tool="${t}"]`, run: () => { markup.setTool(t); if ($('[data-tool].on')) setMeasure(false); }, on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
   { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
   { sep: true },
   { key: 'd', label: 'Background: light / dark / dusk / dawn / night', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.bg !== 'light' },
@@ -3176,7 +3299,7 @@ const history = { list: [], i: -1 };
 function snap() {
   return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value, rot: rotArr(),
-    bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), finishes: model.children.map((m) => m.userData.finish ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3), null, m.userData.exTo?.toArray().map((v) => +v.toFixed(4)) ?? null]),
+    bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), finishes: model.children.map((m) => m.userData.finish ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3), null, m.userData.exTo?.toArray().map((v) => +v.toFixed(4)) ?? null, placeArr(m)]),
     markup: markup.items, dims: measure.dims, joints, names: namesOf() });
 }
 function commit() {
@@ -3184,7 +3307,7 @@ function commit() {
   if (s === history.list[history.i]) return;
   rerender();
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, scroll: ui.scroll, color: ui.color, ortho: ui.ortho, mode: ui.mode })); } catch {}
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, color: ui.color, ortho: ui.ortho, mode: ui.mode })); } catch {}
 }
 // View preferences outlive the page, like the theme. Section, explode and body
 // visibility belong to a file and start fresh with it.
@@ -3193,7 +3316,6 @@ try {
   const p = JSON.parse(localStorage.getItem(PREFS_KEY));
   if (p?.look in PRESETS) ui.look = document.documentElement.dataset.look = $('#look').value = p.look;
   if (UNIT_MM[p?.units]) { ui.units = $('#unitsSel').value = p.units; }
-  if (p?.scroll === 'mouse') ui.scroll = $('#scrollSel').value = 'mouse';
   for (const k of ['edges', 'wire', 'grid', 'ruler', 'color']) if (typeof p?.[k] === 'boolean' && ui[k] !== p[k]) toggle(k, `#${k}Btn`);
   if (p?.ortho) setOrtho(true);
   if (p?.mode === 'joint') setMode('joint');
@@ -3207,7 +3329,7 @@ function apply(s) {
   if (ui.ortho !== st.ortho) setOrtho(st.ortho);
   if (st.units && st.units !== ui.units) setUnits(st.units);
   $('#sectPos').value = st.section.pos; section.flip = st.section.flip; setSectionAxis(st.section.axis);
-  model.children.forEach((m, i) => { const [axis, pull, , exTo] = st.parts?.[i] ?? []; m.userData.axis = axis || undefined; m.userData.pull = pull ?? undefined; m.userData.exTo = exTo ? new THREE.Vector3(...exTo) : undefined; });
+  model.children.forEach((m, i) => { const [axis, pull, , exTo, place] = st.parts?.[i] ?? []; m.userData.axis = axis || undefined; m.userData.pull = pull ?? undefined; m.userData.exTo = exTo ? new THREE.Vector3(...exTo) : undefined; m.userData.place = placeOf(place); });
   if (st.names !== undefined && JSON.stringify(st.names) !== JSON.stringify(namesOf())) applyNames(st.names);   // a state from an older file has no names or joints: leave them be
   if (st.joints !== undefined) setJoints(st.joints);
   $('#explode').value = st.explode; applyExplode();
