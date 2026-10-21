@@ -489,7 +489,7 @@ function setBodyVisible(m, on) {
   measure.invalidate();
 }
 
-// SELECTION: shift-click a part, shift-drag a window over several, or shift-click names in the list, then hide,
+// SELECTION: shift- or ⌘-click a part, shift-drag a window over several, or shift-click names in the list, then hide,
 // show, isolate or give them a material together (the bar over the viewport; H hides, ⇧H shows all, Esc clears).
 // A plain click selects one part, a click on nothing clears. A window takes the parts it holds whole.
 const selected = new Set();
@@ -1000,7 +1000,12 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
     const hit = partAt(e);   // a part under the mouse slides along its explode axis; empty space orbits
     const j = ui.mode === 'joint' && hit && (e.metaKey ? jointOf(hit.body) : drivingJoint(hit.body));   // ⌘: the part's own joint offset, even on a rigid one
     if (ui.mode === 'joint') { if (j && !(e.metaKey && j.type === 'ball')) drag.joint = { j, offset: e.metaKey, m: bodyOfKey(j.body), hit: hit.body, local: hit.point.clone().applyMatrix4(hit.body.matrixWorld.clone().invert()) }; }   // joint mode: a jointed part turns or slides on its joint, anything else orbits
-    else if (hit) { const v = explodeVec(hit.body); if (moves(hit.body, v)) drag.part = { m: hit.body, full: +$('#explode').value >= 100, ...screenAxis(hit.point, v.normalize()) }; }
+    else if (hit) {
+      const v = explodeVec(hit.body), full = +$('#explode').value >= 100;
+      // fully exploded, a part in a selection carries the others: each slides the same distance along its own axis
+      const group = full && selected.has(hit.body) && selected.size > 1 ? [...selected].filter((m) => m.isMesh && moves(m, explodeVec(m))) : null;
+      if (moves(hit.body, v)) drag.part = { m: hit.body, full, group, ...screenAxis(hit.point, v.normalize()) };
+    }
   }
   renderer.domElement.setPointerCapture(e.pointerId);
 });
@@ -1071,6 +1076,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   if (drag.part) {
     const m = drag.part.m, max = maxTravel(m), S = stageCount();
     const d = Math.max(0, max * stageFrac(m, +$('#explode').value / 100) + dx * drag.part.sx + dy * drag.part.sy);
+    if (drag.part.group) { const step = dx * drag.part.sx + dy * drag.part.sy; for (const g of drag.part.group) g.userData.pull = Math.max(0, maxTravel(g) + step); applyExplode(); return; }
     if (drag.part.full) { m.userData.pull = d; applyExplode(); return; }   // fully exploded: the drag places this part alone, there is its maximum
     if (d > max) m.userData.pull = d;   // past its maximum: that is the new maximum
     const f = Math.min(1, d / maxTravel(m));
@@ -1093,8 +1099,8 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     if (still) { const p = partAt(e); if (p) selectBodies([p.body], 'toggle'); }
     else selectBodies(bodiesInWindow(drag.downX, drag.downY, e.clientX, e.clientY, e.clientX < drag.downX), 'add');
   } else if (drag?.click && still && !drag.sect && !measure.on && !$('[data-tool].on') && e.button === 0) {   // a plain click: that part alone, or nothing
-    const p = partAt(e);
-    selectBodies(p ? [p.body] : [], 'set');
+    const p = partAt(e), add = e.metaKey || e.ctrlKey;   // ⌘-click toggles one, as in Finder
+    if (add) { if (p) selectBodies([p.body], 'toggle'); } else selectBodies(p ? [p.body] : [], 'set');
   }
   if (e.button === 2 && still) showMenu(e.clientX, e.clientY, partAt(e)?.body);
   if (drag?.limit) renderJoints();   // the min/max fields take the dragged limit
