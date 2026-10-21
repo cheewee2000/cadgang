@@ -197,6 +197,7 @@ select.ghost:hover { opacity: 0.55; }
 .bodies input { accent-color: var(--ink); margin: 0; }
 .bodies .mat-pick { display: none; flex: none; width: 10em; font: inherit; font-size: var(--fs-12); height: 20px; padding: 0 18px 0 4px; margin-left: auto; background-position: right 4px center; }
 .bodies label > span { flex: none; }
+.bodies label > span:not(.fold-gap):not(.body-edit) { flex: 0 1 auto; }   /* names give way, ellipsed, so the material picker stays right */
 .bodies label.hover { outline: var(--bw-hair) solid #ff5a1f; outline-offset: 1px; }   /* the body under the mouse, same orange as its overlay */
 :root[data-look="materials"] .bodies .mat-pick { display: block; }
 .bodies span:hover { text-decoration: underline; }

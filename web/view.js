@@ -1225,6 +1225,8 @@ function addJoint(m, type, a, parent = null, align = null) {
 let pickJoint = null;   // { first: { m, a } } once the moving part's face is in
 function startPickJoint() {   // in either mode: an exploded assembly stays exploded, its faces easier to reach
   hideMenu();
+  setMeasure(false);   // the face picks are the joint's: no measure or markup tool in the way
+  const t = $('[data-tool].on')?.dataset.tool; if (t) markup.setTool(t);
   pickJoint = {};
   renderer.domElement.classList.add('picking');
   $('#newJointBtn').classList.add('on');
