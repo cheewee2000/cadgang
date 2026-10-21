@@ -62,6 +62,7 @@ export function normalizeJoint(j) {
     align: Array.isArray(j?.align) && j.align.length === 16 && j.align.every(Number.isFinite) ? j.align.map(Number) : null,
     value: num(j?.value, 0), value2: num(j?.value2, 0), value3: num(j?.value3, 0), offset: num(j?.offset, 0), pitch: type === 'screw' ? num(j?.pitch, 1.5) : 0,
     min: j?.min == null || j.min === '' ? null : num(j.min, null), max: j?.max == null || j.max === '' ? null : num(j.max, null),
+    hide: j?.hide === true,   // its axis, track and limit dots off screen (the row's tick)
   };
   out.value = clampValue(out, out.value);
   return out;

@@ -285,3 +285,4 @@ header { justify-content: flex-start; column-gap: var(--sp-4); }
 .pen-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: flex; gap: var(--sp-1); background: var(--paper); border: var(--bw-hair) solid var(--rule); padding: 4px; }
 .pen-menu[hidden] { display: none; }
 .pen-menu-sep { width: var(--bw-hair); background: var(--rule); margin: 0 var(--sp-1); }
+.joint .jl input { accent-color: var(--ink); margin: 0; flex: none; }

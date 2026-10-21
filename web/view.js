@@ -769,7 +769,8 @@ function drawJointLinks() {
   for (const c of [...jointLinks.children]) { jointLinks.remove(c); c.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); }); }
   limitHandles = [];
   const all = linksHover || performance.now() < linksUntil;
-  const shown = all ? joints : ui.mode === 'joint' ? joints.filter((j) => j.id === lastJoint) : [];
+  // ticked joints: all of them in Joint mode or while the panel is pointed at; an unticked one never
+  const shown = all || ui.mode === 'joint' ? joints.filter((j) => !j.hide) : [];
   if (!shown.length) return;
   const size = bbox ? bbox.getSize(new THREE.Vector3()).length() : 100;
   const mat = () => Object.assign(new THREE.LineDashedMaterial({ color: 0xd11d1d, dashSize: size * 0.012, gapSize: size * 0.008, depthTest: false, transparent: true }));
@@ -1437,7 +1438,9 @@ function jointRow(j) {
   const size = bbox ? bbox.getSize(new THREE.Vector3()).length() : 100;
   const row = mk('div', { className: 'joint' });
   row.dataset.id = j.id;
-  row.append(mk('div', { className: 'jl' }, mk('b', { textContent: JOINT_LABEL[j.type] }), mk('span', { className: 'jname', textContent: labelOfKey(j.body), title: j.name }),
+  const tick = mk('input', { type: 'checkbox', checked: !j.hide, title: 'Show this joint’s axis and limit handles' });
+  tick.addEventListener('change', () => { j.hide = !tick.checked; drawJointLinks(); saveJoints(); commit(); });
+  row.append(mk('div', { className: 'jl' }, tick, mk('b', { textContent: JOINT_LABEL[j.type] }), mk('span', { className: 'jname', textContent: labelOfKey(j.body), title: j.name }),
     mk('button', { className: 'ghost', textContent: '×', title: 'Remove this joint', onclick: () => removeJoint(j) })));
   const drive = (key, second) => {
     const [lo, hi] = valueRange(j, size, second), unit = turns(j.type) && !second ? '°' : ' mm';
