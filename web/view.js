@@ -2632,6 +2632,7 @@ for (const c of CMDS) {
   const el = c.btn && $(c.btn);
   if (el) { el.dataset.tip = (el.title || c.label).replace(/\s*\([^)]*\)\s*$/, '') + (c.key ? ` · ${keyLabel(c)}` : ''); el.removeAttribute('title'); }
 }
+for (const el of [$('#explode'), $('#explodeSect')]) el.dataset.tip = `${el.dataset.tip ?? el.title} · ← → nudge, hold to scrub`, el.removeAttribute('title');
 document.addEventListener('pointerover', (e) => {
   const el = e.target.closest?.('[data-tip],[title]');
   if (!el) { tip.hidden = true; return; }
