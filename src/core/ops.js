@@ -30,6 +30,8 @@ import {
   brepSweep,
   brepPolyline,
   brepCompound,
+  partsOf,
+  setParts,
   brepSpline,
   brepHelix,
   brepOffset,
@@ -212,7 +214,9 @@ export const intersect = (base, ...tools) => boolean('intersect', base, tools.fl
 export function compound(...shapes) {
   const list = shapes.flat().filter(Boolean);
   if (list.length < 2) throw new GraphError('compound() needs at least two shapes to keep apart');
-  return brepCompound(list.map((s, i) => borrow(s, `shape${i + 1}`)));
+  // each operand's parts (a cell's result is named for the cell), so the STEP file names every solid
+  const parts = list.map((s) => partsOf(s) ?? [{ name: null, count: brepBodies(s) }]).flat();
+  return setParts(brepCompound(list.map((s, i) => borrow(s, `shape${i + 1}`))), parts);
 }
 
 // ---------------------------------------------------------------- modifiers

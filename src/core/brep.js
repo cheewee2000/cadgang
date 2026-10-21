@@ -969,6 +969,23 @@ export function brepDraft(shape, faces, angle, pull, neutralAt) {
   });
 }
 
+// ------------------------------------------------------------ part names
+// What a STEP file calls each solid. A cell's result is named after the cell ("lid"); a compound of
+// named results keeps each one's name for its solids, in order. Kept beside the shape, not on it:
+// an op that makes a new shape (a translate, a fuse) starts it unnamed, and the cell it ends in names it.
+const partNames = new WeakMap();   // shape → [{ name, count }]: `count` solids in a row are `name`
+
+/** The parts of a shape, in solid order, or null when nothing named it. */
+export const partsOf = (shape) => (shape && partNames.get(shape)) || null;
+/** Set a shape's parts. */
+export function setParts(shape, parts) { if (shape && parts?.length) partNames.set(shape, parts); return shape; }
+/** Name a shape's solids `name` unless it already carries part names (a compound of named parts). */
+export function nameParts(shape, name) {
+  if (!shape || partNames.has(shape) || typeof shape.blobSTEP !== 'function') return shape;
+  try { partNames.set(shape, [{ name, count: brepBodies(shape) }]); } catch { /* not a solid: nothing to name */ }
+  return shape;
+}
+
 /** Several shapes kept as separate bodies in one compound: an assembly, nothing fused. */
 export function brepCompound(shapes) {
   return attempt('compound', () => track(rc.compoundShapes(shapes)));
@@ -999,14 +1016,67 @@ export function brepDistanceBetween(a, b) {
 
 // -------------------------------------------------------------- STEP file I/O
 
-/** Serialise a B-rep solid as a STEP AP214 file. Returns a Buffer. */
-export async function exportStep(shape) {
+/**
+ * Serialise a B-rep solid as a STEP AP214 file. Returns a Buffer. Each solid is written as a product
+ * named for its part (partsOf), else `name`: "lid", "tray" in the file, not OCCT's "Open CASCADE STEP
+ * translator 7.6 1.2". A part of several solids is "name", "name 2", … No colours are written, as before.
+ */
+export async function exportStep(shape, { name = 'part' } = {}) {
   requireSolid(shape, 'shape');
   if (typeof shape.blobSTEP !== 'function') {
     throw new GraphError('This shape has no exact B-rep to write — export it as STL instead');
   }
-  const blob = await attempt('STEP export', () => shape.blobSTEP());
-  return Buffer.from(await blob.arrayBuffer());
+  try {
+    return namedStep(shape, name);
+  } catch {
+    const blob = await attempt('STEP export', () => shape.blobSTEP());   // the plain writer, unnamed, if the named one fails
+    return Buffer.from(await blob.arrayBuffer());
+  }
+}
+
+/** The solids of a shape with their names: [{ solid (TopoDS), name }] in file order. */
+function namedSolids(shape, name) {
+  const solids = [...kernel().iterTopo(shape.wrapped, 'solid')];
+  const parts = partsOf(shape);
+  const names = [];
+  if (parts && parts.reduce((n, p) => n + p.count, 0) === solids.length) {
+    const seen = new Map();
+    for (const p of parts) for (let i = 0; i < p.count; i++) {
+      const base = p.name || name, k = (seen.get(base) ?? 0) + 1;
+      seen.set(base, k);
+      names.push(k === 1 ? base : `${base} ${k}`);
+    }
+  } else solids.forEach((_, i) => names.push(solids.length === 1 ? name : `${name} ${i + 1}`));
+  return solids.map((solid, i) => ({ solid, name: names[i] }));
+}
+
+function namedStep(shape, name) {
+  const file = `/export-${Date.now()}-${Math.random().toString(36).slice(2)}.step`;
+  const str = (s) => new OC.TCollection_ExtendedString_2(s, true);
+  const doc = new OC.TDocStd_Document(str('XmlOcaf'));
+  try {
+    OC.XCAFDoc_ShapeTool.SetAutoNaming(false);
+    const tool = OC.XCAFDoc_DocumentTool.ShapeTool(doc.Main()).get();
+    for (const { solid, name: n } of namedSolids(shape, name)) {
+      const label = tool.NewShape();
+      tool.SetShape(label, solid);
+      OC.TDataStd_Name.Set_1(label, str(n));
+    }
+    tool.UpdateAssemblies();
+    // the session and the document belong to the handles made from them: nothing here is freed by hand (freeing them broke the next export)
+    const session = new OC.XSControl_WorkSession();
+    const writer = new OC.STEPCAFControl_Writer_2(new OC.Handle_XSControl_WorkSession_2(session), false);
+    writer.SetNameMode(true);
+    writer.SetColorMode(false);
+    OC.Interface_Static.SetIVal('write.step.assembly', 2);
+    OC.Interface_Static.SetIVal('write.step.schema', 5);
+    const progress = new OC.Message_ProgressRange_1();
+    if (!writer.Transfer_1(new OC.Handle_TDocStd_Document_2(doc), OC.STEPControl_StepModelType.STEPControl_AsIs, null, progress)) throw new Error('transfer');
+    if (writer.Write(file) !== OC.IFSelect_ReturnStatus.IFSelect_RetDone) throw new Error('write');
+    return Buffer.from(OC.FS.readFile(file));
+  } finally {
+    try { OC.FS.unlink(file); } catch { /* never written */ }
+  }
 }
 
 /**
