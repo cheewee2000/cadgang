@@ -271,3 +271,6 @@ footer > * { white-space: nowrap; }
 .marquee[hidden] { display: none; }
 .marquee.crossing { border-style: dashed; background: rgba(29, 107, 255, 0.06); }
 .selbar select { width: 8.5em; }
+/* the header's buttons are the HUD's smaller size */
+header button, header select.ghost { font-size: var(--fs-12); padding: 4px 8px; height: auto; }
+header select.ghost { padding-right: 22px; background-position: right 7px center; }

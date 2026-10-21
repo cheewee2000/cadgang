@@ -1,6 +1,6 @@
 {
   "name": "cadgang",
-  "version": "0.14.96",
+  "version": "0.14.97",
   "description": "CADgang — a CAD viewer and markup tool. Opens STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, FBX and DXF; sections, measures with snaps, markups Claude Code can see over MCP. Web page or Mac app.",
   "type": "module",
   "private": true,
