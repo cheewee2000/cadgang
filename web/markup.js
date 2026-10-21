@@ -13,7 +13,7 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
 
-export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTargets, layer, tools, onChange, snap = null, planeAt = null, say = () => {} }) {
+export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTargets, layer, tools, onChange, snap = null, planeAt = null, say = () => {}, tipAt = () => {} }) {
   const group = new THREE.Group();
   group.renderOrder = 5;
   scene.add(group);
@@ -290,7 +290,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     const it = imageUnder(e);
     if (!it) return;
     e.stopImmediatePropagation(); e.preventDefault();   // not the view's re-centre
-    editId = it.id; rebuild();
+    editId = it.id; rebuild(); tipAt(null, e);
   }, { capture: true });
   // The picture the IMAGE tool places next: chosen when the tool is picked, kept until another is.
   let picked = null;
@@ -781,6 +781,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       const c = z ? (z.kind === 'line' ? 'move' : 'pointer') : lineAt(e) ? 'pointer' : null;
       if (c) { canvas.style.cursor = c; lineCursor = true; }
       else if (lineCursor) { canvas.style.cursor = ''; lineCursor = false; }   // only undo our own cursor, not the view's
+      tipAt(!c && imageUnder(e) ? 'Double-click to adjust the picture' : null, e);   // a picture on a surface can be moved, sized, turned, cropped
     }
     if (!current) {   // ARROW, PEN: light up the point or edge it would land on (not while the view is dragged)
       if ((tool === 'arrow' || tool === 'path') && !e.buttons && e.pointerType !== 'touch') { const lit = snap?.showSnap(e); canvas.style.cursor = lit ? 'cell' : 'crosshair'; }
@@ -821,7 +822,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     rebuild();
   }, { capture: true });
 
-  canvas.addEventListener('pointerleave', () => { if (!current) snap?.clearSnap(); });
+  canvas.addEventListener('pointerleave', (e) => { if (!current) snap?.clearSnap(); tipAt(null, e); });
 
   canvas.addEventListener('pointerup', (e) => {
     if (imgDrag && e.pointerId === imgDrag.id) { e.stopImmediatePropagation(); imgDrag = null; changed(); rebuild(); return; }   // projected again, where it now is

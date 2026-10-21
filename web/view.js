@@ -2505,7 +2505,7 @@ const markup = createMarkup({
   THREE, renderer, scene, orbit, layer: $('#markupLayer'), tools: $('#markupTools'),
   getCamera: () => camera, getTargets: () => model.children,
   onChange: (items) => { markupChanged(items); commit(); },
-  say, snap: { snapAt: (e) => measure.snapAt(e), showSnap: (e) => measure.showSnap(e), showFace: (e) => measure.showFace(e), clearSnap: () => measure.clearSnap() },   // the arrow snaps like measure
+  say, tipAt: cursorTip, snap: { snapAt: (e) => measure.snapAt(e), showSnap: (e) => measure.showSnap(e), showFace: (e) => measure.showFace(e), clearSnap: () => measure.clearSnap() },   // the arrow snaps like measure
   planeAt: (ray) => planes.hit(ray),   // marks draw on the visible reference planes too
 });
 let markupTimer = null;
@@ -3310,3 +3310,9 @@ document.addEventListener('pointerover', (e) => {
 });
 document.addEventListener('pointerout', (e) => { if (!e.relatedTarget?.closest?.('[data-tip],[title]')) tip.hidden = true; });
 document.addEventListener('pointerdown', () => { tip.hidden = true; });
+/** A tip that follows the mouse over the canvas (a picture that can be adjusted); null hides it. */
+function cursorTip(text, e) {
+  if (!text) { if (tip.dataset.cursor) { tip.hidden = true; delete tip.dataset.cursor; } return; }
+  tip.textContent = text; tip.hidden = false; tip.dataset.cursor = '1';
+  tip.style.left = `${Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 8)}px`; tip.style.top = `${e.clientY + 18}px`;
+}
