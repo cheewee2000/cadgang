@@ -2505,7 +2505,7 @@ const markup = createMarkup({
   THREE, renderer, scene, orbit, layer: $('#markupLayer'), tools: $('#markupTools'),
   getCamera: () => camera, getTargets: () => model.children,
   onChange: (items) => { markupChanged(items); commit(); },
-  snap: { snapAt: (e) => measure.snapAt(e), showSnap: (e) => measure.showSnap(e), clearSnap: () => measure.clearSnap() },   // the arrow snaps like measure
+  say, snap: { snapAt: (e) => measure.snapAt(e), showSnap: (e) => measure.showSnap(e), showFace: (e) => measure.showFace(e), clearSnap: () => measure.clearSnap() },   // the arrow snaps like measure
   planeAt: (ray) => planes.hit(ray),   // marks draw on the visible reference planes too
 });
 let markupTimer = null;
