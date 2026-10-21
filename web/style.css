@@ -76,7 +76,7 @@ header {
 }
 .project-name:hover { opacity: 0.55; color: var(--ink); }
 
-.toolbar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.toolbar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-left: auto; justify-content: flex-end; }   /* stays right when the header wraps */
 .toolbar label, .toolbar .rot {
   color: var(--ink-faint); display: flex; align-items: center; gap: var(--sp-2);
   text-transform: uppercase; font-size: var(--fs-12); letter-spacing: var(--ls-label);
