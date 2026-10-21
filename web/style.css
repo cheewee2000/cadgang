@@ -90,6 +90,11 @@ header {
   text-transform: uppercase; font-size: var(--fs-12); letter-spacing: var(--ls-label);
 }
 .toolbar .sep { width: 1px; height: 20px; background: var(--rule); }
+/* The header's own row: compact, as the viewport's buttons are, so it fits on one line; on a window too
+   narrow for that, the toolbar wraps to the right under the title, not to the left. */
+header .toolbar { gap: var(--sp-2); margin-left: auto; justify-content: flex-end; }
+header .toolbar > button, header .toolbar > .recent > button, header .toolbar > .share > button, header .toolbar select { padding: 6px 10px; font-size: var(--fs-12); }
+header .toolbar > button.icon, header .toolbar > .share > button.icon { padding: 5px 8px; }
 
 .version { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
 .version .idcode {
@@ -205,15 +210,22 @@ select.ghost:hover { opacity: 0.55; }
 .tabs button { font-size: var(--fs-12); padding: 4px 8px; white-space: nowrap; }
 .bodies label { display: flex; align-items: center; gap: var(--sp-2); cursor: pointer; white-space: nowrap; }
 .bodies input { accent-color: var(--ink); margin: 0; }
-.bodies .mat-pick { display: none; flex: none; width: 10em; font: inherit; font-size: var(--fs-12); height: 20px; padding: 0 18px 0 4px; margin-left: auto; background-position: right 4px center; }
 .bodies label > span { flex: none; }
 .bodies label.hover { outline: var(--bw-hair) solid #ff5a1f; outline-offset: 1px; }   /* the body under the mouse, same orange as its overlay */
-:root[data-look="materials"] .bodies .mat-pick { display: block; }
+.bodies .mat-tag { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--ink-faint); font-size: 10px; white-space: nowrap; }   /* material · finish · colour */
+.bodies .mat-tag select.mat-word { font: inherit; font-size: 10px; color: var(--ink-soft); border: 0; background: none; padding: 0 2px; height: auto; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; appearance: none; -webkit-appearance: none; }   /* reads as a word; a click lists the materials */
+.bodies .mat-tag select.mat-word.guess { font-style: italic; opacity: 0.7; }   /* the file names none: cadgang's guess */
+.bodies .mat-tag .bits, .bodies .finish-row { display: inline-flex; align-items: center; gap: 4px; }
+.bodies .mat-tag .fin::before, .bodies .mat-tag .swatch::before { content: none; }
+.bodies .swatch { width: 9px; height: 9px; border: var(--bw-hair) solid var(--rule); flex: none; }
+.bodies .finish-rows { display: flex; flex-direction: column; gap: 1px; padding-left: 34px; }
+.bodies .finish-rows[hidden] { display: none; }
+.bodies .finish-row { font-size: 10px; color: var(--ink-faint); white-space: nowrap; }
+.bodies .finish-row .fname { color: var(--ink-soft); max-width: 16em; overflow: hidden; text-overflow: ellipsis; }
 .bodies span:hover { text-decoration: underline; }
-.bodies label.sel > span:not(.fold-gap) { background: var(--ink); color: var(--paper); padding: 0 3px; }   /* selected: the body or the whole part */
+.bodies label.sel > span:not(.fold-gap):not(.mat-tag) { background: var(--ink); color: var(--paper); padding: 0 3px; }   /* selected: the body or the whole part */
 .bodies label.ghosted > span { opacity: 0.45; }
 .bodies .see { flex: none; margin-left: auto; border: 0; padding: 0 2px; font-size: var(--fs-12); line-height: 1; opacity: 0.3; }
-:root[data-look="materials"] .bodies .mat-pick + .see { margin-left: 0; }   /* the picker takes the right edge; the toggle sits after it */
 .bodies label.ghosted .see, .bodies .see:hover { opacity: 1; }
 .bodies { box-sizing: border-box; min-width: 120px; max-width: 70vw; }
 .hud-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
@@ -236,6 +248,11 @@ select.ghost:hover { opacity: 0.55; }
 .bodies-grip:hover, .bodies-grip:active { background: var(--rule); }
 .bodies.min .bodies-grip { display: none; }
 .bodies label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.bodies label > .body-name, .bodies label.group-row > span:not(.fold-gap):not(.mat-tag) { flex: 0 1 auto; min-width: 0; overflow: visible; white-space: normal; overflow-wrap: anywhere; }   /* a part's whole name, always: a long one wraps */
+.bodies label { align-items: flex-start; }
+.bodies label > input, .bodies label > .fold, .bodies label > .fold-gap { margin-top: 3px; }
+.bodies .mat-tag select.fin-word { font: inherit; font-size: 10px; color: var(--ink-faint); border: 0; background: none; padding: 0; height: auto; cursor: pointer; appearance: none; -webkit-appearance: none; text-decoration: underline dotted; text-underline-offset: 2px; }
+.bodies .mat-tag button.swatch-pick { width: 11px; height: 11px; min-width: 0; padding: 0; border: var(--bw-hair) solid var(--rule); cursor: pointer; flex: none; }
 .bodies .group-body { display: flex; flex-direction: column; gap: 2px; padding-left: 12px; }
 .bodies .group-body[hidden] { display: none; }
 .bodies .fold, .bodies .fold-gap { flex: none; width: 9px; height: 9px; }
@@ -272,7 +289,8 @@ select.ghost:hover { opacity: 0.55; }
 #ctx kbd, #tip kbd { font: inherit; color: var(--ink-faint); }
 #tip { position: fixed; z-index: 21; background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--ink); padding: 3px 7px; font-size: var(--fs-12); letter-spacing: var(--ls-label); pointer-events: none; white-space: nowrap; }
 #tip[hidden] { display: none; }
-#measures { flex: 1 1 auto; min-width: 0; }
+#measures { flex: 0 1 auto; min-width: 0; }
+#weight { flex: 1 1 auto; min-width: 0; white-space: nowrap; cursor: help; }
 footer .foot-tools { display: flex; align-items: center; gap: var(--sp-1); }
 footer button.ghost { font-size: var(--fs-12); padding: 4px 8px; }
 footer select.ghost { font-size: var(--fs-12); padding: 6px 18px 6px 8px; height: auto; background-position: right 5px center; }   /* mm / in: the size of the buttons beside it */
@@ -307,7 +325,7 @@ footer > * { white-space: nowrap; }
 
 /* Selection: rows, the action bar, and the shift-drag window */
 .bodies label.sel { outline: var(--bw-hair) solid #1d6bff; outline-offset: 1px; }
-.selbar { position: absolute; top: var(--sp-3); left: 50%; transform: translateX(-50%); z-index: 3; display: flex; align-items: center; gap: var(--sp-2); background: var(--paper); border: var(--bw-hair) solid #1d6bff; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); white-space: nowrap; }
+.selbar { position: absolute; top: calc(var(--sp-3) + 34px); right: var(--sp-3); z-index: 3; display: flex; align-items: center; gap: var(--sp-2); background: var(--paper); border: var(--bw-hair) solid #1d6bff; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); white-space: nowrap; }
 .selbar[hidden] { display: none; }
 .selbar button, .selbar select { font-size: var(--fs-12); height: 22px; padding: 0 var(--sp-2); }
 .selbar select { padding-right: 22px; background-position: right 4px center; }
@@ -315,3 +333,13 @@ footer > * { white-space: nowrap; }
 .marquee[hidden] { display: none; }
 .marquee.crossing { border-style: dashed; background: rgba(29, 107, 255, 0.06); }
 .selbar select { width: 8.5em; }
+
+/* the colour menu a swatch opens: the model's colours, then Other… (the system picker) */
+.color-menu { position: fixed; z-index: 50; background: var(--paper); color: var(--ink); border: var(--bw-hair) solid var(--rule); box-shadow: 0 4px 16px rgba(0,0,0,.15); padding: var(--sp-2); font-size: var(--fs-12); width: 176px; }
+.color-menu-head { color: var(--ink-faint); font-size: 10px; letter-spacing: var(--ls-label); text-transform: uppercase; margin-bottom: 6px; }
+.color-menu-grid { display: grid; grid-template-columns: repeat(8, 18px); gap: 4px; margin-bottom: var(--sp-2); }
+.color-chip { width: 18px; height: 18px; min-width: 0; padding: 0; border: var(--bw-hair) solid var(--rule); cursor: pointer; }
+.color-chip.on, .color-chip:hover { outline: 2px solid #1d6bff; outline-offset: 1px; }
+.color-other { width: 100%; }
+.color-other-input { position: absolute; width: 0; height: 0; opacity: 0; border: 0; padding: 0; pointer-events: none; }
+.selbar .sel-swatch { width: 40px; min-width: 0; padding: 0; border: var(--bw-hair) solid var(--rule); }

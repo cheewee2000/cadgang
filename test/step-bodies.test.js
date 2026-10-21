@@ -67,3 +67,9 @@ END-ISO-10303-21;
     { name: 'Lens', color: null, opacity: 1, material: '' },
   ]);
 });
+
+test("a product OpenCascade named after itself is no folder", async () => {
+  // the fixture's three solids sit in products OCCT's writer called "Open CASCADE STEP translator 7.6 1.n"
+  const m = await importCadFile(fs.readFileSync(fixture), { name: 'asm.step' });
+  for (const b of m.bodies) assert.ok(!(b.path ?? []).some((g) => /^Open CASCADE/i.test(g)), JSON.stringify(b.path));
+});
