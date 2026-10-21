@@ -343,14 +343,14 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     } catch (e) { next(e); }
   });
 
-  // Send to Bambu Studio: the page PUTs one STL per part (or a part's whole source STEP) into a batch folder under the temp dir, then
+  // Send to Bambu Studio: the page PUTs one STL per part into a batch folder under the temp dir, then
   // asks for the batch to open, all at once, in the slicer. Local only, like saving.
   const slicerDir = (batch) => path.join(os.tmpdir(), 'cadgang-slicer', batch);
   r.put('/slicer', express.raw({ type: () => true, limit: '1gb' }), async (req, res, next) => {
     try {
       if (!mayReadLocal(req)) throw Object.assign(new Error('Sending to the slicer is only available in the desktop app'), { status: 403 });
       const batch = String(req.query.batch || ''), name = String(req.query.name || '').replace(/[^\w .-]/g, '_');
-      if (!/^\w{8,32}$/.test(batch) || !/\.(stl|step)$/i.test(name)) throw Object.assign(new Error('need batch and a .stl or .step name'), { status: 400 });
+      if (!/^\w{8,32}$/.test(batch) || !/\.stl$/i.test(name)) throw Object.assign(new Error('need batch and a .stl name'), { status: 400 });
       await fs.mkdir(slicerDir(batch), { recursive: true });
       await fs.writeFile(path.join(slicerDir(batch), name), req.body);
       res.json({ ok: true });

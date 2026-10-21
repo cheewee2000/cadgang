@@ -2494,9 +2494,8 @@ function partCmds(m) {
     ]),
   ];
 }
-// SEND TO BAMBU STUDIO: a part from a STEP file sends that whole file, unchanged (Bambu meshes it exactly);
-// any other part goes as a binary STL in the file's units, placed as it sits now (explode, joints, turn).
-// Everything opens in the slicer together.
+// SEND TO BAMBU STUDIO: each part as a binary STL in mm, placed as it sits now (explode, joints, turn), all
+// opened in the slicer together so they keep their places on the plate.
 function stlOf(m) {
   const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry, p = g.getAttribute('position'), n = p.count / 3 | 0;
   const dv = new DataView(new ArrayBuffer(84 + 50 * n)), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), nm = new THREE.Vector3();
@@ -2514,20 +2513,14 @@ async function sendToSlicer(bodies) {
   bodies = bodies.filter((m) => m.isMesh && model.children.includes(m));
   if (!bodies.length) return;
   const batch = Date.now().toString(36) + Math.random().toString(36).slice(2, 8), used = new Map();
-  const put = (name, ext, body) => {
-    const base = name.replace(/\.[^.]+$/, '').replace(/[^\w .-]/g, '_') || 'part', k = used.get(base) ?? 0;
-    used.set(base, k + 1);
-    return fetchBuffer(`api/view/slicer?batch=${batch}&name=${encodeURIComponent(`${base}${k ? `_${k}` : ''}.${ext}`)}`, { method: 'PUT', body });
-  };
   try {
-    const steps = new Set();
     for (const m of bodies) {
-      const src = sources.find((f) => f.name === m.userData.file && /\.(step|stp)$/i.test(f.name));
-      if (src) { if (!steps.has(src)) { steps.add(src); await put(src.name, 'step', src.buffer); } }
-      else await put(nameOf(m), 'stl', stlOf(m));
+      const base = nameOf(m).replace(/\.[^.]+$/, '').replace(/[^\w .-]/g, '_') || 'part', k = used.get(base) ?? 0;
+      used.set(base, k + 1);
+      await fetchBuffer(`api/view/slicer?batch=${batch}&name=${encodeURIComponent(`${base}${k ? `_${k}` : ''}.stl`)}`, { method: 'PUT', body: stlOf(m) });
     }
     await api('/slicer/open', { method: 'POST', body: { batch } });
-    say(`sent ${bodies.length} part${bodies.length > 1 ? 's' : ''} to Bambu Studio${steps.size ? ` (${[...steps].map((f) => f.name).join(', ')} whole)` : ''}`);
+    say(`sent ${bodies.length} part${bodies.length > 1 ? 's' : ''} to Bambu Studio`);
   } catch (e) { say(`send to Bambu Studio failed: ${e.message}`, true); }
 }
 function showMenu(x, y, part) { showItems(x, y, [...partCmds(part), ...CMDS.filter((c) => !(ui.mode === 'joint' && /^Explode/.test(c.label)))]); }
