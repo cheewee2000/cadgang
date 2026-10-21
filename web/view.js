@@ -2398,6 +2398,8 @@ function setUnits(u) {
   ui.units = u; $('#unitsSel').value = u;
   placeGrid();   // inches: ¼" lines, darker every inch; mm: as always
 }
+function flipDrawing() { orbit.pitch = -orbit.pitch; }
+$('#sideBtn').addEventListener('click', () => { flipDrawing(); commit(); });
 $('#unitsSel').addEventListener('change', (e) => { setUnits(e.target.value); commit(); });
 ui.scroll = 'trackpad';
 $('#scrollSel').addEventListener('change', (e) => {
@@ -3109,7 +3111,7 @@ const CMDS = [
   { sep: true },
   ...BODY_CMDS.map((c) => ({ ...c, label: { h: 'Hide selected', t: 'Selected transparent', s: 'Show only selected' }[c.shift ? '' : c.key] ?? c.label })),
   { sep: true },
-  { key: 'b', label: 'Flip drawing over', btn: '#sideBtn', run: () => { orbit.pitch = -orbit.pitch; } },
+  { label: 'Flip drawing over', btn: '#sideBtn', run: flipDrawing },   // a flat drawing only: its button, no key (B is the pen)
   { key: '[', label: 'Turn left 90°', run: () => { orbit.yaw -= Math.PI / 2; } },
   { key: ']', label: 'Turn right 90°', run: () => { orbit.yaw += Math.PI / 2; } },
   { sep: true },
@@ -3134,7 +3136,7 @@ const CMDS = [
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },
   // P pen and ⇧P pencil, as in Figma ('pen' is the pencil's stroke kind in saved markups, kept for old files)
-  ...[['p', 'path', 'Pen'], ['p', 'pen', 'Pencil', true], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['t', 'text', 'Text', true], ['i', 'image', 'Image', true], ['r', 'erase', 'Erase']].map(([key, t, label, shift]) => ({ key, shift, label, btn: `[data-tool="${t}"]`, run: () => { markup.setTool(t); if ($('[data-tool].on')) setMeasure(false); }, on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
+  ...[['b', 'path', 'Pen'], ['p', 'pen', 'Pencil'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['t', 'text', 'Text', true], ['i', 'image', 'Image', true], ['r', 'erase', 'Erase']].map(([key, t, label, shift]) => ({ key, shift, label, btn: `[data-tool="${t}"]`, run: () => { markup.setTool(t); if ($('[data-tool].on')) setMeasure(false); }, on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
   { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
   { sep: true },
   { key: 'd', label: 'Background: light / dark / dusk / dawn / night', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.bg !== 'light' },
