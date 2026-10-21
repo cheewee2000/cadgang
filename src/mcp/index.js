@@ -239,7 +239,7 @@ Each body has a 'key' ("name#n", what joints refer to; it never changes), a 'lab
 'annotations': each note or arrow of the user with text, the body it sits on and the round face nearest to where it points (axis, origin, radius, distanceToAxis). The user marks parts this way — "screw", "hinge", "slides", "M3", "on the lid" — and asks you to make them move. Read the words: screw/bolt/thread → 'screw' (a size like M3 gives the pitch; the default is the ISO coarse pitch for the shank), hinge/pivot/rotates/knob/wheel → 'revolute', turns to ANY orientation/on any axis (a ball, an orb, a joystick) → 'ball' (origin = its centre), slides/drawer/rail/plunger → 'slider', both turns and slides → 'cylindrical', glued/fixed to X → 'fixed' with parent X. "On X", "in X" or "to X" names the parent. A note placed with no body (point in empty space) has no body: use cadgang_screen to see what it points at.
 'coaxial': pairs of bodies with round faces on one axis (a pin in a bore): the smaller radius is the pin that moves; the other is its natural parent.
 
-To make the joints work: add each with cadgang_joint, then check it — drive it through its range (cadgang_joint update value, then cadgang_screen) and confirm the part moves the way the note meant and does not pass through its neighbour; fix the axis, parent or limits if not. Then tell the user what you made and clear the notes you acted on (cadgang_markup_clear).`,
+To make the joints work: add each with cadgang_joint, then check it — drive it through its range (cadgang_joint update value, then cadgang_screen) and confirm the part moves the way the note meant, and run cadgang_interference to find where it passes through a neighbour (then set min/max to stop short of it); fix the axis, parent or limits if not. Then tell the user what you made and clear the notes you acted on (cadgang_markup_clear).`,
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -326,6 +326,28 @@ To unscrew a screw: update its joint to a large value (say 2160 = six turns at 1
       }
       const res = await call('/view/joints', { method: 'PUT', body: { joints, from: 'mcp' } });
       return ok({ joints: res.joints });
+    } catch (e) { return fail(e); }
+  }
+);
+
+server.registerTool(
+  'cadgang_interference',
+  {
+    title: 'What each joint runs into',
+    description: `Drive each joint of the file on screen through its range (its min..max, else the slider's span; a free revolute -180..180) in 'steps' and report, per joint, which bodies the parts it moves run into (or come within 'gap' mm of), as value spans: "lid hits base at 10..90°". The assembly is together (no explode); other joints stay where they are; the user's screen does not change.
+'always: true' means touching at every step: a pin in its bore, a part on the face it slides on — a fit, not a crash (a pin modelled at its hole's exact size does this). 'first' is the value nearest the current one where they meet. Ball and fixed joints are skipped. Use it after making joints, and set min/max to stop short of a crash; tell the user about crashes that look like design errors.`,
+    inputSchema: {
+      joint: z.string().optional().describe('a joint id: only that one (default: every joint)'),
+      steps: z.number().int().min(2).max(360).optional().describe('samples across the range (default 36)'),
+      gap: z.number().min(0).optional().describe('also report parts closer than this, mm (default 0: only overlaps)'),
+      tol: z.number().min(0).optional().describe('overlap up to this deep is a fit, not a crash, mm (default 0.1 mm or 0.001 of the model size, whichever is more: tight fits and the mesh chordal error); 0 counts any touch'),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (a) => {
+    try {
+      const { subject } = await call('/view/joints');
+      return ok(await call('/view/ask?wait=60', { method: 'POST', body: { what: 'sweep', subject, args: a } }));
     } catch (e) { return fail(e); }
   }
 );

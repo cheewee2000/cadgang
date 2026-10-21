@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { MeshBVH } from 'three-mesh-bvh';
 
 /**
  * Joints, as in Fusion 360: a body that moves on an axis instead of sitting still. The math only; the
@@ -61,6 +62,7 @@ export function normalizeJoint(j) {
     align: Array.isArray(j?.align) && j.align.length === 16 && j.align.every(Number.isFinite) ? j.align.map(Number) : null,
     value: num(j?.value, 0), value2: num(j?.value2, 0), value3: num(j?.value3, 0), offset: num(j?.offset, 0), pitch: type === 'screw' ? num(j?.pitch, 1.5) : 0,
     min: j?.min == null || j.min === '' ? null : num(j.min, null), max: j?.max == null || j.max === '' ? null : num(j.max, null),
+    hide: j?.hide === true,   // its axis, track and limit dots off screen (the row's tick)
   };
   out.value = clampValue(out, out.value);
   return out;
@@ -129,3 +131,102 @@ export function valueRange(j, size = 100, second = false) {
 
 /** Euler XYZ degrees for a quaternion: how a ball joint's turn is stored and shown. */
 export const eulerOf = (q) => new THREE.Euler().setFromQuaternion(q, 'XYZ').toArray().slice(0, 3).map((r) => +THREE.MathUtils.radToDeg(r).toFixed(4));
+
+/**
+ * A copy of `geo` pulled in by `tol`: each corner (welded by position, so a flat-shaded mesh's split edges move
+ * together) moves in until it is at least `tol` behind every face it touches (a box's corner goes in along all
+ * three), found by projecting onto each face's constraint in turn. So every face moves in its full `tol`, edges
+ * included: two faces sliding flush read as clear right up to their edges (v0.14.105 moved a corner only tol along
+ * the faces' average, so a face near its edge went in a fraction of it). A knife edge, which no move of 3·tol
+ * clears, goes 3·tol and stops; the move is never outward of any face it touches.
+ */
+function insetGeometry(geo, tol) {
+  const src = geo.getAttribute('position'), g = new THREE.BufferGeometry().setAttribute('position', src.clone());
+  if (geo.index) g.setIndex(geo.index.clone());
+  const p = g.getAttribute('position'), ix = g.index, n = ix ? ix.count : p.count, at = (i) => (ix ? ix.getX(i) : i);
+  geo.computeBoundingBox();
+  const q = 1e6 / (geo.boundingBox.getSize(new THREE.Vector3()).length() || 1), weld = new Map(), id = new Int32Array(p.count);
+  for (let i = 0; i < p.count; i++) {
+    const key = `${Math.round(p.getX(i) * q)},${Math.round(p.getY(i) * q)},${Math.round(p.getZ(i) * q)}`;
+    let w = weld.get(key); if (w === undefined) weld.set(key, (w = weld.size));
+    id[i] = w;
+  }
+  const normals = Array.from({ length: weld.size }, () => []), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), fn = new THREE.Vector3();
+  for (let t = 0; t + 2 < n; t += 3) {
+    a.fromBufferAttribute(p, at(t)); b.fromBufferAttribute(p, at(t + 1)); c.fromBufferAttribute(p, at(t + 2));
+    THREE.Triangle.getNormal(a, b, c, fn);
+    if (fn.lengthSq() < 0.5) continue;   // degenerate
+    for (let e = 0; e < 3; e++) { const list = normals[id[at(t + e)]]; if (list.length < 8 && !list.some((v) => v.dot(fn) > 0.999)) list.push(fn.clone()); }
+  }
+  const d = normals.map((list) => {
+    if (!list.length) return new THREE.Vector3();
+    const m = list.reduce((s, v) => s.add(v), new THREE.Vector3());
+    const v = m.length() < 1e-6 ? m.set(0, 0, 0) : m.normalize().multiplyScalar(tol);
+    for (let it = 0; it < 16; it++) {
+      let ok = true;
+      for (const nrm of list) { const short = tol - nrm.dot(v); if (short > tol * 1e-3) { v.addScaledVector(nrm, short); ok = false; } }
+      if (ok) break;
+    }
+    if (list.some((nrm) => nrm.dot(v) < 0)) return m.multiplyScalar(tol);   // did not settle: the plain average, never outward
+    return v.length() > 3 * tol ? v.setLength(3 * tol) : v;
+  });
+  for (let i = 0; i < p.count; i++) { const v = d[id[i]]; p.setXYZ(i, p.getX(i) - v.x, p.getY(i) - v.y, p.getZ(i) - v.z); }
+  return g;
+}
+
+/**
+ * Drive each joint through its range (its limits, else valueRange) in `steps` and find where the parts it moves
+ * run into, or come within `gap` mm of, the parts it does not move. The assembly is together (no explode); every
+ * other joint stays where it is. `meshes` maps a body key to its mesh, geometry in the file frame.
+ *   [{ id, name, body, range: [lo, hi], unit, current, contacts: [{ body, spans: [[a, b], ...], always, first }] }]
+ * `always`: touching at every step — a pin in its bore, a part on its face: a fit, not a crash. `first`: the
+ * sampled value nearest the current one where they meet. Ball and fixed joints have no one value to sweep.
+ * `tol` mm: overlap up to this deep is not a crash — the moving parts are tested pulled in along their normals
+ * by `tol`, so a tight fit or a seated face, and the tessellation's own chordal error, read as clear.
+ * ponytail: sampled, so a thin part can pass between steps; moving-vs-moving pairs (a stacked joint's own
+ * parts) are not tested. Add both if a real assembly misses a crash.
+ */
+export function sweepJoints(meshes, joints, { steps = 36, gap = 0, tol = 0, only = null, size = 100 } = {}) {
+  const bvh = new Map();
+  for (const [k, m] of meshes) {
+    m.geometry.computeBoundingBox();
+    // the still side's own BVH, and the moving side's (pulled in by tol). Tested pair by pair with bvhcast:
+    // three-mesh-bvh 0.8.3's intersectsGeometry read crashes no triangle pair has (with no BVH on the other side,
+    // at every step; with one, on faces sliding flush), and bvhcast agrees with testing every triangle by hand.
+    m.geometry.boundsTree = new MeshBVH(m.geometry, { indirect: true });
+    bvh.set(k, { still: m.geometry.boundsTree, moving: tol > 0 ? new MeshBVH(insetGeometry(m.geometry, tol), { indirect: true }) : m.geometry.boundsTree });
+  }
+  const boxAt = (k, M) => meshes.get(k).geometry.boundingBox.clone().applyMatrix4(M).expandByScalar(gap / 2);
+  const out = [];
+  for (const j of joints) {
+    if (j.type === 'ball' || j.type === 'fixed' || (only && j.id !== only)) continue;
+    const [lo, hi] = j.type === 'revolute' && j.min == null && j.max == null ? [-180, 180] : valueRange(j, size);
+    const vals = Array.from({ length: steps + 1 }, (_, i) => +(lo + ((hi - lo) * i) / steps).toFixed(4));
+    const poses = vals.map((v) => solvePoses(joints.map((x) => (x === j ? { ...x, value: v } : x))));
+    const keys = [...meshes.keys()], I = new THREE.Matrix4();
+    const at = (P, k) => P.get(k) ?? I;
+    const carried = new Set([j.body]);   // the joint's part and every part riding on it: a range of one value (min = max) moves nothing, yet sits somewhere
+    for (let grew = true; grew;) { grew = false; for (const x of joints) if (x.parent && carried.has(x.parent) && !carried.has(x.body)) { carried.add(x.body); grew = true; } }
+    const moving = keys.filter((k) => carried.has(k));
+    const still = keys.filter((k) => !moving.includes(k));
+    const hits = new Map();   // still body → [value index, ...]
+    poses.forEach((P, i) => {
+      for (const a of moving) for (const b of still) {
+        const A = at(P, a), B = at(P, b);
+        if (!boxAt(a, A).intersectsBox(boxAt(b, B))) continue;
+        const BtoA = A.clone().invert().multiply(B), g = meshes.get(b).geometry;
+        const touch = bvh.get(a).moving.bvhcast(bvh.get(b).still, BtoA, { intersectsTriangles: (t1, t2) => t1.intersectsTriangle(t2) })
+          || (gap > 0 && bvh.get(a).moving.closestPointToGeometry(g, BtoA, {}, {}, 0, gap));
+        if (touch) hits.set(b, [...new Set([...(hits.get(b) ?? []), i])]);
+      }
+    });
+    const contacts = [...hits].map(([b, is]) => {
+      const spans = [];
+      for (const i of is) { const s = spans.at(-1); if (s && s[2] === i - 1) { s[1] = vals[i]; s[2] = i; } else spans.push([vals[i], vals[i], i]); }
+      const first = is.map((i) => vals[i]).sort((x, y) => Math.abs(x - j.value) - Math.abs(y - j.value))[0];
+      return { body: b, spans: spans.map(([x, y]) => [x, y]), always: hi > lo && is.length === vals.length, first };
+    });
+    out.push({ id: j.id, name: j.name, body: j.body, range: [lo, hi], unit: turns(j.type) ? '°' : 'mm', current: j.value, contacts });
+  }
+  return out;
+}

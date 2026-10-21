@@ -21,6 +21,8 @@ test('material words in the name win', () => {
     ['PCB carrier v19 (1.0 mm, black soldermask)', ['carrier PCB v19'], 'pcb_black'],
     ['PCB sensor sub-board (white soldermask)', [], 'pcb_white'],
     ['blue PCB', [], 'pcb_blue'],
+    ['LG 86UH5Q-E display, black gloss glass', [], 'gloss_black'],
+    ['UR controller, steel, white powder coat', [], 'powder_white'],
   ]) assert.equal(guessMaterial(name, path), want, name);
 });
 
