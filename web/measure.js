@@ -55,6 +55,16 @@ export function cylinderFit(tris, centroid, scaleHint = 0) {
   return { axis, c, r: cyl.r, u, v, span, t0, t1, closed: span > THREE.MathUtils.degToRad(300), p: c.clone().addScaledVector(toSurf, cyl.r) };
 }
 
+/** Algebraic sphere fit through points: centre, radius, rms. Null when they are not on one. */
+export function sphereFit(P) {
+  const A = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], b = [0, 0, 0, 0];
+  for (const p of P) { const row = [p.x, p.y, p.z, 1], rhs = -(p.lengthSq()); for (let i = 0; i < 4; i++) { b[i] += row[i] * rhs; for (let j = 0; j < 4; j++) A[i][j] += row[i] * row[j]; } }
+  const s = solve(A, b); if (!s) return null;
+  const c = new THREE.Vector3(-s[0] / 2, -s[1] / 2, -s[2] / 2), r2 = c.lengthSq() - s[3]; if (r2 <= 0) return null;
+  const r = Math.sqrt(r2); let e = 0; for (const p of P) e += (p.distanceTo(c) - r) ** 2;
+  return { c, r, rms: Math.sqrt(e / P.length) };
+}
+
 /** Algebraic (Kåsa) circle fit: x²+y²+Dx+Ey+F=0. */
 function fitCircle2D(P) {
   const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b = [0, 0, 0];
@@ -371,14 +381,7 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     if (sph && sph.rms < sph.r * 0.01 + scaleHint * 1e-4) return { kind: 'sphere', c: sph.c, r: sph.r, p: sph.c.clone().add(F.centroid.clone().sub(sph.c).normalize().multiplyScalar(sph.r)) };
     return null;
   }
-  function fitSphere(P) {
-    const A = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], b = [0, 0, 0, 0];
-    for (const p of P) { const row = [p.x, p.y, p.z, 1], rhs = -(p.lengthSq()); for (let i = 0; i < 4; i++) { b[i] += row[i] * rhs; for (let j = 0; j < 4; j++) A[i][j] += row[i] * row[j]; } }
-    const s = solve(A, b); if (!s) return null;
-    const c = new THREE.Vector3(-s[0] / 2, -s[1] / 2, -s[2] / 2), r2 = c.lengthSq() - s[3]; if (r2 <= 0) return null;
-    const r = Math.sqrt(r2); let e = 0; for (const p of P) e += (p.distanceTo(c) - r) ** 2;
-    return { c, r, rms: Math.sqrt(e / P.length) };
-  }
+  const fitSphere = sphereFit;
   /** The two ends of the dimension between A and B (points or faces); quick: skip the slow search. */
   function between(A, B, bIsSnap, free, quick = false) {
     if (A.face && B.face) {

@@ -13,7 +13,16 @@ import { cylinderFit } from './measure.js';
  *   - the radial path blocked within the part's own size: a pocket, out by the clearest axis
  *   - otherwise radial
  * then a second pass turns any vector whose travel would run into a body that is not moving out
- * of its way onto the clearest of the candidates. Sets body.userData.offset and .parent.
+ * of its way onto the clearest of the candidates. Sets body.userData.offset, .parent and .stage.
+ *
+ * Joints say how the parts are assembled, and win over what the shapes suggest. `hints` maps a body to
+ * { type, axis, origin, parent } from its joint (axis and origin in the same frame as the geometry, parent a body or null):
+ *   - screw / slider / cylindrical: out along the joint axis, the end with more room, and no other way
+ *   - ball: out of the open side of its socket (the directions from its pivot with nothing in the way)
+ *   - fixed to a parent: no travel of its own, it goes where its parent goes
+ *   - any joint with a parent: the body rides on that parent
+ * Then each part gets a stage: a part waits for whatever stands in its way at rest, so the slider takes the
+ * outer parts off first and the ones under them after. Parts with a clear path are all stage 0.
  * Cost is one cylinder fit per B-rep face and a dozen rays per body: run it on load for small
  * files, behind a button for large ones.
  */
@@ -22,6 +31,7 @@ const axisOf = (d) => (Math.abs(d.x) > 0.5 ? 0 : Math.abs(d.y) > 0.5 ? 1 : 2);
 
 export function radialOffsets(bodies, centre) {
   for (const m of bodies) {
+    m.userData.stage = 0;
     m.geometry.computeBoundingBox();
     m.userData.offset = m.geometry.boundingBox.getCenter(new THREE.Vector3()).sub(centre);
     m.userData.parent = null;
@@ -29,7 +39,7 @@ export function radialOffsets(bodies, centre) {
 }
 
 /** The cylinders among a body's B-rep faces: axis, centre, radius, span. */
-function cylinders(m) {
+export function cylinders(m) {
   const faces = m.userData.faces; if (!faces) return [];
   const pos = m.geometry.getAttribute('position'), idx = m.geometry.index?.array;
   const out = [];
@@ -51,7 +61,9 @@ function cylinders(m) {
   return out;
 }
 
-export function explodeOffsets(bodies, centre) {
+const AXIAL = new Set(['screw', 'slider', 'cylindrical']);
+
+export function explodeOffsets(bodies, centre, hints = new Map()) {
   const ray = new THREE.Raycaster();
   const info = bodies.map((m) => {
     m.geometry.computeBoundingBox();
@@ -123,7 +135,23 @@ export function explodeOffsets(bodies, centre) {
     }
     return best < 0 ? null : bodies[best];
   };
-  const plan = bodies.map((m, i) => {
+  // The open side of a socket: of 96 directions from the pivot, the ones with nothing within three radii of the
+  // part (its own and what is fixed to it excluded), averaged. None open: the one with the most room.
+  const carriedBy = (m) => bodies.filter((b) => { for (let x = hints.get(b)?.parent, n = 0; x && n <= bodies.length; x = hints.get(x)?.parent, n++) if (x === m) return true; return false; });
+  const openSide = (i, pivot) => {
+    const skip = new Set([bodies[i], ...carriedBy(bodies[i])]), meshes = probe2.filter((_, j) => !skip.has(bodies[j])), reach = 3 * info[i].r;
+    const sum = new THREE.Vector3(); let best = null;
+    for (let k = 0; k < 96; k++) {
+      const y = 1 - (2 * k + 1) / 96, rr = Math.sqrt(1 - y * y), a = k * 2.399963229728653;
+      const d = new THREE.Vector3(Math.cos(a) * rr, y, Math.sin(a) * rr);
+      ray.set(pivot, d);
+      const gap = ray.intersectObjects(meshes, false)[0]?.distance ?? Infinity;
+      if (gap > reach) sum.add(d);
+      if (!best || gap > best.gap) best = { d, gap };
+    }
+    return sum.lengthSq() > 1e-9 ? sum.normalize() : best.d;
+  };
+  const plan = bodies.map((m, i) => (() => {
     const { c, half, r } = info[i];
     const radial = c.clone().sub(centre);
     const bigger = bodies.filter((o, j) => j !== i && info[j].r >= r);
@@ -133,6 +161,23 @@ export function explodeOffsets(bodies, centre) {
     const len = (d) => Math.max(Math.abs(radial.dot(d.clone().normalize())), 2 * ext(d));
     const rideOn = (o) => { const j = bodies.indexOf(o); return info[j].r > r || j < i ? o : null; };   // no cycles: bigger, ties by order
     const P = { m, i, radial, ext, len, free, hit, cands: [], dir: null, parent: null };
+    // what its joint says comes before anything the shape suggests
+    const H = hints.get(m);
+    if (H?.type === 'fixed' && H.parent) { P.fixed = true; return P; }   // no travel of its own: it rides its parent
+    if (H?.type === 'ball') {   // out of the open side of its socket; it may still be turned onto anything clear
+      P.dir = openSide(i, H.origin ?? c);
+      P.cands.push(P.dir, ...DIRS);
+      P.joint = true;
+      return P;
+    }
+    if (H && AXIAL.has(H.type)) {
+      const plus = H.axis.clone().normalize(), minus = plus.clone().negate(), fp = free(plus), fm = free(minus);
+      const away = c.clone().sub(H.parent ? info[bodies.indexOf(H.parent)]?.c ?? centre : centre).dot(plus);   // the side of its parent it already sits on
+      P.dir = fp > fm ? plus : fm > fp ? minus : away >= 0 ? plus : minus;
+      P.cands.push(P.dir, P.dir.clone().negate());   // and no other way: the joint cannot move off its axis
+      P.joint = true;
+      return P;
+    }
     // shared cylinder axes with bigger bodies: candidates first, and the rule of first resort
     for (const a of info[i].cyl) for (const j of bodies.keys()) {
       if (j === i || info[j].r < r) continue;
@@ -218,7 +263,16 @@ export function explodeOffsets(bodies, centre) {
     P.dir = radial.lengthSq() ? radial.clone().normalize() : null;   // the central body stays
     P.radialLen = radial.length(); P.fallback = true;
     return P;
-  });
+  })());
+  // A joint's parent is what a body rides on (unless that would make a loop: A on B on A).
+  const planOf = new Map(plan.map((P) => [P.m, P]));
+  for (const P of plan) {
+    const host = hints.get(P.m)?.parent;
+    if (!host || !planOf.has(host)) continue;
+    let loop = false;
+    for (let x = planOf.get(host), n = 0; x && n <= plan.length; x = x.parent && planOf.get(x.parent), n++) if (x === P) { loop = true; break; }
+    if (!loop) P.parent = host;
+  }
   for (const P of plan) P.offset = P.dir ? P.dir.clone().multiplyScalar(P.radialLen ?? P.len(P.dir)) : new THREE.Vector3();
   // A body backing away from what it rests against takes what rides on it out of that body too: a board under a
   // cover went its own thickness, and the parts on it stayed in the cover's pockets. Far enough that each rider,
@@ -251,6 +305,7 @@ export function explodeOffsets(bodies, centre) {
   const clearance = (P, abs) => {
     let worst = Infinity;
     for (const Q of plan) {
+      if (P.joint && Q.m === hints.get(P.m)?.parent) continue;   // along its joint axis a part is free of what it is jointed to: that is the joint
       if (Q === P || ridesOn(Q, P)) continue;   // the parent too: a part leaving its pocket is judged on the relative path, which is its own offset
       const v = abs.clone().sub(Q.abs); if (v.length() < 0.1 * abs.length()) continue;   // same way, a tenth of the drift: not a collision
       if (info[P.i].c.distanceTo(info[Q.i].c) > info[P.i].r + info[Q.i].r + 2 * v.length()) continue;
@@ -281,8 +336,34 @@ export function explodeOffsets(bodies, centre) {
     if (best && best.score >= 0) take(best, best.len);
     // nothing is clear (a knob in its slot, a part boxed in): go the roomiest way and stop where it would hit,
     // rather than the least-bad full travel through a wall
+    else if (P.joint) take({ d: P.dir, ride: true }, P.len(P.dir));   // its joint says it can go this way: trust that over a wall a snap-fit or a thread stands in
     else if (far && far.gap > 0) take(far, Math.min(far.len, far.gap / 2));
   }
-  for (const P of plan) { P.m.userData.offset = P.offset; P.m.userData.parent = P.parent; }
-  for (const m of made) delete m.geometry.boundsTree;
+  // Stages. What stands in a part's way at rest comes off before it: a part's travel (twice its offset, along it)
+  // against every body that neither carries it nor rides on it. Two parts in each other's way go together (a
+  // cover and the board it hides can leave opposite ways at once); a longer loop is cut where it closes.
+  const waits = plan.map(() => new Set());
+  for (const P of plan) {
+    const len = P.offset.length(); if (!P.dir || !len) continue;
+    const d = P.offset.clone().normalize(), travel = 2 * len;
+    for (const Q of plan) {
+      if (Q === P || ridesOn(Q, P) || ridesOn(P, Q)) continue;
+      if (info[P.i].c.distanceTo(info[Q.i].c) > info[P.i].r + info[Q.i].r + travel) continue;
+      const h = hitFrom(P.i, d, [Q.m], Q.m === P.housing ? P.lip : undefined);
+      if (h && h.gap < travel) waits[P.i].add(Q.i);
+    }
+  }
+  for (const [i, w] of waits.entries()) for (const j of [...w]) if (waits[j].has(i)) { w.delete(j); waits[j].delete(i); }
+  const stage = new Array(plan.length).fill(-1), busy = new Set();
+  const depth = (i) => {
+    if (stage[i] >= 0) return stage[i];
+    busy.add(i);
+    let s = 0;
+    for (const j of waits[i]) if (!busy.has(j)) s = Math.max(s, depth(j) + 1);
+    busy.delete(i);
+    return (stage[i] = s);
+  };
+  for (const P of plan) P.stage = Math.min(depth(P.i), 5);
+  for (const P of plan) { P.m.userData.offset = P.offset; P.m.userData.parent = P.parent; P.m.userData.stage = P.stage; }
+  for (const m of made) delete m.geometry.boundsTree;   // the viewer's own trees stay
 }

@@ -27,13 +27,18 @@
         <button id="recentBtn" class="ghost" title="Files you opened lately">Recent</button>
         <div id="recentMenu" class="share-menu" hidden></div>
       </span>
+      <button id="saveBtn" class="ghost" title="Save the project: model, markups, dimensions, section, explode and view in one .cadgang file (⌘S)">Save</button>
       <button id="newBtn" class="ghost" title="New window, for another file with its own markups">New</button>
       <button id="drawBtn" class="ghost" title="Drawing: Claude asks what the sheet needs, then the viewer renders it">Drawing</button>
       <input id="fileInput" type="file" multiple hidden
-        accept=".step,.stp,.iges,.igs,.brep,.stl,.obj,.ply,.3mf,.gltf,.glb,.fbx,.dxf" />
+        accept=".step,.stp,.iges,.igs,.brep,.stl,.obj,.ply,.3mf,.gltf,.glb,.fbx,.dxf,.cadgang" />
       <button id="sideBtn" class="ghost" hidden title="Flip the drawing over">Flip</button>
       <span class="sep"></span>
-      <label class="sect" title="Slide the bodies apart from the assembly centre">Explode
+      <span class="sect" title="What dragging a part does: slide it out (Explode) or move it on its joint (Joint). J switches">Mode
+        <button class="ghost on" data-mode="explode">Explode</button><button class="ghost" data-mode="joint">Joint</button><button id="newJointBtn" class="ghost" title="Join two parts: click a face on the part that moves, then one on the part it moves on, then the motion">New joint</button>
+      </span>
+      <span class="sep"></span>
+      <label class="sect" id="explodeSect" title="Slide the bodies apart from the assembly centre">Explode
         <input id="explode" type="range" min="0" max="100" step="any" value="0" />
         <button id="solveBtn" class="ghost" hidden title="Solve the explode vectors: pins along their bores, parts away from the faces they sit on, nothing through anything">Solve</button>
         <button id="resetBtn" class="ghost" title="Forget dragged positions and chosen axes: back to the solved explode">Reset</button>
@@ -49,7 +54,12 @@
       <span class="share">
         <button id="shareBtn" class="ghost icon" title="Share this view" aria-label="Share"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1.5v9M4.5 5 8 1.5 11.5 5M3 8v6.5h10V8"/></svg></button>
         <div id="shareMenu" class="share-menu" hidden>
-          <button id="shareWeb" class="ghost" title="Upload a frozen copy of this view and copy its link: clients open it in any browser">Share to web</button>
+          <button id="shareWeb" class="ghost" title="Deploy a frozen copy of this view to your own Vercel account and copy its link: anyone opens it in a browser">Share to web</button>
+          <form id="vercelForm" class="vercel-form" hidden>
+            <label for="vercelToken">Vercel token, from <a href="https://vercel.com/account/tokens" target="_blank" rel="noopener">vercel.com/account/tokens</a>. Shares deploy to a project of yours named cadgang-shares.</label>
+            <input id="vercelToken" type="password" autocomplete="off" spellcheck="false" placeholder="paste token" />
+            <button class="ghost" type="submit">Save and share</button>
+          </form>
           <button id="shareIpad" class="ghost" hidden title="AirDrop this view to a nearby iPad to mark it up with a pencil (copies the link outside the app)">Share to iPad</button>
         </div>
       </span>
@@ -67,6 +77,7 @@
           <button id="sectFlip" class="ghost" title="Invert which side is kept" disabled>Invert</button>
         </span>
         <div id="bodies" class="bodies" hidden title="Bodies: tick to show, click a name to see only it, shift-click for all"></div>
+        <div id="joints" class="joints" hidden></div>
       </div>
       <div class="hud hud-bl">
         <button id="fitBtn" class="ghost" title="Fit the model (F)">Fit</button>
@@ -80,6 +91,15 @@
           <option value="glass">Glass</option><option value="materials">Materials</option><option value="xray">X-ray</option><option value="normals">Normals</option>
         </select>
       </div>
+      <div id="selBar" class="selbar" hidden title="The selected bodies: shift-click or shift-drag to add more">
+        <span id="selCount"></span>
+        <button class="ghost" data-sel="hide" title="Hide them (H)">Hide</button>
+        <button class="ghost" data-sel="show" title="Show them">Show</button>
+        <button class="ghost" data-sel="only" title="Show only them">Only</button>
+        <select id="selMaterial" class="ghost" title="Give them all one material"><option value="">Material…</option></select>
+        <button class="ghost" data-sel="clear" title="Clear the selection (Esc)">×</button>
+      </div>
+      <div id="marquee" class="marquee" hidden></div>
       <div id="measureLayer" class="measure-layer"></div>
       <div id="markupLayer" class="measure-layer"></div>
       <div id="markupTools" class="markup-tools" title="Markup: anchored on the model; Claude sees it through cadgang_screen">
@@ -105,7 +125,7 @@
       </div>
       <div id="drop" class="drop">
         <div id="loadError" class="load-error"></div>
-        <div>Drop a STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, FBX or DXF file here.</div>
+        <div>Drop a STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, FBX, DXF or saved .cadgang file here.</div>
         <div class="drop-hint">Click a part: select it · Drag: rotate about the point · Right or wheel drag: pan · Wheel or pinch: zoom · ⌥-drag a part: slide it out · Right-click a part: its axis · Two fingers: pan · ⇧ two fingers: rotate · Double-click: centre · Right-click: menu and hotkeys · ⌘Z undo · DXF: pan, spin to turn, B to flip over</div>
       </div>
     </div>
@@ -125,6 +145,13 @@
     <span class="version"><span class="idcode">CWT_SW_CADGANG_VIEW</span> <span class="idver" id="version"></span></span>
   </footer>
 
+  <dialog id="shareDialog" class="share-dialog">
+    <form method="dialog">
+      <p>Anyone with this link can open the view. The link is copied.</p>
+      <a id="shareLink" href="#" target="_blank" rel="noopener"></a>
+      <div class="share-dialog-btns"><button id="shareCopy" class="ghost" type="button">Copy</button><button class="ghost">Close</button></div>
+    </form>
+  </dialog>
   <script type="module" src="view.js"></script>
 </body>
 </html>
