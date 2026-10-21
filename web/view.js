@@ -1780,15 +1780,6 @@ document.addEventListener('drop', async (e) => {
 });
 $('#openBtn').addEventListener('click', () => $('#fileInput').click());
 $('#newBtn').addEventListener('click', () => window.open(location.pathname));
-// Drawing: the page registers what is open; Claude collects the spec over MCP and sends it back here to render.
-$('#drawBtn').addEventListener('click', async () => {
-  if (!model.children.length) return say('open a file first', true);
-  const size = bbox.getSize(new THREE.Vector3()).toArray().map((v) => +v.toFixed(2));
-  await api('/drawing/request', { method: 'POST', body: { subject, name: $('#fileName').textContent, size, bodies: model.children.map((m) => nameOf(m)), dims: measure.dims.length } }).catch((e) => say(e.message, true));
-  const prompt = 'Make the drawing for the file open in CADgang: call cadgang_drawing_request, ask me its questions one at a time, then cadgang_drawing_make.';
-  try { await navigator.clipboard.writeText(prompt); } catch {}
-  say('drawing requested — paste the copied prompt into Claude Code and answer its questions');
-});
 async function makeDrawing(spec) {
   say('rendering drawing…'); progressStart('drawing', 'rendering the drawing…');
   await new Promise((r) => setTimeout(r, 30));   // paint the box before the render takes the thread

@@ -274,7 +274,7 @@ footer > * { white-space: nowrap; }
 /* the header's buttons are the HUD's smaller size */
 header button, header select.ghost { font-size: var(--fs-12); padding: 4px 8px; height: auto; }
 header select.ghost { padding-right: 22px; background-position: right 7px center; }
-/* Open, Save, New hold the left beside the name; the toolbar keeps the right (margin-left: auto) */
+/* Open, Save, New, Drawing hold the left beside the name; the toolbar keeps the right (margin-left: auto) */
 header { justify-content: flex-start; column-gap: var(--sp-4); }
 .file-tools { display: flex; gap: var(--sp-1); }
 /* PEN is a split button: the tool, and ▾ for its colour and thickness (the ▾ is underlined in the colour) */

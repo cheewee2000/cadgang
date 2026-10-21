@@ -25,13 +25,11 @@
       <button id="openBtn" class="ghost" title="Open a file (⌘O)">Open</button>
       <button id="saveBtn" class="ghost" title="Save the project: model, markups, dimensions, section, explode and view in one .cadgang file (⌘S)">Save</button>
       <button id="newBtn" class="ghost" title="New window, for another file with its own markups">New</button>
+      <button id="sideBtn" class="ghost" hidden title="Flip the drawing over">Flip</button>
     </div>
     <div class="toolbar">
-      <button id="drawBtn" class="ghost" title="Drawing: Claude asks what the sheet needs, then the viewer renders it">Drawing</button>
       <input id="fileInput" type="file" multiple hidden
         accept=".step,.stp,.iges,.igs,.brep,.stl,.obj,.ply,.3mf,.gltf,.glb,.fbx,.dxf,.cadgang" />
-      <button id="sideBtn" class="ghost" hidden title="Flip the drawing over">Flip</button>
-      <span class="sep"></span>
       <span class="sect" title="What dragging a part does: slide it out (Explode) or move it on its joint (Joint). J switches">Mode
         <button class="ghost on" data-mode="explode">Explode</button><button class="ghost" data-mode="joint">Joint</button><button id="newJointBtn" class="ghost" title="Join two parts: click a face on the part that moves, then one on the part it moves on, then the motion">New joint</button>
       </span>
