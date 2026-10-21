@@ -2215,7 +2215,7 @@ async function shareWeb() {
   progressStart('vercel-share', 'sharing to Vercel…');   // the bar runs on the clock against the last share's time
   const t0 = performance.now();
   try {
-    const res = await fetch('api/view/share', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: packBundle() });
+    const res = await fetch('api/view/share', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: packBundle({ parts: model.children.length, preview: await previewCard() }) });
     const d = await res.json();
     if (res.status === 401) await api('/share/vercel', { method: 'PUT', body: { token: '' } }).catch(() => {});   // a revoked token asks again next time
     if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
@@ -2224,6 +2224,16 @@ async function shareWeb() {
     $('#shareLink').href = $('#shareLink').textContent = d.url;
     $('#shareDialog').showModal();
   } catch (e) { progressEnd(); say(`share failed: ${e.message}`, true); }
+}
+// The link's preview card picture: the view as it is (markups and notes too), cropped to 1200×630.
+async function previewCard() {
+  const img = new Image();
+  img.src = markup.snapshot();
+  await img.decode();
+  const c = Object.assign(document.createElement('canvas'), { width: 1200, height: 630 });
+  const k = Math.max(c.width / img.width, c.height / img.height);
+  c.getContext('2d').drawImage(img, (c.width - img.width * k) / 2, (c.height - img.height * k) / 2, img.width * k, img.height * k);
+  return c.toDataURL('image/jpeg', 0.85);
 }
 function copyText(text) {
   const shell = window.webkit?.messageHandlers?.cadgang;
