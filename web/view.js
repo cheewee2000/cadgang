@@ -900,7 +900,7 @@ function finishLoad(name, ms, keep = false) {
   }
   $('#fileName').textContent = name;
   document.title = `CADgang · ${name}`;
-  $('#measures').textContent = `${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)}`;
+  $('#measures').textContent = `BOUNDING BOX ${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)}`;
   $('#stats').textContent = `${model.children.length} BOD${model.children.length === 1 ? 'Y' : 'IES'} · ${segs ? `${segs.toLocaleString()} SEGS · ` : ''}${tris ? `${tris.toLocaleString()} TRIS · ` : ''}${verts.toLocaleString()} VERTS · ${ms} MS`;
   $('#drop').hidden = true; $('#loadError').textContent = '';
   placeGrid();
@@ -1848,6 +1848,12 @@ function setMeasure(on) {
   $('#measureBtn').classList.toggle('on', on);
 }
 $('#measureBtn').addEventListener('click', () => setMeasure(!measure.on));
+// PEN ▾: colour and thickness in a little menu under the pen; the ▾ wears the colour.
+const penColor = () => { const c = $('#penMenu .swatch.on')?.dataset.color; if (c) $('#penMenuBtn').style.setProperty('--pen', c); };
+penColor();
+$('#penMenuBtn').addEventListener('click', () => { $('#penMenu').hidden = !$('#penMenu').hidden; });
+$('#penMenu').addEventListener('click', () => setTimeout(penColor));   // after markup's handler marks the new swatch
+document.addEventListener('pointerdown', (e) => { if (!e.target.closest?.('.pen-split')) $('#penMenu').hidden = true; });
 document.addEventListener('click', (e) => { if (e.target.closest?.('[data-tool]') && $('[data-tool].on')) setMeasure(false); });   // after markup's own handler
 
 // ------------------------------------------------------------------- theme

@@ -21,10 +21,12 @@
       <span class="proj-sep">/</span>
       <span class="project-name" id="fileName" title="Open a file: drop it here, ⌘O, or double-click it in Finder">view</span>
     </div>
-    <div class="toolbar">
+    <div class="file-tools">
       <button id="openBtn" class="ghost" title="Open a file (⌘O)">Open</button>
       <button id="saveBtn" class="ghost" title="Save the project: model, markups, dimensions, section, explode and view in one .cadgang file (⌘S)">Save</button>
       <button id="newBtn" class="ghost" title="New window, for another file with its own markups">New</button>
+    </div>
+    <div class="toolbar">
       <button id="drawBtn" class="ghost" title="Drawing: Claude asks what the sheet needs, then the viewer renders it">Drawing</button>
       <input id="fileInput" type="file" multiple hidden
         accept=".step,.stp,.iges,.igs,.brep,.stl,.obj,.ply,.3mf,.gltf,.glb,.fbx,.dxf,.cadgang" />
@@ -100,21 +102,25 @@
       <div id="markupTools" class="markup-tools" title="Markup: anchored on the model; Claude sees it through cadgang_screen">
         <button id="measureBtn" class="ghost" title="Measure: snaps to ends, midpoints, centres, quadrants; click an edge for its length, a circle for ⌀, two faces for their gap; ⌥ free point, ⇧ no axis snap (M, Esc to stop)">MEASURE</button>
         <span class="markup-sep"></span>
-        <button class="ghost" data-tool="pen" title="Draw on the model">PEN</button>
+        <span class="pen-split">
+          <button class="ghost" data-tool="pen" title="Draw on the model">PEN</button>
+          <button id="penMenuBtn" class="ghost" title="Pen colour and thickness">▾</button>
+          <div id="penMenu" class="pen-menu" hidden>
+            <button class="ghost swatch" data-color="#d11d1d" style="--swatch:#d11d1d" title="Red"></button>
+            <button class="ghost swatch" data-color="#111111" style="--swatch:#111111" title="Black"></button>
+            <button class="ghost swatch" data-color="#1d4ed8" style="--swatch:#1d4ed8" title="Blue"></button>
+            <button class="ghost swatch" data-color="#15803d" style="--swatch:#15803d" title="Green"></button>
+            <button class="ghost swatch" data-color="#f59e0b" style="--swatch:#f59e0b" title="Orange"></button>
+            <span class="pen-menu-sep"></span>
+            <button class="ghost" data-width="1" title="Thin stroke (1 px)">S</button>
+            <button class="ghost" data-width="2" title="Medium stroke (2 px)">M</button>
+            <button class="ghost" data-width="4" title="Thick stroke (4 px)">L</button>
+          </div>
+        </span>
         <button class="ghost" data-tool="arrow" title="Point at something">ARROW</button>
         <button class="ghost" data-tool="note" title="Pin a note">NOTE</button>
         <button class="ghost" data-tool="erase" title="Erase one mark">ERASE</button>
         <button class="ghost" data-clear="1" title="Clear all markup">CLEAR</button>
-        <span class="markup-sep"></span>
-        <button class="ghost swatch" data-color="#d11d1d" style="--swatch:#d11d1d" title="Red"></button>
-        <button class="ghost swatch" data-color="#111111" style="--swatch:#111111" title="Black"></button>
-        <button class="ghost swatch" data-color="#1d4ed8" style="--swatch:#1d4ed8" title="Blue"></button>
-        <button class="ghost swatch" data-color="#15803d" style="--swatch:#15803d" title="Green"></button>
-        <button class="ghost swatch" data-color="#f59e0b" style="--swatch:#f59e0b" title="Orange"></button>
-        <span class="markup-sep"></span>
-        <button class="ghost" data-width="1" title="Thin stroke (1 px)">S</button>
-        <button class="ghost" data-width="2" title="Medium stroke (2 px)">M</button>
-        <button class="ghost" data-width="4" title="Thick stroke (4 px)">L</button>
       </div>
       <div id="drop" class="drop">
         <div id="loadError" class="load-error"></div>
