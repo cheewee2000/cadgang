@@ -2404,6 +2404,11 @@ $('#scrollSel').addEventListener('change', (e) => {
   ui.scroll = e.target.value;
   try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(PREFS_KEY)), scroll: ui.scroll })); } catch {}
 });
+// another tab changed it: follow, or this tab's next save would write its stale choice back
+window.addEventListener('storage', (e) => {
+  if (e.key !== PREFS_KEY) return;
+  try { const v = JSON.parse(e.newValue)?.scroll; if (v === 'mouse' || v === 'trackpad') ui.scroll = $('#scrollSel').value = v; } catch {}
+});
 $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
 $('#gridBtn').addEventListener('click', () => toggle('grid', '#gridBtn'));
