@@ -882,7 +882,7 @@ const rotStep = () => THREE.MathUtils.degToRad(+$('#rotStep').value);
 for (const b of document.querySelectorAll('[data-rot]')) b.addEventListener('click', (e) =>
   turnModel(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3().setComponent('xyz'.indexOf(b.dataset.rot), 1), e.shiftKey ? -rotStep() : rotStep()).multiply(rot)));
 $('#rotReset').addEventListener('click', () => turnModel(new THREE.Quaternion()));
-function setExplode(v) { if (ui.mode === 'joint') return say('explode is off in joint mode: switch to Explode (J)'); $('#explode').value = Math.max(0, Math.min(100, v)); applyExplode(); }
+function setExplode(v) { if (ui.mode === 'joint') return say('explode is off in joint mode: switch to Explode (E)'); $('#explode').value = Math.max(0, Math.min(100, v)); applyExplode(); }
 $('#resetBtn').addEventListener('click', () => { for (const m of model.children) { m.userData.axis = undefined; m.userData.pull = undefined; } applyExplode(); say('explode positions reset'); });
 
 function finishLoad(name, ms, keep = false) {
@@ -1367,14 +1367,14 @@ function setMode(mode) {
   renderJoints();
   endPickAxis(); endPickJoint();
   applyExplode();
-  say(mode === 'joint' ? 'joint mode: drag a jointed part to move it · ⌘-drag sets its offset · New joint (N) joins two parts' : 'explode mode: drag a part to slide it out · right-click a part for its explode axis');
+  say(mode === 'joint' ? 'joint mode: drag a jointed part to move it · ⌘-drag sets its offset · New joint (J) joins two parts' : 'explode mode: drag a part to slide it out · right-click a part for its explode axis');
 }
 for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('click', () => setMode(b.dataset.mode));
 $('#newJointBtn').addEventListener('click', () => startPickJoint());
 document.documentElement.dataset.mode = ui.mode;
 
 // The panel: one row per joint, a slider to drive it, its parent and limits; how to make and move them under.
-const JOINT_HINTS = 'N: new joint (moving part, then base). Drag: drive · ⌥ turn · ⌘ offset.\nTrack dots: min/max, double-click frees.';
+const JOINT_HINTS = 'J: new joint (moving part, then base). Drag: drive · ⌥ turn · ⌘ offset.\nTrack dots: min/max, double-click frees.';
 function renderJoints() {
   const el = $('#joints');
   el.hidden = !joints.length && ui.mode !== 'joint';   // the joints in either mode; in Joint mode the hints even before the first one
@@ -2375,7 +2375,7 @@ if (openArg) window.cadgangOpen(openArg.split('|')).then(() => {
 
 const CMDS = [
   { key: 'f', label: 'Fit', run: fit, btn: '#fitBtn' },
-  { key: 'e', label: 'Edges', run: () => toggle('edges', '#edgesBtn'), btn: '#edgesBtn', on: () => ui.edges },
+  { label: 'Edges', run: () => toggle('edges', '#edgesBtn'), btn: '#edgesBtn', on: () => ui.edges },
   { key: 'w', label: 'Wireframe', run: () => toggle('wire', '#wireBtn'), btn: '#wireBtn', on: () => ui.wire },
   { key: 'g', label: 'Grid', run: () => toggle('grid', '#gridBtn'), btn: '#gridBtn', on: () => ui.grid },
   { key: 'c', label: 'Color parts', run: () => toggle('color', '#colorBtn'), btn: '#colorBtn', on: () => ui.color },
@@ -2391,8 +2391,8 @@ const CMDS = [
   ...['x', 'y', 'z'].map((a) => ({ key: a, label: `Section ${a.toUpperCase()}`, btn: `[data-sect="${a}"]`, run: () => setSectionAxis(section.axis === a ? '' : a), on: () => section.axis === a })),
   { key: 'i', label: 'Invert section', btn: '#sectFlip', run: () => { if (section.axis) { section.flip *= -1; updateSection(); } } },
   { sep: true },
-  { key: 'n', label: 'New joint', btn: '#newJointBtn', run: () => startPickJoint() },
-  { key: 'j', label: 'Joint / explode mode', btn: '[data-mode="joint"]', run: () => setMode(ui.mode === 'joint' ? 'explode' : 'joint'), on: () => ui.mode === 'joint' },
+  { key: 'j', label: 'New joint', btn: '#newJointBtn', run: () => startPickJoint() },
+  { key: 'e', label: 'Joint / explode mode', btn: '[data-mode="joint"]', run: () => setMode(ui.mode === 'joint' ? 'explode' : 'joint'), on: () => ui.mode === 'joint' },
   { key: 'v', label: 'Explode direction of the part under the mouse (or the one selected)', run: () => {
     const m = hovered ?? (selected.size === 1 ? [...selected][0] : null);
     if (m?.isMesh) startPickAxis(m); else say('point at a part, or select one, then press V');
@@ -2402,7 +2402,7 @@ const CMDS = [
   { key: '-', label: 'Explode less', run: () => setExplode(+$('#explode').value - 10) },
   { key: 'h', label: 'Hide selected', run: hideSelected },
   { key: 'h', shift: true, label: 'Show all bodies', run: showAllBodies },
-  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (pickAxis) { endPickAxis(); return; } if (pickJoint) { endPickJoint(); return; } if (measure.cancel()) return; if (selected.size) { selectBodies([], 'set'); return; } setSectionAxis(''); setMeasure(false); } },
+  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (pickAxis) { endPickAxis(); return; } if (pickJoint) { endPickJoint(); return; } if (measure.on) { measure.cancel(); setMeasure(false); return; } const t = $('[data-tool].on')?.dataset.tool; if (t) { markup.setTool(t); return; } if (selected.size) { selectBodies([], 'set'); return; } setSectionAxis(''); setMeasure(false); } },
   { sep: true },
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },
@@ -2554,7 +2554,7 @@ const tip = Object.assign(document.createElement('div'), { id: 'tip', hidden: tr
 document.body.appendChild(tip);
 for (const c of CMDS) {
   const el = c.btn && $(c.btn);
-  if (el) { el.dataset.tip = `${(el.title || c.label).replace(/\s*\([^)]*\)\s*$/, '')} · ${keyLabel(c)}`; el.removeAttribute('title'); }
+  if (el) { el.dataset.tip = (el.title || c.label).replace(/\s*\([^)]*\)\s*$/, '') + (c.key ? ` · ${keyLabel(c)}` : ''); el.removeAttribute('title'); }
 }
 document.addEventListener('pointerover', (e) => {
   const el = e.target.closest?.('[data-tip],[title]');
