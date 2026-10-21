@@ -2422,7 +2422,6 @@ window.addEventListener('storage', (e) => {
 $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
 $('#gridBtn').addEventListener('click', () => toggle('grid', '#gridBtn'));
-$('#fitBtn').addEventListener('click', fit);
 $('#look').addEventListener('change', (e) => { ui.look = document.documentElement.dataset.look = e.target.value; for (const m of model.children) styleMesh(m); });
 function setOrtho(on) {
   ui.ortho = on;
@@ -3109,7 +3108,7 @@ if (openArg) window.cadgangOpen(openArg.split('|')).then(() => {
 // One table drives the hotkeys, the right-click menu and the hover tips.
 
 const CMDS = [
-  { key: 'f', label: 'Fit', run: fit, btn: '#fitBtn' },
+  { key: 'f', label: 'Fit', run: fit, btn: '.viewcube-fit' },   // the button beside the view cube
   { label: 'Edges', run: () => toggle('edges', '#edgesBtn'), btn: '#edgesBtn', on: () => ui.edges },
   { key: 'w', label: 'Wireframe', run: () => toggle('wire', '#wireBtn'), btn: '#wireBtn', on: () => ui.wire },
   { key: 'g', label: 'Grid', run: () => toggle('grid', '#gridBtn'), btn: '#gridBtn', on: () => ui.grid },

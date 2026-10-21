@@ -82,7 +82,6 @@
         <div id="joints" class="joints" hidden></div>
       </div>
       <div class="hud hud-bl">
-        <button id="fitBtn" class="ghost" title="Fit the model (F)">Fit</button>
         <button id="edgesBtn" class="ghost on" title="Edges">Edges</button>
         <button id="wireBtn" class="ghost" title="Wireframe (W)">Wire</button>
         <button id="colorBtn" class="ghost" title="A colour per body or layer">Color</button>
@@ -132,7 +131,7 @@
       <div id="drop" class="drop">
         <div id="loadError" class="load-error"></div>
         <div>Drop a STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, FBX, DXF or saved .cadgang file here.</div>
-        <div class="drop-hint">Click a part: select it · Drag: rotate · Exploded, drag a part: move where it explodes to · Right or wheel drag: pan · Wheel or pinch: zoom · ⌥-drag a part: slide it out · Right-click a part: its axis · Two fingers: pan · ⇧ two fingers: rotate · Double-click: centre · Right-click: menu and hotkeys · ⌘Z undo · DXF: pan, spin to turn, B to flip over</div>
+        <div class="drop-hint">Click a part: select it · Drag: rotate · Exploded, drag a part: move where it explodes to · Right or wheel drag: pan · Wheel or pinch: zoom · ⌥-drag a part: slide it out · Right-click a part: its axis · Two fingers: rotate · ⇧ two fingers: pan · Double-click: centre · Right-click: menu and hotkeys · ⌘Z undo · DXF: pan, spin to turn, B to flip over</div>
       </div>
     </div>
   </main>
@@ -145,7 +144,7 @@
       <button id="gridBtn" class="ghost on" title="Grid (G)">Grid</button>
       <button id="rulerBtn" class="ghost" title="Ruler: the grid's scale along its edges, from 0 (⇧G)">Ruler</button>
       <select id="unitsSel" class="ghost" title="Units for the grid and the ruler: in inches the grid steps every ½&quot;, darker every inch"><option value="mm">mm</option><option value="in">in</option></select>
-      <select id="scrollSel" class="ghost" title="Scrolling: TRACKPAD turns the model (⇧ pans); MOUSE pans with two fingers (⇧ turns) and a wheel zooms"><option value="trackpad">Trackpad</option><option value="mouse">Mouse</option></select>
+      <select id="scrollSel" class="ghost" title="Scrolling: TRACKPAD turns the model (⇧ pans); MOUSE pans with two fingers (⇧ turns). A mouse wheel zooms in both"><option value="trackpad">Trackpad</option><option value="mouse">Mouse</option></select>
       <button id="defaultBtn" class="ghost" hidden title="Make CADgang the Finder's default app for every CAD file type it reads">Default</button>
       <button id="themeToggle" class="ghost" title="Background: light, dark, dusk, dawn, night (D)">LIGHT</button>
     </div>
