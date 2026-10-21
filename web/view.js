@@ -274,7 +274,6 @@ function listBodies() {
   // files and behind the SOLVE button for big ones, where its rays and fits take seconds.
   radialOffsets(model.children, bbox.getCenter(new THREE.Vector3()));
   const tris = model.children.reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.getAttribute('position').count) / 3, 0);
-  $('#solveBtn').hidden = model.children.length < 2;
   $('#resetBtn').hidden = model.children.length < 2;
   if (model.children.length > 1 && tris <= 300000) solveExplode();
   // Rows nest under the file's assembly groups (STEP): a group row folds, ticks all it holds, and solos on a click.
@@ -423,10 +422,6 @@ function resolveForJoints() {
   if (tris > 300000) return;
   solveTimer = setTimeout(() => { try { solveExplode(); say('explode re-solved from the joints'); } catch {} }, 250);
 }
-$('#solveBtn').addEventListener('click', () => {
-  say('solving explode vectors…'); progressStart('explode', 'solving explode vectors…');
-  setTimeout(() => { const t = performance.now(); try { solveExplode(); } finally { progressEnd('explode', performance.now() - t); } }, 30);
-});
 // For a headless drive or a console: what the solver decided.
 window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, stage: m.userData.stage ?? 0, axis: m.userData.axis ?? null, pull: m.userData.pull == null ? null : +m.userData.pull.toFixed(2), fixStage: m.userData.fixStage ?? null, at: m.position.toArray().map((v) => +v.toFixed(1)), box: (({ min, max }) => [...min.toArray(), ...max.toArray()].map((v) => +v.toFixed(1)))(new THREE.Box3().setFromObject(m)) }));
 /** Body ticks in model order (a group tree renders them out of order). */
