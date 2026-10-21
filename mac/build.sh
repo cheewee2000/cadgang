@@ -3,6 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION=$(node -p "require('./package.json').version")
+# a syntax error anywhere (an apostrophe in a quoted string broke the MCP server in 0.14.113) stops the build
+for f in $(git ls-files 'src/*.js' 'src/**/*.js' 'web/*.js'); do node --check "$f" || exit 1; done
 APP=dist/cadgang.app
 RES=$APP/Contents/Resources
 rm -rf "$APP"
