@@ -1492,14 +1492,57 @@ function postBodies() {
 // The cap draws AFTER the bodies and a hair nearer (polygon offset): where a mating part's face
 // lies on the cut body's inner surface (a lid on a box, a chassis in a shell) the two were
 // z-fighting and the cap lost in patches — "some caps render, others don't" (v0.14.9).
+// Where two solids overlap (a screw's thread crests inside a standoff's) the other's face lies
+// inside the cut body, nearer than its back faces, and showed through the cap (v0.14.81). So closed
+// bodies also count into the stencil (back faces +1, front −1, every layer) and one quad ON the plane
+// paints wherever the count is non-zero: that cap sits at the cut itself and nothing kept can be in
+// front of it. Open meshes would break the count, so they keep only the back-face twin; and if the
+// stencil ever draws nothing (it did in WKWebView at v0.8) the twins still cap as before.
 const capColor = () => new THREE.Color(0x3a3a3a);
+const stencilOp = (side, op) => new THREE.MeshBasicMaterial({ side, depthWrite: false, depthTest: false, colorWrite: false,
+  stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc, stencilFail: op, stencilZFail: op, stencilZPass: op, clippingPlanes: [section.plane] });
+const capPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ color: capColor(), side: THREE.DoubleSide,
+  stencilWrite: true, stencilRef: 0, stencilFunc: THREE.NotEqualStencilFunc,
+  stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp, stencilZPass: THREE.ReplaceStencilOp }));
+capPlane.renderOrder = 2; capPlane.visible = false; capPlane.raycast = () => {};
+scene.add(capPlane);
+// Closed and consistently wound once its vertices are welded: every edge a→b has exactly one b→a.
+function closedMesh(g) {
+  if (g.userData.closed !== undefined) return g.userData.closed;
+  const p = g.getAttribute('position'), ix = g.index, n = ix ? ix.count : p.count;
+  if (n > 3e6) return (g.userData.closed = false);   // ponytail: skip the weld on huge meshes, they keep the back-face cap
+  g.computeBoundingBox();
+  const q = 1e5 / (g.boundingBox.getSize(new THREE.Vector3()).length() || 1), weld = new Map(), id = new Int32Array(p.count);
+  for (let i = 0; i < p.count; i++) {
+    const k = `${Math.round(p.getX(i) * q)},${Math.round(p.getY(i) * q)},${Math.round(p.getZ(i) * q)}`;
+    let j = weld.get(k); if (j === undefined) weld.set(k, (j = weld.size));
+    id[i] = j;
+  }
+  const N = weld.size, edges = new Map(), at = (k) => id[ix ? ix.getX(k) : k];
+  for (let k = 0; k + 2 < n; k += 3) for (let e = 0; e < 3; e++) {
+    const a = at(k + e), b = at(k + (e + 1) % 3);
+    if (a === b) continue;
+    const key = a < b ? a * N + b : b * N + a, d = a < b ? 1 : -1;
+    edges.set(key, (edges.get(key) ?? 0) + d * 1e6 + 1);   // count + 1e6·(forward − backward)
+  }
+  for (const v of edges.values()) if (v !== 2) return (g.userData.closed = false);
+  return (g.userData.closed = true);
+}
 function buildCaps() {
+  const on = !!section.axis && !!bbox;
+  capPlane.visible = on;
   model.children.forEach((m, i) => {
     if (m.userData.cap) { m.remove(m.userData.cap); m.userData.cap.material.dispose(); m.userData.cap = null; }
+    for (const t of m.userData.stencil ?? []) { m.remove(t); t.material.dispose(); }
+    m.userData.stencil = null;
     if (m.isLine) return;
-    const on = !!section.axis && !!bbox;
     eachMat(m, (x) => { x.side = on ? THREE.FrontSide : THREE.DoubleSide; });
     if (!on) return;
+    if (closedMesh(m.geometry)) {
+      m.userData.stencil = [stencilOp(THREE.BackSide, THREE.IncrementWrapStencilOp), stencilOp(THREE.FrontSide, THREE.DecrementWrapStencilOp)].map((x) => {
+        const t = new THREE.Mesh(m.geometry, x); t.renderOrder = 1; t.raycast = () => {}; m.add(t); return t;
+      });
+    }
     const cap = new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ color: capColor(i), side: THREE.BackSide, clippingPlanes: [section.plane],
       polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
     cap.renderOrder = 1;
@@ -1530,6 +1573,9 @@ function updateSection() {
   const at = lo + (hi - lo) * ($('#sectPos').value / 1000);
   const n = new THREE.Vector3(); n.setComponent(i, -section.flip);
   section.plane.set(n, section.flip * at);
+  capPlane.position.copy(section.plane.coplanarPoint(new THREE.Vector3()));
+  capPlane.lookAt(capPlane.position.clone().add(n));
+  capPlane.scale.setScalar(bbox.getSize(new THREE.Vector3()).length() * 20);   // explode carries parts well past the box
 }
 for (const b of $('#sectAxis').querySelectorAll('[data-sect]')) b.addEventListener('click', () => setSectionAxis(b.dataset.sect));
 $('#sectPos').addEventListener('input', updateSection);
@@ -1978,7 +2024,7 @@ async function setRender(on) {
 /** Hand the scene to the path tracer again: on entering and after every action that changed the view state. */
 function syncRender() {
   for (const o of rt.hidden) o.visible = true;
-  rt.hidden = [...scene.children, ...model.children.map((m) => m.userData.cap)]
+  rt.hidden = [...scene.children, ...model.children.flatMap((m) => [m.userData.cap, ...(m.userData.stencil ?? [])])]
     .filter((o) => o?.visible && o !== model && o !== rt.floor && !o.isLight);
   for (const o of rt.hidden) o.visible = false;
   const b = new THREE.Box3().setFromObject(model), r = b.getSize(new THREE.Vector3()).length() || 1;
