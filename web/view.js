@@ -1440,12 +1440,13 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   const tooling = measure.on || !!$('[data-tool].on');   // a markup or measure tool owns shift
   drag = { id: e.pointerId, x: e.clientX, y: e.clientY, pan: e.button === 2 || e.button === 1 || (e.shiftKey && tooling), downX: e.clientX, downY: e.clientY, click: e.button === 0 };
   if (e.button === 0 && e.shiftKey && !tooling && e.pointerType !== 'touch') drag.marquee = true;
+  const slide = ui.scroll === 'trackpad' ? !e.altKey : e.altKey;   // trackpad scheme: a plain drag slides the part along its axis, ⌥ places it freely; mouse: the other way round
   if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
   else if (e.button === 0 && !e.shiftKey && !measure.on && e.pointerType !== 'touch') {
     const hit = partAt(e);
     const j = ui.mode === 'joint' && hit && (e.metaKey ? jointOf(hit.body) : drivingJoint(hit.body));   // ⌘: the part's own joint offset, even on a rigid one
     if (ui.mode === 'joint') { if (j && !(e.metaKey && j.type === 'ball')) drag.joint = { j, offset: e.metaKey, m: bodyOfKey(j.body), hit: hit.body, local: hit.point.clone().applyMatrix4(hit.body.matrixWorld.clone().invert()) }; }   // joint mode: a jointed part turns or slides on its joint, anything else orbits
-    else if (hit && e.altKey) {
+    else if (hit && slide) {
       const v = explodeVec(hit.body), full = +$('#explode').value >= 100;
       // fully exploded, a part in a selection carries the others: each slides the same distance along its own axis
       const group = full && selected.has(hit.body) && selected.size > 1 ? [...selected].filter((m) => m.isMesh && moves(m, explodeVec(m))) : null;
@@ -1455,7 +1456,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   // Exploded, a part pressed on and dragged moves in the screen's plane (up and down too): the selection when the
   // part is in it, else that part alone. The move is part of its explode: the slider brings it home at 0 and back
   // out to where it was put. ⇧ snaps to grid steps. Assembled, a drag rotates as always.
-  if (e.button === 0 && !e.altKey && !e.shiftKey && !drag.sect && !drag.part && !measure.on && !ui.flat && e.pointerType !== 'touch' && ui.mode !== 'joint' && !$('[data-tool].on')) {
+  if (e.button === 0 && !slide && !e.shiftKey && !drag.sect && !drag.part && !measure.on && !ui.flat && e.pointerType !== 'touch' && ui.mode !== 'joint' && !$('[data-tool].on')) {
     const m = bodyAt(e), h = m && hitAt(e);
     if (m && h) {
       const bodies = selected.has(m) ? sel() : [m];
