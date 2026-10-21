@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { normalizeJoint, jointMatrix, solvePoses, clampValue, pitchFor } from '../web/joints.js';
+import { normalizeJoint, jointMatrix, solvePoses, clampValue, pitchFor, sweepJoints } from '../web/joints.js';
 
 const J = (o) => normalizeJoint({ id: 'j', body: 'b#0', origin: [0, 0, 0], axis: [0, 0, 1], ...o });
 const at = (m, p) => new THREE.Vector3(...p).applyMatrix4(m).toArray().map((v) => Math.round(v * 1e6) / 1e6 + 0);
@@ -110,4 +110,17 @@ test('a body with two joints stacks them: the second rides on the first', () => 
   const poses = solvePoses([slide, turn]);
   assert.deepEqual(at(poses.get('b#0'), [1, 0, 0]), [10, 1, 0]);   // turned about the pin at rest, then slid with it
   assert.deepEqual(at(poses.frames.get('b'), [0, 0, 0]), [10, 0, 0]);   // the turn's frame has slid
+});
+
+test('a sweep finds where an arm swings into its base, and that the other way is clear', () => {
+  const box = (w, h, d, x, y, z) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z); return new THREE.Mesh(g); };
+  const meshes = new Map([['base#0', box(20, 10, 2, 0, 0, 0)], ['arm#0', box(8, 1, 1, 4, 0, 2)]]);
+  const j = J({ type: 'revolute', body: 'arm#0', origin: [0, 0, 2], axis: [0, 1, 0], min: -90, max: 90 });
+  const [r] = sweepJoints(meshes, [j], { steps: 18 });
+  assert.equal(r.contacts.length, 1);
+  const c = r.contacts[0];
+  assert.equal(c.body, 'base#0');
+  assert.equal(c.always, false);
+  assert.deepEqual(c.spans, [[10, 90]]);   // +y turns +x down into the base; −90…0 swings up, clear
+  assert.equal(c.first, 10);
 });

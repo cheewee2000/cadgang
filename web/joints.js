@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { MeshBVH } from 'three-mesh-bvh';
 
 /**
  * Joints, as in Fusion 360: a body that moves on an axis instead of sitting still. The math only; the
@@ -129,3 +130,48 @@ export function valueRange(j, size = 100, second = false) {
 
 /** Euler XYZ degrees for a quaternion: how a ball joint's turn is stored and shown. */
 export const eulerOf = (q) => new THREE.Euler().setFromQuaternion(q, 'XYZ').toArray().slice(0, 3).map((r) => +THREE.MathUtils.radToDeg(r).toFixed(4));
+
+/**
+ * Drive each joint through its range (its limits, else valueRange) in `steps` and find where the parts it moves
+ * run into, or come within `gap` mm of, the parts it does not move. The assembly is together (no explode); every
+ * other joint stays where it is. `meshes` maps a body key to its mesh, geometry in the file frame.
+ *   [{ id, name, body, range: [lo, hi], unit, current, contacts: [{ body, spans: [[a, b], ...], always, first }] }]
+ * `always`: touching at every step — a pin in its bore, a part on its face: a fit, not a crash. `first`: the
+ * sampled value nearest the current one where they meet. Ball and fixed joints have no one value to sweep.
+ * ponytail: sampled, so a thin part can pass between steps; moving-vs-moving pairs (a stacked joint's own
+ * parts) are not tested. Add both if a real assembly misses a crash.
+ */
+export function sweepJoints(meshes, joints, { steps = 36, gap = 0, only = null, size = 100 } = {}) {
+  const bvh = new Map();
+  for (const [k, m] of meshes) { m.geometry.boundsTree = new MeshBVH(m.geometry, { indirect: true }); bvh.set(k, m.geometry.boundsTree); m.geometry.computeBoundingBox(); }
+  const boxAt = (k, M) => meshes.get(k).geometry.boundingBox.clone().applyMatrix4(M).expandByScalar(gap / 2);
+  const out = [];
+  for (const j of joints) {
+    if (j.type === 'ball' || j.type === 'fixed' || (only && j.id !== only)) continue;
+    const [lo, hi] = j.type === 'revolute' && j.min == null && j.max == null ? [-180, 180] : valueRange(j, size);
+    const vals = Array.from({ length: steps + 1 }, (_, i) => +(lo + ((hi - lo) * i) / steps).toFixed(4));
+    const poses = vals.map((v) => solvePoses(joints.map((x) => (x === j ? { ...x, value: v } : x))));
+    const keys = [...meshes.keys()], I = new THREE.Matrix4();
+    const at = (P, k) => P.get(k) ?? I;
+    const moving = keys.filter((k) => poses.some((P) => !at(P, k).equals(at(poses[0], k))));
+    const still = keys.filter((k) => !moving.includes(k));
+    const hits = new Map();   // still body → [value index, ...]
+    poses.forEach((P, i) => {
+      for (const a of moving) for (const b of still) {
+        const A = at(P, a), B = at(P, b);
+        if (!boxAt(a, A).intersectsBox(boxAt(b, B))) continue;
+        const BtoA = A.clone().invert().multiply(B), g = meshes.get(b).geometry;
+        const touch = bvh.get(a).intersectsGeometry(g, BtoA) || (gap > 0 && bvh.get(a).closestPointToGeometry(g, BtoA, {}, {}, 0, gap));
+        if (touch) hits.set(b, [...new Set([...(hits.get(b) ?? []), i])]);
+      }
+    });
+    const contacts = [...hits].map(([b, is]) => {
+      const spans = [];
+      for (const i of is) { const s = spans.at(-1); if (s && s[2] === i - 1) { s[1] = vals[i]; s[2] = i; } else spans.push([vals[i], vals[i], i]); }
+      const first = is.map((i) => vals[i]).sort((x, y) => Math.abs(x - j.value) - Math.abs(y - j.value))[0];
+      return { body: b, spans: spans.map(([x, y]) => [x, y]), always: is.length === vals.length, first };
+    });
+    out.push({ id: j.id, name: j.name, body: j.body, range: [lo, hi], unit: turns(j.type) ? '°' : 'mm', current: j.value, contacts });
+  }
+  return out;
+}

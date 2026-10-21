@@ -22,7 +22,7 @@ import { attachOrbitInput } from './orbitinput.js';
 import { createMarkup } from './markup.js';
 import { parseDxf } from './dxf.js';
 import { explodeOffsets, radialOffsets, cylinders } from './explode.js';
-import { normalizeJoint, solvePoses, valueRange, clampValue, pitchFor, turns, eulerOf, planeAxes, JOINT_LABEL } from './joints.js';
+import { normalizeJoint, solvePoses, sweepJoints, valueRange, clampValue, pitchFor, turns, eulerOf, planeAxes, JOINT_LABEL } from './joints.js';
 import { renderDrawing } from './drawing.js';
 import { createMeasure, cylinderFit, sphereFit } from './measure.js';
 import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
@@ -1321,7 +1321,22 @@ function renderJoints() {
   const el = $('#joints');
   el.hidden = !joints.length && ui.mode !== 'joint';   // the joints in either mode; in Joint mode the hints even before the first one
   const div = (className, textContent) => Object.assign(document.createElement('div'), { className, textContent });
-  el.replaceChildren(div('joints-head', 'Joints'), ...joints.map(jointRow), div('joints-hint', JOINT_HINTS));
+  const head = div('joints-head', 'Joints');
+  if (joints.length) head.append(Object.assign(document.createElement('button'), { className: 'ghost', textContent: 'Check', title: 'Drive every joint through its range and find what its parts run into', onclick: checkJoints }));
+  el.replaceChildren(head, ...joints.map(jointRow), div('joints-hint', JOINT_HINTS));
+}
+/** The Check button: each joint's crashes in the status line, and the first one driven to, so you see it. */
+function checkJoints() {
+  say('checking joints…', false, true);
+  setTimeout(() => {   // let the status paint before the sweep holds the thread
+    const res = sweep(), fmt = (r, [a, b]) => (a === b ? `${a}` : `${a}…${b}`) + r.unit;
+    const crash = res.flatMap((r) => r.contacts.filter((c) => !c.always).map((c) => ({ r, c })));
+    const fits = res.flatMap((r) => r.contacts.filter((c) => c.always).map((c) => `${r.label} on ${c.label}`));
+    const text = crash.map(({ r, c }) => `${r.label} hits ${c.label} at ${c.spans.map((s) => fmt(r, s)).join(', ')}`);
+    if (fits.length) text.push(`always touching (a fit?): ${fits.join(', ')}`);
+    say(text.join(' · ') || 'every joint moves clear through its range', false, !!text.length);
+    if (crash.length) { const { r, c } = crash[0]; const j = joints.find((x) => x.id === r.id); if (j) setJointValue(j, 'value', c.first); }
+  }, 30);
 }
 function jointRow(j) {
   const mk = (tag, props, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
@@ -1815,6 +1830,23 @@ function showBusy(what) {
   el.querySelector('span').textContent = what;
   busyTimer = setTimeout(() => { el.hidden = false; }, 400);
 }
+// Claude asks what only the page knows (cadgang_interference): the reply goes back through the server.
+function answer({ id, what, args }) {
+  let body;
+  try {
+    if (what !== 'sweep') throw new Error(`Unknown question: ${what}`);
+    body = { id, result: { subject, joints: sweep(args) } };
+  } catch (e) { body = { id, error: e.message }; }
+  fetch('api/view/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+}
+/** Every joint (or `joint`, an id) through its range: what its parts run into. Labels in, so Claude names parts as the user sees them. */
+function sweep({ joint = null, steps = 36, gap = 0 } = {}) {
+  const keys = bodyKeys(), meshes = new Map([...keys].map(([m, k]) => [k, m]));
+  const size = bbox ? bbox.getSize(new THREE.Vector3()).length() : 100;
+  const res = sweepJoints(meshes, joints, { steps: Math.min(360, Math.max(2, steps)), gap: Math.max(0, gap), only: joint, size });
+  for (const r of res) { r.label = labelOfKey(r.body); for (const c of r.contacts) c.label = labelOfKey(c.body); }
+  return res;
+}
 let snapshotTimer = null;
 /** Post what is on screen; coalesced, since a stroke is many change events. */
 function postSnapshot() {
@@ -1846,6 +1878,7 @@ document.addEventListener('visibilitychange', focus);
     const msg = JSON.parse(ev.data);
     if (msg.type === 'hello' && msg.version) { if (pageVersion && pageVersion !== msg.version) location.reload(); pageVersion = msg.version; }
     if (msg.type === 'snapshot_request') postSnapshot();
+    if (msg.type === 'ask' && !follow && msg.subject === subject && model.children.length) answer(msg);
     if (msg.type === 'busy') showBusy(msg.what);
     if (msg.type === 'markup_changed' && msg.subject === subject) loadMarkup();
     if (msg.type === 'parts_changed' && msg.subject === subject && msg.from !== clientId) loadNames();   // Claude (or another window) renamed bodies
