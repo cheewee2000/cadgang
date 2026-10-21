@@ -24,7 +24,7 @@ import path from 'node:path';
 import { GraphError } from './errors.js';
 import { compileCell, normalizeParams } from './sandbox.js';
 import { cellApi, checkCellResult } from './cellapi.js';
-import { trackBrepShape } from './brep.js';
+import { trackBrepShape, nameParts, partsOf, setParts } from './brep.js';
 
 const CELL_ID = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 const PROMPT_LIMIT = 20000;
@@ -650,7 +650,7 @@ function cacheResult(key, value, logs, checks) {
     resultCache.delete(oldest);
     try { gone.shape.delete(); } catch { /* already freed */ }
   }
-  resultCache.set(key, { shape: value.clone(), logs, checks });
+  resultCache.set(key, { shape: setParts(value.clone(), partsOf(value)), logs, checks });
 }
 
 /** Drop every cached shape (tests, and anything that changes what a cell means). */
@@ -725,7 +725,7 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
       entry.logs = hit.logs.map((l) => ({ ...l }));
       entry.checks.push(...hit.checks.map((c) => ({ ...c })));
       entry.cached = true;
-      results.set(cell.id, trackBrepShape(hit.shape.clone()));
+      results.set(cell.id, setParts(trackBrepShape(hit.shape.clone()), partsOf(hit.shape)));   // a clone keeps the part names
       keys.set(cell.id, key);
       previous = results.get(cell.id);
       previousKey = key;
@@ -743,7 +743,7 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
       // An assertion cell measures; it does not model. Its result is whatever
       // came in, so a check can be dropped anywhere in the stack without
       // becoming a link in the chain that later cells depend on.
-      results.set(cell.id, asserting ? input : checkCellResult(value, cell.id));
+      results.set(cell.id, asserting ? input : nameParts(checkCellResult(value, cell.id), cell.id));   // its solids are named for the cell in a STEP file
       // An assertion cell is TRANSPARENT to the running "that": it does not
       // become the previous result, so the next cell sees what it would have
       // seen if the check were not there. Otherwise dropping a check into the

@@ -212,7 +212,7 @@ select.ghost:hover { opacity: 0.55; }
 .bodies input { accent-color: var(--ink); margin: 0; }
 .bodies label > span { flex: none; }
 .bodies label.hover { outline: var(--bw-hair) solid #ff5a1f; outline-offset: 1px; }   /* the body under the mouse, same orange as its overlay */
-.bodies .mat-tag { flex: none; margin-left: auto; padding-left: var(--sp-3); display: inline-flex; align-items: center; gap: 4px; color: var(--ink-faint); font-size: 10px; white-space: nowrap; }   /* material · finish · colour */
+.bodies .mat-tag { flex: none; margin-left: auto; padding-left: var(--sp-3); padding-top: 1px; display: inline-flex; align-items: center; gap: 4px; color: var(--ink-faint); font-size: 10px; white-space: nowrap; }   /* material · finish · colour */
 .bodies .mat-tag select.mat-word { font: inherit; font-size: 10px; color: var(--ink-soft); border: 0; background: none; padding: 0 2px; height: auto; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; appearance: none; -webkit-appearance: none; }   /* reads as a word; a click lists the materials */
 .bodies .mat-tag select.mat-word.guess { font-style: italic; opacity: 0.7; }   /* the file names none: cadgang's guess */
 .bodies .mat-tag .bits, .bodies .finish-row { display: inline-flex; align-items: center; gap: 4px; }
@@ -248,8 +248,9 @@ select.ghost:hover { opacity: 0.55; }
 .bodies-grip:hover, .bodies-grip:active { background: var(--rule); }
 .bodies.min .bodies-grip { display: none; }
 .bodies label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.bodies label > .body-name, .bodies label.group-row > span:not(.fold-gap):not(.mat-tag) { flex: none; overflow: visible; white-space: nowrap; }   /* a part's whole name on one line, always: a long one scrolls the panel sideways */
-.bodies label { align-items: center; min-width: max-content; }
+.bodies label > .body-name, .bodies label.group-row > span:not(.fold-gap):not(.mat-tag) { flex: 0 1 auto; min-width: 4em; overflow: visible; white-space: normal; overflow-wrap: anywhere; }   /* a part's whole name: a long one goes on to a second line, lined up with the first; it never pushes the columns */
+.bodies label { align-items: flex-start; }
+.bodies label > input, .bodies label > .fold, .bodies label > .fold-gap, .bodies label > .see, .bodies label > .body-edit { margin-top: 2px; }
 .bodies .mat-tag select.fin-word { font: inherit; font-size: 10px; color: var(--ink-faint); border: 0; background: none; padding: 0; height: auto; cursor: pointer; appearance: none; -webkit-appearance: none; text-decoration: underline dotted; text-underline-offset: 2px; }
 .bodies .mat-tag button.swatch-pick { width: 11px; height: 11px; min-width: 0; padding: 0; border: var(--bw-hair) solid var(--rule); cursor: pointer; flex: none; }
 .bodies .group-body { display: flex; flex-direction: column; gap: 2px; padding-left: 12px; }
@@ -347,3 +348,4 @@ footer > * { white-space: nowrap; }
 .bodies .mat-tag select.fin-word { width: 5em; }
 .bodies .mat-tag .col { width: 5.5em; overflow: hidden; text-overflow: ellipsis; }
 .bodies label:has(.mat-tag) .see { margin-left: 0; }   /* the tag takes the slack, so its columns sit at the right */
+.bodies .mat-tag .col.pick { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }   /* reads as a word; a click opens the colours */

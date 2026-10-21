@@ -549,7 +549,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
   r.get('/export/step', async (req, res) => {
     try {
       await withShape(req, async ({ shape, target }) => {
-        const step = await exportStep(shape);
+        const step = await exportStep(shape, { name: target });
         const savedTo = saveExport(req.query.file, 'step', step);
         res.setHeader('Content-Type', 'model/step');
         res.setHeader('Content-Disposition', `attachment; filename="${target}.step"`);
