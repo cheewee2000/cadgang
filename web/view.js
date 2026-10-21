@@ -2485,6 +2485,7 @@ function partCmds(m) {
   return [
     { head: nameOf(m) },
     { label: 'Rename…', run: () => startRename(m) },
+    ...(window.cadgangServerless ? [] : [{ label: selected.has(m) && selected.size > 1 ? `Send ${selected.size} selected to Bambu Studio` : 'Send to Bambu Studio', run: () => sendToSlicer(selected.has(m) ? [...selected] : [m]) }]),
     ...(ui.mode === 'joint' ? jointCmds(m) : [
     { label: `Explode auto${auto}`, run: () => set(undefined), on: () => !m.userData.axis },
     { label: 'Explode direction: pick a face…', run: () => startPickAxis(m), on: () => !!m.userData.axis },
@@ -2492,6 +2493,35 @@ function partCmds(m) {
     { sep: true },
     ]),
   ];
+}
+// SEND TO BAMBU STUDIO: each part as a binary STL in mm, placed as it sits now (explode, joints, turn), all
+// opened in the slicer together so they keep their places on the plate.
+function stlOf(m) {
+  const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry, p = g.getAttribute('position'), n = p.count / 3 | 0;
+  const dv = new DataView(new ArrayBuffer(84 + 50 * n)), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), nm = new THREE.Vector3();
+  dv.setUint32(80, n, true);
+  m.updateWorldMatrix(true, false);
+  for (let t = 0, o = 84; t < n; t++, o += 50) {
+    a.fromBufferAttribute(p, 3 * t).applyMatrix4(m.matrixWorld); b.fromBufferAttribute(p, 3 * t + 1).applyMatrix4(m.matrixWorld); c.fromBufferAttribute(p, 3 * t + 2).applyMatrix4(m.matrixWorld);
+    THREE.Triangle.getNormal(a, b, c, nm);
+    [nm, a, b, c].forEach((v, k) => { dv.setFloat32(o + 12 * k, v.x, true); dv.setFloat32(o + 12 * k + 4, v.y, true); dv.setFloat32(o + 12 * k + 8, v.z, true); });
+  }
+  if (g !== m.geometry) g.dispose();
+  return dv.buffer;
+}
+async function sendToSlicer(bodies) {
+  bodies = bodies.filter((m) => m.isMesh && model.children.includes(m));
+  if (!bodies.length) return;
+  const batch = Date.now().toString(36) + Math.random().toString(36).slice(2, 8), used = new Map();
+  try {
+    for (const m of bodies) {
+      const base = nameOf(m).replace(/\.[^.]+$/, '').replace(/[^\w .-]/g, '_') || 'part', k = used.get(base) ?? 0;
+      used.set(base, k + 1);
+      await fetchBuffer(`api/view/slicer?batch=${batch}&name=${encodeURIComponent(`${base}${k ? `_${k}` : ''}.stl`)}`, { method: 'PUT', body: stlOf(m) });
+    }
+    await api('/slicer/open', { method: 'POST', body: { batch } });
+    say(`sent ${bodies.length} part${bodies.length > 1 ? 's' : ''} to Bambu Studio`);
+  } catch (e) { say(`send to Bambu Studio failed: ${e.message}`, true); }
 }
 function showMenu(x, y, part) { showItems(x, y, [...partCmds(part), ...CMDS.filter((c) => !(ui.mode === 'joint' && /^Explode/.test(c.label)))]); }
 function showItems(x, y, items) {

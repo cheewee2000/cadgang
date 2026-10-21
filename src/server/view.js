@@ -22,6 +22,7 @@ import path from 'node:path';
 import net from 'node:net';
 import os from 'node:os';
 import express from 'express';
+import { execFile } from 'node:child_process';
 import { importCadFileInWorker as importCadFile } from '../core/step.js';
 import { deployShare } from './vercel.js';
 
@@ -339,6 +340,30 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       await fs.writeFile(tmp, req.body);
       await fs.rename(tmp, p);
       res.json({ path: p, bytes: req.body.length });
+    } catch (e) { next(e); }
+  });
+
+  // Send to Bambu Studio: the page PUTs one STL per part into a batch folder under the temp dir, then
+  // asks for the batch to open, all at once, in the slicer. Local only, like saving.
+  const slicerDir = (batch) => path.join(os.tmpdir(), 'cadgang-slicer', batch);
+  r.put('/slicer', express.raw({ type: () => true, limit: '1gb' }), async (req, res, next) => {
+    try {
+      if (!mayReadLocal(req)) throw Object.assign(new Error('Sending to the slicer is only available in the desktop app'), { status: 403 });
+      const batch = String(req.query.batch || ''), name = String(req.query.name || '').replace(/[^\w .-]/g, '_');
+      if (!/^\w{8,32}$/.test(batch) || !/\.stl$/i.test(name)) throw Object.assign(new Error('need batch and a .stl name'), { status: 400 });
+      await fs.mkdir(slicerDir(batch), { recursive: true });
+      await fs.writeFile(path.join(slicerDir(batch), name), req.body);
+      res.json({ ok: true });
+    } catch (e) { next(e); }
+  });
+  r.post('/slicer/open', express.json(), async (req, res, next) => {
+    try {
+      if (!mayReadLocal(req)) throw Object.assign(new Error('Sending to the slicer is only available in the desktop app'), { status: 403 });
+      const batch = String(req.body?.batch || '');
+      if (!/^\w{8,32}$/.test(batch)) throw Object.assign(new Error('need batch'), { status: 400 });
+      const files = (await fs.readdir(slicerDir(batch))).map((f) => path.join(slicerDir(batch), f));
+      await new Promise((ok, fail) => execFile('open', ['-a', 'BambuStudio', ...files], (e) => (e ? fail(Object.assign(new Error('Bambu Studio did not open — is it installed?'), { status: 500 })) : ok())));
+      res.json({ files: files.length });
     } catch (e) { next(e); }
   });
 
