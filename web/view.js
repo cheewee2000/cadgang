@@ -1837,11 +1837,15 @@ const measure = createMeasure({
   THREE, scene, renderer, model, layer: $('#measureLayer'),
   getCamera: () => camera, getOrbit: () => orbit, say, onChange: () => commit(),
 });
+// Measure and the markup tools are one at a time: picking one puts the other down.
 function setMeasure(on) {
+  const t = on && $('[data-tool].on')?.dataset.tool;
+  if (t) markup.setTool(t);   // setTool on the chosen tool toggles it off
   measure.setOn(on);
   $('#measureBtn').classList.toggle('on', on);
 }
 $('#measureBtn').addEventListener('click', () => setMeasure(!measure.on));
+document.addEventListener('click', (e) => { if (e.target.closest?.('[data-tool]') && $('[data-tool].on')) setMeasure(false); });   // after markup's own handler
 
 // ------------------------------------------------------------------- theme
 
@@ -2402,7 +2406,7 @@ const CMDS = [
   { sep: true },
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },
-  ...[['p', 'pen', 'Pen'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['r', 'erase', 'Erase']].map(([key, t, label]) => ({ key, label, btn: `[data-tool="${t}"]`, run: () => markup.setTool(t), on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
+  ...[['p', 'pen', 'Pen'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['r', 'erase', 'Erase']].map(([key, t, label]) => ({ key, label, btn: `[data-tool="${t}"]`, run: () => { markup.setTool(t); if ($('[data-tool].on')) setMeasure(false); }, on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
   { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
   { sep: true },
   { key: 'd', label: 'Background: light / dark / dusk / dawn / night', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.bg !== 'light' },
