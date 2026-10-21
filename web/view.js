@@ -488,7 +488,8 @@ function bodiesHead() {
   btn.addEventListener('click', () => { panel.classList.toggle('min'); paint(); saveBodies(); });
   paint();
   const tools = document.createElement('span'); tools.className = 'bodies-tools'; tools.append(btn);
-  // Absolutely placed against the panel, so it spans the panel's full height from inside the head.
+  // On the column's right edge, not inside the panel: inside, it scrolled away with a long list and sat under its scrollbar.
+  column.querySelector(':scope > .bodies-grip')?.remove();
   const grip = document.createElement('div'); grip.className = 'bodies-grip'; grip.title = 'Drag to set the width';
   grip.addEventListener('pointerdown', (e) => {
     e.preventDefault(); e.stopPropagation();
@@ -501,7 +502,8 @@ function bodiesHead() {
     };
     grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
   });
-  head.append(Object.assign(document.createElement('span'), { textContent: 'BODIES' }), tools, grip);
+  head.append(Object.assign(document.createElement('span'), { textContent: 'BODIES' }), tools);
+  column.append(grip);
   return head;
 }
 function saveBodies() {

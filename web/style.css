@@ -246,9 +246,9 @@ select.ghost:hover { opacity: 0.55; }
 .viewcube[hidden] { display: none; }
 .viewcube canvas { pointer-events: auto; cursor: pointer; width: 112px; height: 112px; }
 .viewcube-fit { pointer-events: auto; width: 34px; height: 34px; padding: 5px; border-radius: 50%; background: var(--paper); border: var(--bw-hair) solid var(--rule); color: var(--ink); display: flex; align-items: center; justify-content: center; margin-bottom: 4px; }
-.bodies-grip { position: absolute; top: 0; right: 0; bottom: 0; width: 6px; cursor: ew-resize; touch-action: none; }
+.bodies-grip { position: absolute; top: 0; right: -6px; bottom: 0; width: 6px; cursor: ew-resize; touch-action: none; }
 .bodies-grip:hover, .bodies-grip:active { background: var(--rule); }
-.bodies.min .bodies-grip { display: none; }
+.hud-tl:has(.bodies.min) > .bodies-grip, .hud-tl:has(.bodies[hidden]) > .bodies-grip { display: none; }
 .bodies label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .bodies label > .body-name, .bodies label.group-row > span:not(.fold-gap):not(.mat-tag) { flex: 0 1 auto; min-width: 4em; overflow: visible; white-space: normal; overflow-wrap: anywhere; }   /* a part's whole name: a long one goes on to a second line, lined up with the first; it never pushes the columns */
 .bodies label { align-items: flex-start; }
@@ -350,6 +350,8 @@ footer > * { white-space: nowrap; }
 .bodies .mat-tag select.mat-word { width: 9em; text-overflow: ellipsis; }
 .bodies .mat-tag select.fin-word { width: 5em; }
 .bodies .mat-tag .col { width: 5.5em; overflow: hidden; text-overflow: ellipsis; }
+.bodies .mat-tag select { text-align: right; text-align-last: right; }   /* material and finish sit at their columns' right edge */
+.bodies .mat-tag .col { width: auto; max-width: 5.5em; }   /* the colour name hugs its swatch and ends the row */
 .bodies label:has(.mat-tag) .see { margin-left: 0; }   /* the tag takes the slack, so its columns sit at the right */
 .bodies .mat-tag .col.pick { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }   /* reads as a word; a click opens the colours */
 /* the header's buttons are the HUD's smaller size */
