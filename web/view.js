@@ -422,8 +422,34 @@ function listBodies() {
   panel.append(all);
   syncRows();
   paintRows();
+  requestAnimationFrame(fitNames);
   return dups.join(' · ');
 }
+/**
+ * A long name takes two lines at most: each name gets the least width that does it, and the panel
+ * grows (to 70% of the window) so the widest row still fits, its columns where every other row has them.
+ */
+function fitNames() {
+  const panel = $('#bodies');
+  if (!panel || panel.hidden || panel.classList.contains('min')) return;
+  panel.style.minWidth = '';
+  let over = 0;
+  for (const el of panel.querySelectorAll('label > .body-name, label.group-row > span:not(.fold-gap):not(.mat-tag)')) {
+    el.style.minWidth = '';
+    if (!el.offsetParent) continue;   // in a folded folder
+    el.style.whiteSpace = 'nowrap';
+    const full = el.scrollWidth, line = el.offsetHeight;
+    el.style.whiteSpace = '';
+    if (el.offsetHeight <= line * 2 + 1) continue;
+    let w = Math.ceil(full / 2);
+    el.style.minWidth = `${w}px`;
+    while (el.offsetHeight > line * 2 + 1 && w < full) { w += 4; el.style.minWidth = `${w}px`; }
+    const row = el.parentElement;
+    over = Math.max(over, row.scrollWidth - row.clientWidth);
+  }
+  if (over > 0) panel.style.minWidth = `${Math.min(innerWidth * 0.7, panel.offsetWidth + over)}px`;
+}
+new ResizeObserver(() => { clearTimeout(fitNames.t); fitNames.t = setTimeout(fitNames, 60); }).observe($('#bodies'));
 /**
  * The panel's title row: − folds it to just the title, + brings it back. The grip on the
  * panel's right edge drags its width (CSS resize had an invisible corner and no touch).
@@ -751,7 +777,11 @@ function finishBits(f, m = null) {
     sw.style.background = hexOfRGB(f.color);
     sw.addEventListener('pointerdown', (e) => e.stopPropagation());
     sw.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openColorMenu(sw, hexOfRGB(f.color), (rgb) => { setTint([m], rgb); rerender(); paintFinishes(); paintSelection(); }, () => commit()); });
-    frag.append(fin, sw);
+    const col = Object.assign(document.createElement('span'), { className: 'col pick', textContent: f.colorText, title: sw.title });
+    col.addEventListener('pointerdown', (e) => e.stopPropagation());
+    col.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); sw.click(); });   // the colour's name opens the same menu as its swatch
+    frag.append(fin, sw, col);
+    return frag;
   } else {
     if (f.finish) frag.append(Object.assign(document.createElement('span'), { className: 'fin', textContent: f.finish }));
     const sw = Object.assign(document.createElement('span'), { className: 'swatch', title: hexOfRGB(f.color) }); sw.style.background = hexOfRGB(f.color);
@@ -2619,7 +2649,8 @@ fetch('api/health').then((r) => r.json()).then((h) => {
     : navigator.clipboard.writeText(link).then(() => say(`copied ${link}`), () => say(link)));
 }).catch(() => {});
 // ------------------------------------------------------------------- share
-// The share icon opens a menu: SHARE TO WEB deploys a frozen copy of this view (meshes + view state)
+// The share icon opens a menu: COPY SCREENSHOT puts a PNG of the view (markups and notes on it) on the
+// clipboard, SAVE SCREENSHOT downloads it; SHARE TO WEB deploys a frozen copy of this view (meshes + view state)
 // to the user's own Vercel account and copies its link (the first time, it asks for their token);
 // SHARE TO IPAD is the old iPad button. A shared link (?share=<id>) opens the whole viewer from that
 // view; its visitors orbit, cut, explode and mark up, but cannot open, save or share files.
@@ -2627,6 +2658,22 @@ const shareMenu = $('#shareMenu');
 $('#shareBtn').addEventListener('click', (e) => { e.stopPropagation(); shareMenu.hidden = !shareMenu.hidden; $('#vercelForm').hidden = true; });
 shareMenu.addEventListener('click', (e) => e.stopPropagation());
 document.addEventListener('click', () => { shareMenu.hidden = true; });
+const shotBlob = () => fetch(markup.snapshot()).then((r) => r.blob());
+const shotName = () => `${String($('#fileName').textContent || 'cadgang').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_')}.png`;
+$('#shareShot').addEventListener('click', () => {
+  shareMenu.hidden = true;
+  if (!bbox) return say('open a file first', true);
+  // the item is made now, with the picture still to come: Safari (and the Mac app) only let the click itself write
+  navigator.clipboard.write([new ClipboardItem({ 'image/png': shotBlob() })])
+    .then(() => say('screenshot copied: paste it anywhere'), (e) => say(`could not copy the screenshot (${e.message}): use Save screenshot`, true));
+});
+$('#shareShotSave').addEventListener('click', async () => {
+  shareMenu.hidden = true;
+  if (!bbox) return say('open a file first', true);
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(await shotBlob()), download: shotName() });
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  say(`saved ${a.download}`);
+});
 $('#shareWeb').addEventListener('click', async () => {
   if (!sources.length) return say('open a file first', true);
   const has = await api('/share/vercel').then((d) => d.token, () => false);
@@ -2766,7 +2813,7 @@ async function openShare(id) {
   } catch (e) { progressEnd(); loadFailed('shared view', e); }
 }
 // For headless drives: the scene objects behind the page.
-window.__view = { selected, selectBodies, bodiesInWindow, model, section, orbit, ui, measure, rt, THREE, planes, get joints() { return joints; }, get poses() { return poses; }, jointLinks, get limitHandles() { return limitHandles; }, addJoint, setJointValue, faceAxis, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
+window.__view = { fitNames, selected, selectBodies, bodiesInWindow, model, section, orbit, ui, measure, rt, THREE, planes, get joints() { return joints; }, get poses() { return poses; }, jointLinks, get limitHandles() { return limitHandles; }, addJoint, setJointValue, faceAxis, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
   project: (x, y, z) => { const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3(x, y, z).project(camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; } };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
