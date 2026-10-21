@@ -1382,22 +1382,55 @@ function renderJoints() {
   const el = $('#joints');
   el.hidden = !joints.length && ui.mode !== 'joint';   // the joints in either mode; in Joint mode the hints even before the first one
   const div = (className, textContent) => Object.assign(document.createElement('div'), { className, textContent });
-  const head = div('joints-head', 'Joints');
-  if (joints.length) head.append(Object.assign(document.createElement('button'), { className: 'ghost', textContent: 'Check', title: 'Drive every joint through its range and find what its parts run into', onclick: checkJoints }));
+  const head = div('joints-head', '');
+  head.append(Object.assign(document.createElement('span'), { textContent: 'Joints' }));
+  if (joints.length) head.append(Object.assign(document.createElement('button'), { className: 'ghost', textContent: 'Check', title: 'Drive every joint through its range, find what its parts run into, and set its limits just short of the first crash each way', onclick: checkJoints }));
   el.replaceChildren(head, ...joints.map(jointRow), div('joints-hint', JOINT_HINTS));
 }
-/** The Check button: each joint's crashes in the status line, and the first one driven to, so you see it. */
+/**
+ * The Check button: each joint's crashes in the status line, and its limits snapped to the last clear
+ * value before the first crash on either side of where it sits (found coarse, then refined between the
+ * last clear step and the first hit). The joint is driven to the limit nearest its first crash, so you see it.
+ */
+const CHECK_STEPS = 120, REFINE_STEPS = 16;
 function checkJoints() {
   say('checking joints…', false, true);
   setTimeout(() => {   // let the status paint before the sweep holds the thread
-    const res = sweep(), fmt = (r, [a, b]) => (a === b ? `${a}` : `${a}…${b}`) + r.unit;
+    const res = sweep({ steps: CHECK_STEPS }), fmt = (r, [a, b]) => (a === b ? `${a}` : `${a}…${b}`) + r.unit;
     const crash = res.flatMap((r) => r.contacts.filter((c) => !c.always).map((c) => ({ r, c })));
     const fits = res.flatMap((r) => r.contacts.filter((c) => c.always).map((c) => `${r.label} on ${c.label}`));
     const text = crash.map(({ r, c }) => `${r.label} hits ${c.label} at ${c.spans.map((s) => fmt(r, s)).join(', ')}`);
     if (fits.length) text.push(`always touching (a fit?): ${fits.join(', ')}`);
+    const snapped = snapLimits(res);
+    if (snapped.length) text.push(`limits set: ${snapped.join(', ')}`);
     say(text.join(' · ') || 'every joint moves clear through its range', false, !!text.length);
-    if (crash.length) { const { r, c } = crash[0]; const j = joints.find((x) => x.id === r.id); if (j) setJointValue(j, 'value', c.first); }
+    if (crash.length) {
+      const { r, c } = crash[0], j = joints.find((x) => x.id === r.id);
+      if (j) setJointValue(j, 'value', [j.min, j.max].filter((v) => v != null).sort((a, b) => Math.abs(a - c.first) - Math.abs(b - c.first))[0] ?? c.first);
+    }
+    renderJoints(); drawJointLinks(); saveJoints(); commit();
   }, 30);
+}
+function snapLimits(res) {
+  const keys = bodyKeys(), meshes = new Map([...keys].map(([m, k]) => [k, m])), size = bbox ? bbox.getSize(new THREE.Vector3()).length() : 100, out = [];
+  for (const r of res) {
+    const j = joints.find((x) => x.id === r.id);
+    const crashes = r.contacts.filter((c) => !c.always);
+    if (!j || !crashes.length) continue;
+    const hitBodies = new Set(crashes.map((c) => c.body)), spans = crashes.flatMap((c) => c.spans), step = (r.range[1] - r.range[0]) / CHECK_STEPS, v = j.value;
+    // between the last clear sample and the first hit, the first hit again at a finer step; the limit is the sample before it
+    const edge = (clear, hit) => {
+      const sub = sweepJoints(meshes, joints.map((x) => (x === j ? { ...x, min: Math.min(clear, hit), max: Math.max(clear, hit) } : x)), { steps: REFINE_STEPS, only: j.id, size })[0];
+      const hs = (sub?.contacts ?? []).filter((c) => hitBodies.has(c.body)).flatMap((c) => c.spans.flat());
+      const first = hs.length ? (hit > clear ? Math.min(...hs) : Math.max(...hs)) : hit, back = (hit - clear) / REFINE_STEPS;
+      return hit > clear ? Math.floor((first - back) * 10) / 10 : Math.ceil((first - back) * 10) / 10;
+    };
+    const up = Math.min(...spans.map(([a]) => a).filter((a) => a > v)), dn = Math.max(...spans.map(([, b]) => b).filter((b) => b < v));
+    if (Number.isFinite(up)) j.max = Math.max(v, edge(up - step, up));
+    if (Number.isFinite(dn)) j.min = Math.min(v, edge(dn + step, dn));
+    if (Number.isFinite(up) || Number.isFinite(dn)) { j.value = clampValue(j, j.value); out.push(`${r.label} ${j.min ?? '…'}…${j.max ?? '…'}${r.unit}`); }
+  }
+  return out;
 }
 function jointRow(j) {
   const mk = (tag, props, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
