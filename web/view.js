@@ -613,8 +613,11 @@ function setPartAxis(m, n) {
 const moves = (m, v) => v.length() > 0.01 * (m.geometry.boundingBox?.getSize(new THREE.Vector3()).length() ?? 1);
 // Stages (the solver's order of removal): a part waits for what stands in its way, so the slider's first stretch moves the
 // outer parts and the next the ones under them. Part of stage s of S has its own slice of the slider.
-const stageCount = () => 1 + Math.max(0, ...model.children.map((m) => m.userData.stage ?? 0));
-const stageFrac = (m, k) => { const S = stageCount(); return S < 2 ? k : THREE.MathUtils.clamp(k * S - (m.userData.stage ?? 0), 0, 1); };
+// A stage saved with the file's explode edits (parts[key].stage, e.g. an assembly order written by a CAD script) beats the
+// solver's, and that part moves along its own axis alone, not riding a parent.
+const stageOf = (m) => m.userData.fixStage ?? m.userData.stage ?? 0;
+const stageCount = () => 1 + Math.max(0, ...model.children.map(stageOf));
+const stageFrac = (m, k) => { const S = stageCount(); return S < 2 ? k : THREE.MathUtils.clamp(k * S - stageOf(m), 0, 1); };
 const maxTravel = (m) => m.userData.pull ?? explodeVec(m).length() * 2;   // the solver's full travel is twice its offset
 // The user's explode edits (axis, maximum travel) are saved per file and come back on load and on a
 // re-export, by body name: `${name}#${n}` for the n-th body of that name.
@@ -665,7 +668,7 @@ const partKey = (m) => { const all = model.children; return `${m.userData.name}#
 let partsReady = false, partsSaved = '{}', partsTimer = null;
 function partsState() {
   const out = {};
-  for (const m of model.children) if (m.userData.axis || m.userData.pull != null) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null };
+  for (const m of model.children) if (m.userData.axis || m.userData.pull != null || m.userData.fixStage != null) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null, ...(m.userData.fixStage != null && { stage: m.userData.fixStage }) };
   if (rot.w < 1 - 1e-9) out['@rot'] = rotArr();   // the axes and marks above are in this turned frame
   const names = namesOf();
   if (Object.keys(names).length) out['@names'] = names;
@@ -691,7 +694,7 @@ function loadParts() {
     const r = d.parts?.['@rot'];
     if (r) { bakeRot(new THREE.Quaternion().fromArray(r)); history.list = []; history.i = -1; queueMicrotask(commit); }   // undo never goes back past the saved turn
     if (d.parts?.['@names']) { applyNames(d.parts['@names']); history.list = []; history.i = -1; queueMicrotask(commit); }
-    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; } }
+    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; m.userData.fixStage = p.stage ?? undefined; } }
     partsSaved = JSON.stringify(partsState()); partsReady = true;
     applyExplode();
   }).catch(() => { partsReady = true; });
@@ -705,7 +708,7 @@ function applyExplode() {
     done.add(m);
     const v = explodeVec(m), len = v.length();
     at.copy(v).multiplyScalar(len ? (maxTravel(m) * stageFrac(m, k)) / len : 0);
-    if (m.userData.parent) at.add(place(m.userData.parent));
+    if (m.userData.parent && m.userData.fixStage == null) at.add(place(m.userData.parent));
     return at;
   };
   for (const m of model.children) place(m);
