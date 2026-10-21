@@ -1589,7 +1589,7 @@ function hitAt(e) {
   raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   return raycaster.intersectObjects(model.children, false)[0]?.point ?? null;
 }
-attachOrbitInput(renderer.domElement, { orbit, getCamera: () => camera, THREE, hitAt, isFlat: () => ui.flat });
+attachOrbitInput(renderer.domElement, { orbit, getCamera: () => camera, THREE, hitAt, isFlat: () => ui.flat, scheme: () => ui.scroll });
 
 // Is the pointer over a cut face? The first hit on the kept side of the plane
 // being a back face means the ray entered the solid through the cut.
@@ -2396,6 +2396,11 @@ function setUnits(u) {
   placeGrid();   // inches: ¼" lines, darker every inch; mm: as always
 }
 $('#unitsSel').addEventListener('change', (e) => { setUnits(e.target.value); commit(); });
+ui.scroll = 'trackpad';
+$('#scrollSel').addEventListener('change', (e) => {
+  ui.scroll = e.target.value;
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(PREFS_KEY)), scroll: ui.scroll })); } catch {}
+});
 $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
 $('#gridBtn').addEventListener('click', () => toggle('grid', '#gridBtn'));
@@ -3159,7 +3164,7 @@ function commit() {
   if (s === history.list[history.i]) return;
   rerender();
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, color: ui.color, ortho: ui.ortho, mode: ui.mode })); } catch {}
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, scroll: ui.scroll, color: ui.color, ortho: ui.ortho, mode: ui.mode })); } catch {}
 }
 // View preferences outlive the page, like the theme. Section, explode and body
 // visibility belong to a file and start fresh with it.
@@ -3168,6 +3173,7 @@ try {
   const p = JSON.parse(localStorage.getItem(PREFS_KEY));
   if (p?.look in PRESETS) ui.look = document.documentElement.dataset.look = $('#look').value = p.look;
   if (UNIT_MM[p?.units]) { ui.units = $('#unitsSel').value = p.units; }
+  if (p?.scroll === 'mouse') ui.scroll = $('#scrollSel').value = 'mouse';
   for (const k of ['edges', 'wire', 'grid', 'ruler', 'color']) if (typeof p?.[k] === 'boolean' && ui[k] !== p[k]) toggle(k, `#${k}Btn`);
   if (p?.ortho) setOrtho(true);
   if (p?.mode === 'joint') setMode('joint');
