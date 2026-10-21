@@ -23,6 +23,7 @@ import net from 'node:net';
 import os from 'node:os';
 import express from 'express';
 import { importCadFileInWorker as importCadFile } from '../core/step.js';
+import { deployShare } from './vercel.js';
 
 const DESKTOP = process.env.CADGANG_DESKTOP === '1';
 export const CAD_EXT = /\.(step|stp|iges|igs|brep)$/i;
@@ -84,20 +85,23 @@ export function pack(m) {
  * Markups, the screen, and files pushed from MCP.
  *   GET/PUT /api/view/markup?subject=…  the markups of one opened file (default: the file on screen)
  *   POST    /api/view/snapshot          the page posts {png, camera, subject} — the live view
+ *   GET/PUT /api/view/joints?subject=…  the joints of one file (+ the bodies the page reports)
+ *   PUT     /api/view/project?path=/abs/x.cadgang  desktop only: write a saved project
  *   GET     /api/view/screen?fresh=1    latest snapshot (+its markups); fresh=1 asks open pages to post
  *                                       a new one first and waits up to ?wait= seconds (default 3)
  *   GET     /api/view/screen.png        the image alone
  *   POST    /api/view/open {paths}      tell every open page to open these files (the MCP tool)
  *   GET|PUT /api/view/parts?subject=    per-file explode axes and maxima, by body name
  */
-/** The one file in a multipart/form-data body (what Share to web sends; ponytail: one part, no streaming). */
+/** The one file in a multipart/form-data body (what a shared-link upload sends; ponytail: one part, no streaming). */
 function multipartFile(buf, ctype) {
   const b = Buffer.from('--' + /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(ctype).slice(1).find(Boolean));
   const start = buf.indexOf('\r\n\r\n', buf.indexOf(b)) + 4;
   return buf.subarray(start, buf.indexOf(Buffer.concat([Buffer.from('\r\n'), b]), start));
 }
-const SHARE_HOST = process.env.CADGANG_SHARE_HOST || 'https://www.experiments.cwandt.com/cadgang';
 const SHARE_KEY_FILE = path.join(os.homedir(), '.cadgang', 'share_key');
+const VERCEL_TOKEN_FILE = path.join(os.homedir(), '.cadgang', 'vercel_token');
+const vercelToken = () => { try { return fsSync.readFileSync(VERCEL_TOKEN_FILE, 'utf8').trim(); } catch { return ''; } };
 const shareKey = () => { try { return fsSync.readFileSync(SHARE_KEY_FILE, 'utf8').trim(); } catch { return process.env.CADGANG_SHARE_KEY || ''; } };
 
 export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
@@ -130,6 +134,24 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     } catch (e) { next(e); }
   });
 
+  // Joints of one file, and the bodies they can be made on (the page posts those: name key, box, cylinders).
+  // Claude reads both and writes joints; the page loads what changed unless it made the change itself (`from`).
+  const jointsPath = (subject) => path.join(dataDir, 'joints', `${slug(subject)}.json`);
+  const readJoints = (subject) => { try { const d = JSON.parse(fsSync.readFileSync(jointsPath(subject), 'utf8')); return { joints: d.joints ?? [], bodies: d.bodies ?? [] }; } catch { return { joints: [], bodies: [] }; } };
+  r.get('/joints', (req, res) => { const subject = subjectOf(req); res.json({ subject, ...readJoints(subject) }); });
+  r.put('/joints', (req, res, next) => {
+    try {
+      const subject = subjectOf(req);
+      if (!subject) throw Object.assign(new Error('No file is open to attach joints to'), { status: 400 });
+      const cur = readJoints(subject), has = Array.isArray(req.body?.joints);
+      const next_ = { joints: has ? req.body.joints : cur.joints, bodies: Array.isArray(req.body?.bodies) ? req.body.bodies : cur.bodies };
+      fsSync.mkdirSync(path.dirname(jointsPath(subject)), { recursive: true });
+      fsSync.writeFileSync(jointsPath(subject), JSON.stringify(next_));
+      if (has) broadcast({ type: 'joints_changed', subject, from: String(req.body.from || '') });
+      res.json({ subject, ...next_ });
+    } catch (e) { next(e); }
+  });
+
   // Per-file explode settings the user made (axis picked off a face, maximum travel set by a drag),
   // keyed `${body name}#${n}` so a re-exported file gets them back without redoing them.
   const partsPath = (subject) => path.join(dataDir, 'explode', `${slug(subject)}.json`);
@@ -141,6 +163,7 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       const parts = req.body?.parts && typeof req.body.parts === 'object' ? req.body.parts : {};
       fsSync.mkdirSync(path.dirname(partsPath(subject)), { recursive: true });
       fsSync.writeFileSync(partsPath(subject), JSON.stringify(parts));
+      broadcast({ type: 'parts_changed', subject, from: String(req.body?.from || '') });   // other windows on this file pick up renames
       res.json({ subject, parts });
     } catch (e) { next(e); }
   });
@@ -295,30 +318,47 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     } catch (e) { next(e); }
   });
 
-  // Share to web: a frozen copy of the view (the page's bundle: u32 header length, header JSON, then
-  // each file's bytes) stored on the VPS under an unguessable id; anyone with the link opens it in a
-  // browser and gets the whole viewer, starting from the shared view. The Mac app's server forwards
-  // the bundle with the share key (~/.cadgang/share_key on both machines); the page never sees it.
+  // Save project: the page's bundle (same layout as a shared link) written to a .cadgang file chosen
+  // by the shell's Save panel. Local paths only, like reading them; written beside the target and
+  // renamed in, so a crash mid-save never leaves a half project over a good one.
+  r.put('/project', express.raw({ type: () => true, limit: '2gb' }), async (req, res, next) => {
+    try {
+      if (!mayReadLocal(req)) throw Object.assign(new Error('Saving to a path is only available in the desktop app, or from this computer'), { status: 403 });
+      const p = String(req.query.path || '');
+      if (!path.isAbsolute(p) || !/\.cadgang$/i.test(p)) throw Object.assign(new Error('path must be an absolute .cadgang path'), { status: 400 });
+      if (!Buffer.isBuffer(req.body) || req.body.length < 4) throw Object.assign(new Error('empty project'), { status: 400 });
+      const tmp = `${p}.${process.pid}.part`;
+      await fs.writeFile(tmp, req.body);
+      await fs.rename(tmp, p);
+      res.json({ path: p, bytes: req.body.length });
+    } catch (e) { next(e); }
+  });
+
+  // Share to web: the page's bundle deployed to the user's own Vercel account (vercel.js), with the
+  // token they pasted once (~/.cadgang/vercel_token, 0600; the page never reads it back).
+  r.get('/share/vercel', (req, res) => res.json({ token: !!vercelToken() }));
+  r.put('/share/vercel', express.json(), async (req, res, next) => {
+    try {
+      if (!mayReadLocal(req)) throw Object.assign(new Error('Sharing starts from the Mac app'), { status: 403 });
+      const token = String(req.body?.token || '').trim();
+      if (token) {
+        const me = await fetch('https://api.vercel.com/v2/user', { headers: { Authorization: `Bearer ${token}` } });
+        if (!me.ok) throw Object.assign(new Error('Vercel did not accept that token'), { status: 400 });
+      }
+      await fs.mkdir(path.dirname(VERCEL_TOKEN_FILE), { recursive: true });
+      await (token ? fs.writeFile(VERCEL_TOKEN_FILE, token, { mode: 0o600 }) : fs.rm(VERCEL_TOKEN_FILE, { force: true }));
+      res.json({ token: !!token });
+    } catch (e) { next(e); }
+  });
   r.post('/share', express.raw({ type: () => true, limit: '1gb' }), async (req, res, next) => {
     try {
       if (!mayReadLocal(req)) throw Object.assign(new Error('Sharing starts from the Mac app'), { status: 403 });
-      const key = shareKey();
-      if (!key) throw Object.assign(new Error(`No share key: put it in ${SHARE_KEY_FILE}`), { status: 500 });
-      // DreamHost's ModSecurity refuses plain bodies over 2.5 MB (and flags small binary ones as attacks),
-      // and its proxy drops multipart ones over ~5 MB: the bundle goes up as 1 MB file parts.
-      const CHUNK = 1 << 20, of = Math.max(1, Math.ceil(req.body.length / CHUNK));
-      let id = '';
-      for (let part = 0; part < of; part++) {
-        const form = new FormData();
-        form.append('part', new Blob([req.body.subarray(part * CHUNK, (part + 1) * CHUNK)], { type: 'application/octet-stream' }), 'part.bin');
-        const up = await fetch(`${SHARE_HOST}/api/view/share/store?part=${part}&of=${of}${id ? `&id=${id}` : ''}`, { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form });
-        const d = await up.json().catch(() => ({}));
-        if (!up.ok) throw Object.assign(new Error(d.error || `share host: HTTP ${up.status} on part ${part + 1} of ${of}`), { status: 502 });
-        id = d.id;
-      }
-      res.json({ id, url: `${SHARE_HOST}/view?share=${id}` });
+      const token = vercelToken();
+      if (!token) throw Object.assign(new Error('Add a Vercel token first'), { status: 428 });
+      res.json({ url: await deployShare(req.body, token) });
     } catch (e) { next(e); }
   });
+  // Older shared links: bundles stored on the VPS under an unguessable id (the app no longer uploads there).
   r.post('/share/store', express.raw({ type: () => true, limit: '8mb' }), async (req, res, next) => {
     try {
       const key = shareKey(), got = String(req.headers.authorization || '').replace(/^Bearer /, '');

@@ -20,6 +20,13 @@
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
+      <key>CFBundleTypeName</key><string>CADgang project</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSItemContentTypes</key><array><string>com.cwandt.cadgang.project</string></array>
+      <key>CFBundleTypeExtensions</key><array><string>cadgang</string></array>
+    </dict>
+    <dict>
       <key>CFBundleTypeName</key><string>3D CAD model</string>
       <key>CFBundleTypeRole</key><string>Viewer</string>
       <key>LSHandlerRank</key><string>Alternate</string>
@@ -36,6 +43,15 @@
         <string>stl</string><string>obj</string><string>ply</string><string>3mf</string>
         <string>gltf</string><string>glb</string><string>fbx</string><string>dxf</string>
       </array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>com.cwandt.cadgang.project</string>
+      <key>UTTypeDescription</key><string>CADgang project</string>
+      <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>cadgang</string></array></dict>
     </dict>
   </array>
   <!-- Types nobody declares on a stock Mac. Without a declared type, LaunchServices

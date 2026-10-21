@@ -220,7 +220,8 @@ ${CELL_STATUS}`,
 The prompt is the source of record and the code is a LOCKFILE. Geometry never regenerates from a prompt on its own — that is what stops the same file becoming a different part between two openings.
 
 Args:
-  - id: cell id, used as a reference name (letters, digits, underscore)
+  - id: the part's name, which the user sees and later cells refer to (letters, digits, underscore). Name what it IS, never what it is in general:
+    'battery_lid', 'm3_boss_array', 'usb_c_cutout', 'hinge_knuckle' — not 'cell_3', 'part', 'body', 'box', 'new_cell', 'shape2'
   - prompt: what this cell is meant to do, in words
   - code: the program (see below). May be omitted and compiled later.
   - refs: cell ids this one consumes. Omit for the common case — the previous cell.
@@ -232,7 +233,7 @@ Args:
 
 ${CELL_API}`,
       inputSchema: {
-        id: z.string().optional().describe('Cell id (auto-generated if omitted)'),
+        id: z.string().describe("The part's descriptive name, e.g. 'battery_lid' (never generic like 'cell_3' or 'part')"),
         prompt: z.string().optional().describe('What this cell does, in words'),
         code: z.string().optional().describe('The cell program'),
         refs: z.array(z.string()).optional().describe('Cell ids consumed (default: the previous cell)'),
@@ -625,7 +626,7 @@ Args:
 STEP is the default: cells are exact B-rep the whole way through, so the file reopens in Fusion, SolidWorks or OnShape as editable geometry rather than a faceted import. STL is for printing: the same solid tessellated (fine, scaled to the part).
 
 Args:
-  - filename: base name, no extension
+  - filename: base name, no extension. Name the part: 'wink_battery_lid', not 'part', 'export' or 'model'
   - cell: cell to export (defaults to the output/last cell)
   - format: 'step' (default) | 'stl'`,
       inputSchema: {

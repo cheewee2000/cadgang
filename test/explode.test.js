@@ -109,3 +109,64 @@ function merged(meshes) {
   const mesh = new THREE.Mesh(g); mesh.userData.faces = faces;
   return mesh;
 }
+
+// ---- joints as hints, and the order of removal
+
+const hint = (type, axis, parent = null) => ({ type, axis: new THREE.Vector3(...axis), parent });
+
+test('a slider joint explodes along its own axis, and rides on its parent', () => {
+  const plate = box(40, 40, 4, 0, 0, 0);
+  const slide = box(6, 6, 6, -30, 0, 0);   // radially it would leave along -x
+  explodeOffsets([plate, slide], new THREE.Vector3(), new Map([[slide, hint('slider', [0, 0, 1], plate)]]));
+  const d = dir(slide);
+  assert.equal(d[0] + 0, 0); assert.equal(d[1] + 0, 0); assert.equal(Math.abs(d[2]), 1);
+  assert.equal(slide.userData.parent, plate);
+});
+
+test('a screw leaves by the end of its axis with more room', () => {
+  const lid = box(40, 40, 2, 0, 0, 0);
+  const screw = box(4, 4, 10, 0, 0, 7);   // a head side that is clear, above a lid it threads into
+  explodeOffsets([lid, screw], new THREE.Vector3(), new Map([[screw, hint('screw', [0, 0, 1], lid)]]));
+  assert.deepEqual(dir(screw), [0, 0, 1]);
+  explodeOffsets([lid, screw], new THREE.Vector3(), new Map([[screw, hint('screw', [0, 0, -1], lid)]]));   // the axis the other way round: same end
+  assert.deepEqual(dir(screw), [0, 0, 1]);
+});
+
+test('a fixed joint has no travel of its own: the part goes where its parent goes', () => {
+  const orb = box(20, 20, 20, 30, 0, 0);
+  const dot = box(2, 2, 2, 30, 10, 0);
+  const far = box(10, 10, 10, -30, 0, 0);
+  explodeOffsets([orb, dot, far], new THREE.Vector3(), new Map([[dot, { type: 'fixed', axis: new THREE.Vector3(0, 0, 1), parent: orb }]]));
+  assert.equal(dot.userData.parent, orb);
+  assert.equal(dot.userData.offset.length(), 0);
+});
+
+test('a joint parent loop is cut: no part ends up riding itself', () => {
+  const a = box(10, 10, 10, 20, 0, 0), b = box(10, 10, 10, -20, 0, 0);
+  explodeOffsets([a, b], new THREE.Vector3(), new Map([[a, hint('revolute', [0, 0, 1], b)], [b, hint('revolute', [0, 0, 1], a)]]));
+  assert.ok(!(a.userData.parent === b && b.userData.parent === a));
+});
+
+test('a part waits for what stands in its way: the stages put it after the part that moves off first', () => {
+  // three blocks in a row with gaps; the middle one is forced along +x (a slider), into the right one, which leaves that way itself
+  const a = box(10, 10, 10, 0, 0, 0), b = box(10, 10, 10, 14, 0, 0), c = box(10, 10, 10, 28, 0, 0);
+  explodeOffsets([a, b, c], new THREE.Vector3(14, 0, 0), new Map([[b, hint('slider', [1, 0, 0])]]));
+  assert.equal(c.userData.stage, 0);
+  assert.equal(a.userData.stage, 0);
+  assert.equal(b.userData.stage, 1);
+});
+
+test('parts with a clear way out all come off together (one stage)', () => {
+  const a = box(10, 10, 10, -30, 0, 0), b = box(10, 10, 10, 30, 0, 0);
+  explodeOffsets([a, b], new THREE.Vector3());
+  assert.deepEqual([a.userData.stage, b.userData.stage], [0, 0]);
+});
+
+test('a ball joint leaves by the open side of its socket', () => {
+  // a cup open to +z: a floor and four walls; a ball (a box here) sits in it
+  const cup = merged([box(24, 24, 2, 0, 0, -7), box(2, 24, 14, -11, 0, 0), box(2, 24, 14, 11, 0, 0), box(20, 2, 14, 0, -11, 0), box(20, 2, 14, 0, 11, 0)]);
+  const ball = box(8, 8, 8, 0, 0, 0);
+  explodeOffsets([cup, ball], new THREE.Vector3(0, 0, -20), new Map([[ball, { type: 'ball', axis: new THREE.Vector3(0, 0, 1), origin: new THREE.Vector3(0, 0, 0), parent: null }]]));
+  const d = ball.userData.offset.clone().normalize();
+  assert.ok(d.z > 0.95, `out of the open top, got ${d.toArray()}`);
+});
