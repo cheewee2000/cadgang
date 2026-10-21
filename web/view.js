@@ -896,6 +896,8 @@ const BODY_CMDS = [
   color.addEventListener('click', () => openColorMenu(color, color.dataset.hex, (rgb) => { setTint(sel(), rgb); rerender(); paintFinishes(); color.style.background = color.dataset.hex = hexOfRGB(rgb); }, () => commit()));   // the rows' swatches and colour names follow
   const reset = btn('↺', "Back to the file's colour", () => { setTint(sel(), null); rerender(); paintFinishes(); paintSelection(); commit(); });
   bar.insertBefore(btn('Transparent', 'Make them transparent (T)', ghostSelected), clear);
+  const tb = btn('Triad', 'Move triad on the selection: arrows slide it along x, y, z, rings turn it (⇧ snaps). Q', () => setTriad(!triadOn)); tb.classList.add('triad-toggle');
+  bar.insertBefore(tb, clear);
   bar.insertBefore(btn('Reset move', 'Put the selected parts back where the file put them', () => resetPlacement()), clear);
   bar.insertBefore(color, clear); bar.insertBefore(reset, clear);
 }
@@ -2924,24 +2926,18 @@ hudBR.append(viewCube.el, $('#sectAxis'));
 const scaleRef = createScaleRef({ THREE, scene, getBox: () => bbox, onChange: () => rerender() });
 viewCube.side.prepend(scaleRef.el);
 
-// THE TRIAD (Q, or its button beside the scale reference, by the view cube): SolidWorks' move triad on the selected parts. An arrow
+// THE TRIAD (Q, or Triad on the selection bar): SolidWorks' move triad on the selected parts. An arrow
 // slides them along x, y or z, a ring turns them about it (⇧: grid steps, 15° steps). Each part keeps it as
 // its placement (saved, undone with ⌘Z); Reset move puts the selected parts back.
 const TRIAD_KEY = 'cadgang.triad';
 let triadOn = false;
 try { triadOn = localStorage.getItem(TRIAD_KEY) === '1'; } catch {}
 const triad = createTriad({ THREE, scene, getCamera: () => camera, canvas: renderer.domElement });
-{   // its button, between the scale reference and Fit: three arrows from a corner, a ring round one
-  const b = Object.assign(document.createElement('button'), { id: 'triadBtn', className: 'ghost triad-btn', title: 'Move triad: select parts, then drag an arrow to slide them along x, y or z, a ring to turn them (⇧ snaps). Q' });
-  b.innerHTML = '<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M7 13V3M5 5l2-2 2 2"/><path d="M7 13h10M15 11l2 2-2 2"/><path d="M7 13l-4.5 4.5M2.5 14.5v3h3"/><ellipse cx="7" cy="13" rx="5" ry="1.8" stroke-width="1"/></svg>';
-  b.addEventListener('click', () => setTriad(!triadOn));
-  b.classList.toggle('on', triadOn);
-  scaleRef.el.after(b);
-}
+for (const t of document.querySelectorAll('.triad-toggle')) t.classList.toggle('on', triadOn);   // its button on the selection bar
 function setTriad(on) {
   triadOn = on;
   try { localStorage.setItem(TRIAD_KEY, on ? '1' : '0'); } catch {}
-  $('#triadBtn')?.classList.toggle('on', on);
+  for (const b of document.querySelectorAll('.triad-toggle')) b.classList.toggle('on', on);
   if (on && !selected.size) say('triad on: select a part to move it');
 }
 /** Each frame: on the selection's centre while it is on and something is selected. */
