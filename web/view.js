@@ -31,6 +31,8 @@ import { MATERIALS, materialOf, pickMaterial, pickedMaterial, materialFor } from
 import { silhouetteEdges, silhouetteFor } from './silhouette.js';
 import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
 import { createViewCube } from './viewcube.js';
+import { createScaleRef } from './scaleref.js';
+import { createTriad } from './triad.js';
 import { createPlanes } from './planes.js';
 import { turnAbout as turnOrbit, yawPitchOf, offsetOf } from './orbitmath.js';
 
@@ -371,7 +373,7 @@ function listBodies() {
       cb.addEventListener('change', () => { for (const m of members) setBodyVisible(m, cb.checked); syncRows(); });
       cb._members = members;
       const nm = document.createElement('span'); nm.textContent = `${g} (${members.length})`;
-      nm.title = 'Click: only this group · Shift-click: add its bodies to the selection';
+      nm.title = `${nm.textContent}\nClick: only this group · Shift-click: add its bodies to the selection`;   // the whole name, when the row cuts it short
       nm.addEventListener('click', (e) => {
         e.preventDefault();
         if (e.shiftKey || e.metaKey || e.ctrlKey) { selectBodies(members, members.every((o) => selected.has(o)) ? 'toggle' : 'add'); return; }
@@ -391,7 +393,7 @@ function listBodies() {
       cb._body = m;
       cb.addEventListener('change', () => { setBodyVisible(m, cb.checked); syncRows(); });
       const nm = document.createElement('span'); nm.className = 'body-name'; nm._body = m; nm.textContent = labelOf(m);
-      nm.title = 'Click: only this body · Shift-click: add it to the selection';
+      nm.title = `${labelOf(m)}\nClick: only this body · Shift-click: add it to the selection`;   // the whole name, when the row cuts it short
       nm.addEventListener('click', (e) => {
         e.preventDefault();
         if (e.shiftKey || e.metaKey || e.ctrlKey) { selectBodies([m], 'toggle'); return; }
@@ -448,30 +450,32 @@ function listBodies() {
   return dups.join(' · ');
 }
 /**
- * A long name takes two lines at most: each name gets the least width that does it, and the panel
- * grows (to 70% of the window) so the widest row still fits, its columns where every other row has them.
+ * The rows' columns: material, finish and colour each as wide as its widest entry, so every row has them
+ * in the same place and none is ever cut short. As the panel narrows the space between them shrinks
+ * (14px down to 4px), then the name gives way: one line, cut with … (its tip has the whole name).
  */
 function fitNames() {
   const panel = $('#bodies');
   if (!panel || panel.hidden || panel.classList.contains('min')) return;
-  panel.style.minWidth = '';
-  // a width set with the grip wins: names wrap to as many lines as it takes, the panel never outgrows its grip
-  if (panel.parentElement.style.width) { for (const el of panel.querySelectorAll('.body-name, .group-row > span')) el.style.minWidth = ''; return; }
-  let over = 0;
-  for (const el of panel.querySelectorAll('label > .body-name, label.group-row > span:not(.fold-gap):not(.mat-tag)')) {
-    el.style.minWidth = '';
-    if (!el.offsetParent) continue;   // in a folded folder
-    el.style.whiteSpace = 'nowrap';
-    const full = el.scrollWidth, line = el.offsetHeight;
-    el.style.whiteSpace = '';
-    if (el.offsetHeight <= line * 2 + 1) continue;
-    let w = Math.ceil(full / 2);
-    el.style.minWidth = `${w}px`;
-    while (el.offsetHeight > line * 2 + 1 && w < full) { w += 4; el.style.minWidth = `${w}px`; }
-    const row = el.parentElement;
-    over = Math.max(over, row.scrollWidth - row.clientWidth);
-  }
-  if (over > 0) panel.style.minWidth = `${Math.min(innerWidth * 0.7, panel.offsetWidth + over)}px`;
+  // a list's own width is its longest option's; what shows is the chosen one, so that is what is measured
+  const probe = Object.assign(document.createElement('span'), { style: 'position:absolute;visibility:hidden;white-space:nowrap;left:-9999px' });
+  document.body.append(probe);
+  const widest = (sel) => {
+    let w = 0;
+    for (const el of panel.querySelectorAll(sel)) {
+      if (!el.offsetParent) continue;   // in a folded folder
+      const cs = getComputedStyle(el);
+      for (const k of ['font', 'letterSpacing', 'textTransform', 'fontStyle']) probe.style[k] = cs[k];
+      probe.textContent = el.tagName === 'SELECT' ? el.selectedOptions[0]?.textContent ?? '' : el.textContent;
+      w = Math.max(w, Math.ceil(probe.getBoundingClientRect().width + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)) + 1);
+    }
+    return w;
+  };
+  panel.style.setProperty('--mat-w', `${widest('.mat-tag select.mat-word')}px`);
+  panel.style.setProperty('--fin-w', `${widest('.mat-tag .fin-word, .mat-tag .fin')}px`);
+  panel.style.setProperty('--col-w', `${widest('.mat-tag .col')}px`);
+  probe.remove();
+  panel.style.setProperty('--col-gap', `${Math.round(Math.min(14, Math.max(4, (panel.clientWidth - 380) / 12)))}px`);
 }
 new ResizeObserver(() => { clearTimeout(fitNames.t); fitNames.t = setTimeout(fitNames, 60); }).observe($('#bodies'));
 /**
@@ -712,7 +716,7 @@ function showAllBodies() { for (const m of model.children) setBodyVisible(m, tru
 const selActions = {
   hide: hideSelected,
   show: () => eachSelected((m) => setBodyVisible(m, true)),
-  only: () => { for (const m of model.children) setBodyVisible(m, selected.has(m)); syncRows(); commit(); },
+  only: () => { if (!selected.size) return say('select a part first'); for (const m of model.children) setBodyVisible(m, selected.has(m)); syncRows(); commit(); },   // nothing selected hides nothing
   clear: () => selectBodies([], 'set'),
 };
 for (const b of document.querySelectorAll('[data-sel]')) b.addEventListener('click', () => selActions[b.dataset.sel]());
@@ -822,7 +826,7 @@ function finishBits(f, m = null) {
     frag.append(fin, sw, col);
     return frag;
   } else {
-    if (f.finish) frag.append(Object.assign(document.createElement('span'), { className: 'fin', textContent: f.finish }));
+    frag.append(Object.assign(document.createElement('span'), { className: 'fin', textContent: f.finish || '' }));   // there even when empty: it holds the column
     const sw = Object.assign(document.createElement('span'), { className: 'swatch', title: hexOfRGB(f.color) }); sw.style.background = hexOfRGB(f.color);
     frag.append(sw);
   }
@@ -854,6 +858,7 @@ function paintFinishes() {
     if (bits.contains(document.activeElement)) continue;   // a list or picker open in it: leave it be
     bits.replaceChildren(finishBits(f, m));
   }
+  fitNames();   // a new word can widen its column
 }
 /** The body under the pointer: visible, on the kept side of a section, solid ones before see-through ones. */
 function bodyAt(e) {
@@ -885,6 +890,7 @@ function ghostSelected() { const on = !sel().every((m) => m.userData.ghost); for
 const BODY_CMDS = [
   { key: 't', label: 'Selected transparent', run: ghostSelected, on: () => selected.size && sel().every((m) => m.userData.ghost) },
   { key: 's', label: 'Show only selected', run: () => selActions.only() },
+  { key: 'q', label: 'Move triad', run: () => setTriad(!triadOn), on: () => triadOn },
 ];
 // the selection bar gets Transparent, and a colour with its reset
 {
@@ -894,6 +900,9 @@ const BODY_CMDS = [
   color.addEventListener('click', () => openColorMenu(color, color.dataset.hex, (rgb) => { setTint(sel(), rgb); rerender(); paintFinishes(); color.style.background = color.dataset.hex = hexOfRGB(rgb); }, () => commit()));   // the rows' swatches and colour names follow
   const reset = btn('↺', "Back to the file's colour", () => { setTint(sel(), null); rerender(); paintFinishes(); paintSelection(); commit(); });
   bar.insertBefore(btn('Transparent', 'Make them transparent (T)', ghostSelected), clear);
+  const tb = btn('Triad', 'Move triad on the selection: arrows slide it along x, y, z, rings turn it (⇧ snaps). Q', () => setTriad(!triadOn)); tb.classList.add('triad-toggle');
+  bar.insertBefore(tb, clear);
+  bar.insertBefore(btn('Reset move', 'Put the selected parts back where the file put them', () => resetPlacement()), clear);
   bar.insertBefore(color, clear); bar.insertBefore(reset, clear);
 }
 // A body's explode vector at full slider: the solver's offset, or along the axis the
@@ -965,7 +974,7 @@ const maxTravel = (m) => m.userData.pull ?? explodeVec(m).length() * 2;   // the
 const nameOf = (m) => m.userData.label || m.userData.name.replace(/_part$/, '');   // cadquery's leaf suffix
 const labelOfKey = (key) => { const m = bodyOfKey(key); return m ? nameOf(m) : key.replace(/#0$/, ''); };
 function refreshNames() {
-  for (const el of document.querySelectorAll('#bodies .body-name')) if (!el.querySelector('input')) el.textContent = labelOf(el._body);
+  for (const el of document.querySelectorAll('#bodies .body-name')) if (!el.querySelector('input')) { el.textContent = labelOf(el._body); el.title = `${el.textContent}\nClick: only this body · Shift-click: add it to the selection`; }
   renderJoints();
 }
 function renameBody(m, label) {
@@ -1007,7 +1016,7 @@ const partKey = (m) => { const all = model.children; return `${m.userData.name}#
 let partsReady = false, partsSaved = '{}', partsTimer = null;
 function partsState() {
   const out = {};
-  for (const m of model.children) if (m.userData.axis || m.userData.pull != null || m.userData.exTo || m.userData.fixStage != null) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null, ...(m.userData.exTo && { exTo: m.userData.exTo.toArray().map((v) => +v.toFixed(4)) }), ...(m.userData.fixStage != null && { stage: m.userData.fixStage }) };
+  for (const m of model.children) if (m.userData.axis || m.userData.pull != null || m.userData.exTo || m.userData.place || m.userData.fixStage != null) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null, ...(m.userData.exTo && { exTo: m.userData.exTo.toArray().map((v) => +v.toFixed(4)) }), ...(m.userData.place && { place: placeArr(m) }), ...(m.userData.fixStage != null && { stage: m.userData.fixStage }) };
   if (rot.w < 1 - 1e-9) out['@rot'] = rotArr();   // the axes and marks above are in this turned frame
   const names = namesOf();
   if (Object.keys(names).length) out['@names'] = names;
@@ -1033,11 +1042,32 @@ function loadParts() {
     const r = d.parts?.['@rot'];
     if (r) { bakeRot(new THREE.Quaternion().fromArray(r)); history.list = []; history.i = -1; queueMicrotask(commit); }   // undo never goes back past the saved turn
     if (d.parts?.['@names']) { applyNames(d.parts['@names']); history.list = []; history.i = -1; queueMicrotask(commit); }
-    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; m.userData.exTo = p.exTo ? new THREE.Vector3(...p.exTo) : undefined; m.userData.fixStage = p.stage ?? undefined; } }
+    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; m.userData.exTo = p.exTo ? new THREE.Vector3(...p.exTo) : undefined; m.userData.place = placeOf(p.place); m.userData.fixStage = p.stage ?? undefined; } }
     partsSaved = JSON.stringify(partsState()); partsReady = true;
     applyExplode();
   }).catch(() => { partsReady = true; });
 }
+/**
+ * A part moved with the triad keeps that as its placement, userData.place = { t, q }: turned by q about its
+ * own centre, then moved by t, before any explode or joint. The matrix that does it, in the model's frame.
+ */
+const restCentre = (m) => (m.geometry.boundingBox ?? (m.geometry.computeBoundingBox(), m.geometry.boundingBox)).getCenter(new THREE.Vector3());
+function placeMatrix(m) {
+  const pl = m.userData.place;
+  if (!pl) return new THREE.Matrix4();
+  const c = restCentre(m);
+  return new THREE.Matrix4().compose(c.clone().add(pl.t).sub(c.clone().applyQuaternion(pl.q)), pl.q, new THREE.Vector3(1, 1, 1));
+}
+/** Set a part's placement from a matrix of the placeMatrix kind (identity drops it). */
+function setPlaceMatrix(m, M) {
+  const P = new THREE.Vector3(), Q = new THREE.Quaternion(), S = new THREE.Vector3();
+  M.decompose(P, Q, S);
+  const c = restCentre(m), t = P.sub(c).add(c.clone().applyQuaternion(Q));
+  m.userData.place = t.lengthSq() < 1e-12 && Math.abs(Q.w) > 1 - 1e-12 ? undefined : { t, q: Q };
+}
+const placeArr = (m) => (m.userData.place ? [...m.userData.place.t.toArray(), ...m.userData.place.q.toArray()].map((v) => +v.toFixed(6)) : null);
+const placeOf = (a) => (a ? { t: new THREE.Vector3(a[0], a[1], a[2]), q: new THREE.Quaternion(a[3], a[4], a[5], a[6]) } : undefined);
+
 function applyExplode() {
   const k = ui.mode === 'joint' ? 0 : parseFloat($('#explode').value) / 100;   // in joint mode the assembly is together: only joints move parts
   const done = new Set();
@@ -1060,6 +1090,10 @@ function applyExplode() {
     const w = keys && poses.get(keys.get(m));
     m.position.copy(m.userData.exPos);
     if (w) { w.decompose(P, Q, S); m.position.add(P); m.quaternion.copy(Q); } else m.quaternion.identity();
+    if (m.userData.place) {   // moved with the triad: that placement first, then the joint's pose, then the explode
+      const M = (w ? w.clone() : new THREE.Matrix4()).multiply(placeMatrix(m));
+      M.decompose(P, Q, S); m.position.copy(m.userData.exPos).add(P); m.quaternion.copy(Q);
+    }
     const e = m.userData.edges;
     if (e) { e.position.copy(m.position); e.quaternion.copy(m.quaternion); }
   }
@@ -1205,10 +1239,12 @@ function bakeRot(q) {
     if (m.userData.sil?.line) { m.remove(m.userData.sil.line); m.userData.sil.line.geometry.dispose(); }
     delete m.userData.sil;          // the silhouette candidates were in the old pose too
     m.userData.offset?.applyQuaternion(d);
+    m.userData.exTo?.applyQuaternion(d);   // where it was dragged while exploded turns with it
+    if (m.userData.place) { m.userData.place.t.applyQuaternion(d); m.userData.place.q.premultiply(d).multiply(d.clone().invert()); }   // and so does a triad placement
   }
   rot.copy(q);
   bbox = new THREE.Box3(); for (const m of model.children) bbox.union(m.geometry.boundingBox);
-  placeGrid(); setupSection(); applyExplode(); planes.render();
+  placeGrid(); scaleRef.place(); setupSection(); applyExplode(); planes.render();
   return d;
 }
 function turnModel(q) {
@@ -1271,6 +1307,7 @@ function finishLoad(name, ms, keep = false) {
   $('#stats').textContent = `${model.children.length} BOD${model.children.length === 1 ? 'Y' : 'IES'} · ${segs ? `${segs.toLocaleString()} SEGS · ` : ''}${tris ? `${tris.toLocaleString()} TRIS · ` : ''}${verts.toLocaleString()} VERTS · ${ms} MS`;
   $('#drop').hidden = true; $('#loadError').textContent = '';
   placeGrid();
+  scaleRef.place();
   planes.load();   // this file's planes, sized to it
   const dups = listBodies();
   warmRays();
@@ -1397,6 +1434,7 @@ function applyCamera() {
 function fit() {
   if (!bbox) return;
   const b = new THREE.Box3().setFromObject(model);   // what is on screen now, exploded or not
+  const ref = scaleRef.box(); if (ref) b.union(ref);   // and the thing beside it for scale
   b.getCenter(orbit.target);
   const r = b.getSize(new THREE.Vector3()).length() / 2;
   orbit.dist = r / Math.sin(THREE.MathUtils.degToRad(persp.fov / 2)) * 1.1;
@@ -1433,6 +1471,18 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
     if (e.button === 0) { const h = faceAt(e); if (h) setPartAxis(pickAxis.m, h.normal); }
     endPickAxis();
     return;
+  }
+  const th = e.button === 0 && triad.hit(e);
+  if (th) {   // the triad: an arrow slides the selection along its axis, a ring turns it about the triad's centre
+    const origin = triad.group.position.clone(), axis = th.axis.clone();
+    const ref = new THREE.Vector3(axis.y, axis.z, axis.x);   // a direction square to the axis (x → y, y → z, z → x): where a ring's angle counts from
+    const from = th.kind === 'move' ? triad.along(e, origin, axis) : triad.angle(e, origin, axis, ref);
+    if (from != null) {
+      const bodies = sel().filter((m) => m.isMesh);
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, downX: e.clientX, downY: e.clientY, triad: { kind: th.kind, key: th.key, axis, origin, ref, from, bodies, starts: bodies.map((m) => placeMatrix(m)) } };
+      renderer.domElement.setPointerCapture(e.pointerId);
+      return;
+    }
   }
   if (e.pointerType === 'touch') {
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1506,6 +1556,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     return;
   }
   if (!drag) {
+    if (triad.hover(e)) { renderer.domElement.classList.add('oncap'); hoverBody(null); return; }   // over the triad: its handle lights up
     if (measure.on) { measure.hover(e); return; }
     // A press on a cut face drags the section, anywhere else on a part drags the part: over a cut face the
     // caps light up and the cursor turns to an up-down arrow, over a part it gets its outline and a hand.
@@ -1538,6 +1589,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     return;
   }
   if (drag.joint) { driveJoint(drag.joint, dx, dy, e.altKey); return; }   // ⌘ was read at the press
+  if (drag.triad) { dragTriad(e, drag.triad); return; }
   if (drag.part) {
     const m = drag.part.m, max = maxTravel(m), S = stageCount();
     const d = Math.max(0, max * stageFrac(m, +$('#explode').value / 100) + dx * drag.part.sx + dy * drag.part.sy);
@@ -1584,7 +1636,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   }
   if (e.button === 2 && still) showMenu(e.clientX, e.clientY, partAt(e)?.body);
   if (drag?.limit) renderJoints();   // the min/max fields take the dragged limit
-  if (drag?.sect || drag?.part || drag?.joint || drag?.limit || drag?.move) commit();
+  if (drag?.sect || drag?.part || drag?.joint || drag?.limit || drag?.move || drag?.triad) commit();
   drag = null;
   touches.delete(e.pointerId);
 });
@@ -2420,7 +2472,6 @@ window.addEventListener('storage', (e) => {
 $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
 $('#gridBtn').addEventListener('click', () => toggle('grid', '#gridBtn'));
-$('#fitBtn').addEventListener('click', fit);
 $('#look').addEventListener('change', (e) => { ui.look = document.documentElement.dataset.look = e.target.value; for (const m of model.children) styleMesh(m); });
 function setOrtho(on) {
   ui.ortho = on;
@@ -2803,19 +2854,36 @@ new ResizeObserver(resize).observe(viewport);
 // WIRE draws a curved surface's outline where it turns away from the eye, as SolidWorks does
 // (silhouette.js). A body's candidate edges are found the first time the wireframe shows it; the
 // outline is redone only when the eye moves relative to the body (orbit, explode, a turn).
+// Big models: the work is spread over frames, a few milliseconds each, carrying on round the bodies
+// from where the last frame stopped, and a body off screen waits until it is on it. So turning a
+// model of hundreds of bodies stays smooth; their outlines catch up within a few frames.
 const silEye = new THREE.Vector3(), silDir = new THREE.Vector3(), silInv = new THREE.Matrix4();
+const silFrustum = new THREE.Frustum(), silSphere = new THREE.Sphere(), SIL_BUDGET_MS = 6;
+let silNext = 0;   // the body the next frame starts at
 function updateSilhouettes() {
-  for (const m of model.children) {
+  const list = model.children, t0 = performance.now();
+  if (ui.wire) camera.updateMatrixWorld();
+  if (ui.wire) silFrustum.setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  let step = 0;
+  for (; step < list.length; step++) {
+    if (ui.wire && performance.now() - t0 > SIL_BUDGET_MS) break;   // the rest next frame
+    const m = list[(silNext + step) % list.length];
     if (!m.isMesh) continue;
     const show = ui.wire && m.visible && !!m.userData.edges;
     let sil = m.userData.sil;
     if (!show) { if (sil?.line) sil.line.visible = false; continue; }
+    m.updateMatrixWorld();
+    if (!m.geometry.boundingSphere) m.geometry.computeBoundingSphere();
+    if (!silFrustum.intersectsSphere(silSphere.copy(m.geometry.boundingSphere).applyMatrix4(m.matrixWorld))) continue;   // off screen: later
     if (!sil) {
       const found = silhouetteEdges(m.geometry, m.userData.faces?.length ? { faces: m.userData.faces } : { creases: true });
       sil = m.userData.sil = { found, key: '' };
       if (found) {
         const g = new THREE.BufferGeometry();
         g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(found.pos.length), 3).setUsage(THREE.DynamicDrawUsage));
+        // the buffer is zeros past what is drawn: its bounds are the body's own, or Fit and the floor take in the origin
+        if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+        g.boundingBox = m.geometry.boundingBox.clone(); g.boundingSphere = m.geometry.boundingSphere.clone();
         sil.line = new THREE.LineSegments(g, edgeMaterial);
         sil.line.raycast = () => {};   // never a pick, measure or markup target
         sil.line.frustumCulled = false;   // its points change every view: a bounds check would go stale
@@ -2825,7 +2893,6 @@ function updateSilhouettes() {
     }
     if (!sil.line) continue;
     sil.line.visible = true;
-    m.updateMatrixWorld();
     silInv.copy(m.matrixWorld).invert();
     silEye.copy(camera.position).applyMatrix4(silInv);
     if (ui.ortho) silDir.copy(camera.getWorldDirection(new THREE.Vector3())).transformDirection(silInv);
@@ -2837,6 +2904,7 @@ function updateSilhouettes() {
     attr.needsUpdate = true;
     sil.line.geometry.setDrawRange(0, n / 3);
   }
+  silNext = (silNext + Math.max(1, step % Math.max(1, list.length))) % Math.max(1, list.length);   // the next frame carries on where this one stopped
 }
 
 // The view cube (lower right): a face, edge or corner turns the view to look from there, over a
@@ -2878,6 +2946,70 @@ const viewCube = createViewCube({ THREE, container: viewport, getCamera: () => c
 const hudBR = Object.assign(document.createElement('div'), { className: 'hud hud-br' });
 viewport.append(hudBR);
 hudBR.append(viewCube.el, $('#sectAxis'));
+// For scale: a quarter, a tennis ball, a sheet of looseleaf or a basketball beside the model, above Fit.
+const scaleRef = createScaleRef({ THREE, scene, getBox: () => bbox, onChange: () => rerender() });
+viewCube.side.prepend(scaleRef.el);
+
+// THE TRIAD (Q, or Triad on the selection bar): SolidWorks' move triad on the selected parts. An arrow
+// slides them along x, y or z, a ring turns them about it (⇧: grid steps, 15° steps). Each part keeps it as
+// its placement (saved, undone with ⌘Z); Reset move puts the selected parts back.
+const TRIAD_KEY = 'cadgang.triad';
+let triadOn = false;
+try { triadOn = localStorage.getItem(TRIAD_KEY) === '1'; } catch {}
+const triad = createTriad({ THREE, scene, getCamera: () => camera, canvas: renderer.domElement });
+for (const t of document.querySelectorAll('.triad-toggle')) t.classList.toggle('on', triadOn);   // its button on the selection bar
+function setTriad(on) {
+  triadOn = on;
+  try { localStorage.setItem(TRIAD_KEY, on ? '1' : '0'); } catch {}
+  for (const b of document.querySelectorAll('.triad-toggle')) b.classList.toggle('on', on);
+  if (on && !selected.size) say('triad on: select a part to move it');
+}
+/** Each frame: on the selection's centre while it is on and something is selected. */
+function updateTriad() {
+  const ms = triadOn && !ui.flat ? sel().filter((m) => m.isMesh && m.visible) : [];
+  if (!ms.length) { triad.place(null); return; }
+  if (!drag?.triad) {   // held still while it is dragged: the drag reads against where it was pressed
+    const b = new THREE.Box3();
+    for (const m of ms) { m.updateMatrixWorld(); b.expandByObject(m); }
+    triad.place(b.getCenter(new THREE.Vector3()));
+  }
+  triad.frame();
+}
+function dragTriad(e, t) {
+  if (t.kind === 'move') {
+    const now = triad.along(e, t.origin, t.axis);
+    if (now == null) return;
+    let d = now - t.from;
+    if (e.shiftKey && gridStep) d = Math.round(d / gridStep) * gridStep;
+    const T = new THREE.Matrix4().makeTranslation(t.axis.x * d, t.axis.y * d, t.axis.z * d);
+    t.bodies.forEach((m, i) => setPlaceMatrix(m, T.clone().multiply(t.starts[i])));
+    triad.group.position.copy(t.origin).addScaledVector(t.axis, d);
+    say(`moved ${fmtLen(d)} along ${t.key}`);
+  } else {
+    const now = triad.angle(e, t.origin, t.axis, t.ref);
+    if (now == null) return;
+    let a = now - t.from;
+    a = Math.atan2(Math.sin(a), Math.cos(a));   // the short way round
+    t.total = (t.total ?? 0) + (a - (t.last ?? 0)); t.last = a;
+    let turn = t.total;
+    if (e.shiftKey) turn = Math.round(turn / (Math.PI / 12)) * (Math.PI / 12);
+    const Rq = new THREE.Quaternion().setFromAxisAngle(t.axis, turn);
+    t.bodies.forEach((m, i) => {   // about the triad's centre, in the part's own (unexploded) frame
+      const pr = t.origin.clone().sub(m.userData.exPos ?? new THREE.Vector3());
+      const M = new THREE.Matrix4().makeTranslation(pr.x, pr.y, pr.z).multiply(new THREE.Matrix4().makeRotationFromQuaternion(Rq)).multiply(new THREE.Matrix4().makeTranslation(-pr.x, -pr.y, -pr.z));
+      setPlaceMatrix(m, M.multiply(t.starts[i]));
+    });
+    say(`turned ${(turn * 180 / Math.PI).toFixed(1)}° about ${t.key}`);
+  }
+  applyExplode();
+}
+function resetPlacement() {
+  const ms = sel().filter((m) => m.userData.place);
+  if (!ms.length) return say('the selected parts are where the file put them');
+  for (const m of ms) m.userData.place = undefined;
+  applyExplode(); commit();
+  say(`${ms.length} part${ms.length === 1 ? '' : 's'} back where the file put ${ms.length === 1 ? 'it' : 'them'}`);
+}
 
 // MATERIALS needs something for metal and glass to reflect in the live view: a soft studio room.
 let roomEnv = null;
@@ -2894,6 +3026,7 @@ let roomEnv = null;
   planes.follow();
   applyCamera();
   updateSilhouettes();
+  updateTriad();
   // The ground goes as soon as it would hide the model: seen from under it (camera below it, or an ortho view
   // looking up, whose rays start below it). The grid, and the WebGL render's floor; the Metal render drops its own.
   const above = (z) => (ui.ortho ? camera.getWorldDirection(new THREE.Vector3()).z < 0 : camera.position.z >= z);
@@ -3094,7 +3227,7 @@ async function openShare(id) {
   } catch (e) { progressEnd(); loadFailed('shared view', e); }
 }
 // For headless drives: the scene objects behind the page.
-window.__view = { fitNames, selected, selectBodies, bodiesInWindow, model, section, orbit, ui, measure, rt, THREE, planes, get joints() { return joints; }, get poses() { return poses; }, jointLinks, get limitHandles() { return limitHandles; }, addJoint, setJointValue, faceAxis, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
+window.__view = { fitNames, get triad() { return triad; }, updateTriad: () => updateTriad(), selected, selectBodies, bodiesInWindow, model, section, orbit, ui, measure, rt, THREE, planes, get joints() { return joints; }, get poses() { return poses; }, jointLinks, get limitHandles() { return limitHandles; }, addJoint, setJointValue, faceAxis, partAt, faceAt, startPickAxis, applyExplode, get camera() { return camera; },
   project: (x, y, z) => { const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3(x, y, z).project(camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; } };
 // Files queued by the shell before the page was ready.
 if (window.cadgangPending?.length) window.cadgangOpen(window.cadgangPending);
@@ -3118,7 +3251,7 @@ if (openArg) window.cadgangOpen(openArg.split('|')).then(() => {
 // One table drives the hotkeys, the right-click menu and the hover tips.
 
 const CMDS = [
-  { key: 'f', label: 'Fit', run: fit, btn: '#fitBtn' },
+  { key: 'f', label: 'Fit', run: fit, btn: '.viewcube-fit' },   // the button beside the view cube
   { label: 'Edges', run: () => toggle('edges', '#edgesBtn'), btn: '#edgesBtn', on: () => ui.edges },
   { key: 'w', label: 'Wireframe', run: () => toggle('wire', '#wireBtn'), btn: '#wireBtn', on: () => ui.wire },
   { key: 'g', label: 'Grid', run: () => toggle('grid', '#gridBtn'), btn: '#gridBtn', on: () => ui.grid },
@@ -3156,7 +3289,7 @@ const CMDS = [
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },
   // P pen and ⇧P pencil, as in Figma ('pen' is the pencil's stroke kind in saved markups, kept for old files)
-  ...[['b', 'path', 'Bezier'], ['p', 'pen', 'Pencil'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['t', 'text', 'Text', true], ['i', 'image', 'Image', true], ['r', 'erase', 'Erase']].map(([key, t, label, shift]) => ({ key, shift, label, btn: `[data-tool="${t}"]`, run: () => { markup.setTool(t); if ($('[data-tool].on')) setMeasure(false); }, on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
+  ...[['b', 'path', 'Pen'], ['p', 'pen', 'Pencil'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['t', 'text', 'Text', true], ['i', 'image', 'Image', true], ['r', 'erase', 'Erase']].map(([key, t, label, shift]) => ({ key, shift, label, btn: `[data-tool="${t}"]`, run: () => { markup.setTool(t); if ($('[data-tool].on')) setMeasure(false); }, on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
   { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
   { sep: true },
   { key: 'd', label: 'Background: light / dark / dusk / dawn / night', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.bg !== 'light' },
@@ -3186,7 +3319,7 @@ const history = { list: [], i: -1 };
 function snap() {
   return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value, rot: rotArr(),
-    bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), finishes: model.children.map((m) => m.userData.finish ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3), null, m.userData.exTo?.toArray().map((v) => +v.toFixed(4)) ?? null]),
+    bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), finishes: model.children.map((m) => m.userData.finish ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3), null, m.userData.exTo?.toArray().map((v) => +v.toFixed(4)) ?? null, placeArr(m)]),
     markup: markup.items, dims: measure.dims, joints, names: namesOf() });
 }
 function commit() {
@@ -3217,7 +3350,7 @@ function apply(s) {
   if (ui.ortho !== st.ortho) setOrtho(st.ortho);
   if (st.units && st.units !== ui.units) setUnits(st.units);
   $('#sectPos').value = st.section.pos; section.flip = st.section.flip; setSectionAxis(st.section.axis);
-  model.children.forEach((m, i) => { const [axis, pull, , exTo] = st.parts?.[i] ?? []; m.userData.axis = axis || undefined; m.userData.pull = pull ?? undefined; m.userData.exTo = exTo ? new THREE.Vector3(...exTo) : undefined; });
+  model.children.forEach((m, i) => { const [axis, pull, , exTo, place] = st.parts?.[i] ?? []; m.userData.axis = axis || undefined; m.userData.pull = pull ?? undefined; m.userData.exTo = exTo ? new THREE.Vector3(...exTo) : undefined; m.userData.place = placeOf(place); });
   if (st.names !== undefined && JSON.stringify(st.names) !== JSON.stringify(namesOf())) applyNames(st.names);   // a state from an older file has no names or joints: leave them be
   if (st.joints !== undefined) setJoints(st.joints);
   $('#explode').value = st.explode; applyExplode();
