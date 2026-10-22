@@ -9,6 +9,9 @@
 # The appcast lists the latest version only — every install updates to the newest.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Only a release bumps the version: branches and PRs never touch it, so merges never conflict on it.
+[ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "commit or stash first: a release starts from a clean tree"; exit 1; }
+npm version patch --no-git-tag-version >/dev/null
 VERSION=$(node -p "require('./package.json').version")
 NOTES="${1:-CADgang $VERSION}"
 ZIP="dist/cadgang-$VERSION.zip"
@@ -16,6 +19,7 @@ VPS=cwandt@vps52023.dreamhostps.com
 URL="https://www.experiments.cwandt.com/releases"
 
 bash mac/build.sh
+git commit -q -m "Release v$VERSION" package.json package-lock.json && git push -q
 SIG=$(mac/Sparkle/bin/sign_update "$ZIP")     # sparkle:edSignature="…" length="…"
 cat > dist/cadgang.xml <<EOF
 <?xml version="1.0" encoding="utf-8"?>

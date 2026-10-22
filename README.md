@@ -67,7 +67,7 @@ No build step; the page is plain ES modules. `CADGANG_PORT` picks the port, `CAD
 | E W G O C | Edges, Wire, Grid, Ortho, Color | I / Esc | Invert section / cancel pick, section off |
 | L | Next look | 1–7 | Front, back, top, bottom, right, left, iso |
 | H T S Q | Hide, transparent, show only, move triad | ⇧H | Show all bodies |
-| M | Measure | P ⇧P A N ⇧T ⇧I R ⌫ | Pen, Pencil, Arrow, Note, Text, Image, Erase, Clear markup |
+| M | Measure | B P A N ⇧T ⇧I R ⌫ | Bezier, Pencil, Arrow, Note, Text, Image, Erase, Clear markup |
 | B | Flip drawing over | [ ] | Turn 90° |
 | D | Dark / light | ⌘O ⌘Z ⇧⌘Z | Open, Undo, Redo |
 
