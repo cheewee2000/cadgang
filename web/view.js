@@ -309,6 +309,69 @@ const addPart = (p, name) => (p.lines ? addLines(p.lines, p.name || name) : addM
 // pocket's axis). Hiding a body hides its edges and its section cap.
 
 /** Fill the bodies panel; returns a note when a later file repeated a body and it was unticked. */
+/**
+ * PLANES in the feature tree, at the top as SolidWorks has them: Front, Top, Right and your own, each with
+ * its tick (show / hide). Right-click a plane to show or hide it, rename it, change its offset, flip it to
+ * the other side, or delete it (yours only); double-click a name of your own to rename it.
+ */
+let planesFolded = false;
+function paintPlaneRows() {
+  const panel = $('#bodies');
+  if (!panel || !panel.querySelector('.bodies-head')) return;
+  panel.querySelector(':scope > .planes-group')?.remove();
+  const list = planes.list();
+  const box = Object.assign(document.createElement('div'), { className: 'group planes-group' });
+  const head = Object.assign(document.createElement('label'), { className: 'group-row' });
+  const fold = Object.assign(document.createElement('button'), { className: 'ghost fold', textContent: planesFolded ? '+' : '−', title: planesFolded ? 'Unfold' : 'Fold' });
+  const inner = Object.assign(document.createElement('div'), { className: 'group-body', hidden: planesFolded });
+  fold.addEventListener('click', (e) => { e.preventDefault(); planesFolded = !planesFolded; inner.hidden = planesFolded; fold.textContent = planesFolded ? '+' : '−'; });
+  head.append(fold, Object.assign(document.createElement('span'), { textContent: `Planes (${list.length})`, title: 'Reference planes: tick to show, right-click to edit' }));
+  for (const p of list) {
+    const row = Object.assign(document.createElement('label'), { className: 'plane-row' });
+    const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: p.on });
+    cb.addEventListener('change', () => planes.set(p.id, { on: cb.checked }));
+    const nm = Object.assign(document.createElement('span'), { className: 'body-name', textContent: p.name, title: `${p.name}\nRight-click: show, hide${p.kind === 'base' ? '' : ', rename, edit, delete'}` });
+    const kind = Object.assign(document.createElement('span'), { className: 'plane-kind', textContent: p.kind === 'base' ? 'through the centre' : p.kind === 'offset' ? (p.name.startsWith(`${p.base} `) ? '' : `${p.base} ${p.offset >= 0 ? '+' : '−'}${fmtLen(Math.abs(p.offset))}`) : 'on a face' });   // an offset plane's own name already says it
+    nm.addEventListener('click', (e) => e.preventDefault());   // a click on the name is not a tick
+    if (p.kind !== 'base') nm.addEventListener('dblclick', (e) => { e.preventDefault(); editPlane(row, p, 'name'); });
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      showItems(e.clientX, e.clientY, [
+        { head: p.name },
+        { label: p.on ? 'Hide' : 'Show', run: () => planes.set(p.id, { on: !p.on }) },
+        ...(p.kind === 'base' ? [] : [
+          { label: 'Rename…', run: () => editPlane(row, p, 'name') },
+          ...(p.kind === 'offset' ? [{ label: 'Edit offset…', run: () => editPlane(row, p, 'offset') }] : []),
+          { label: 'Flip to the other side', run: () => planes.set(p.id, { flip: true }) },
+          { sep: true },
+          { label: 'Delete', run: () => { planes.remove(p.id); say(`${p.name} deleted`); } },
+        ]),
+      ]);
+    });
+    row.append(cb, nm, kind);
+    inner.append(row);
+  }
+  box.append(head, inner);
+  panel.querySelector('.bodies-head').after(box);
+}
+/** Edit a plane's name or offset in its row: Enter keeps it, Esc leaves it as it was. */
+function editPlane(row, p, what) {
+  const input = Object.assign(document.createElement('input'), what === 'name'
+    ? { type: 'text', value: p.name, className: 'body-rename' }
+    : { type: 'number', step: 'any', value: String(p.offset), className: 'body-rename plane-offset', title: 'Offset in mm from the model\'s centre (negative: the other way)' });
+  const target = row.querySelector(what === 'name' ? '.body-name' : '.plane-kind');
+  let done = false;
+  const finish = (ok) => {
+    if (done) return; done = true;
+    if (ok) planes.set(p.id, what === 'name' ? { name: input.value } : { offset: parseFloat(input.value) });
+    else paintPlaneRows();
+  };
+  for (const t of ['click', 'pointerdown', 'dblclick']) input.addEventListener(t, (e) => e.stopPropagation());
+  input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false); });
+  input.addEventListener('blur', () => finish(true));
+  target.replaceChildren(input);
+  input.focus(); input.select();
+}
 function listBodies() {
   const panel = $('#bodies');
   highlightBody(null);
@@ -448,6 +511,7 @@ function listBodies() {
     syncRows();   // body ticks on, group ticks full (not half)
   });
   panel.querySelector('.bodies-tools').prepend(all);   // in the header, beside the fold button
+  paintPlaneRows();
   syncRows();
   paintRows();
   requestAnimationFrame(fitNames);
@@ -605,6 +669,7 @@ function syncRows() {
     row.classList.toggle('sel', selected.has(m));
   }
   for (const row of $('#bodies').querySelectorAll('label.group-row')) {
+    if (!row._members) continue;   // the Planes folder holds no bodies
     row.classList.toggle('ghosted', row._members.every((m) => m.userData.ghost));
     row.classList.toggle('sel', row._members.every((m) => selected.has(m)));
   }
@@ -2960,6 +3025,7 @@ const planes = createPlanes({
   // the bodies where they are now (dragged, exploded): their own boxes, not their overlays
   getBox: () => { if (!bbox) return null; const b = new THREE.Box3(); for (const m of model.children) { m.updateMatrixWorld(); if (m.geometry.boundingBox) b.union(m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld)); } return b.isEmpty() ? bbox : b; },
   pickFace: (done) => { pickPlane = done; renderer.domElement.classList.add('picking'); say('click a face for the new plane · Esc cancels'); },
+  onChange: () => paintPlaneRows(),   // the feature tree's Planes follow
 });
 const planesRow = Object.assign(document.createElement('div'), { className: 'hud-row' });   // Planes and Add an image, one line under Section
 $('#sectAxis').after(planesRow);

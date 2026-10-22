@@ -406,3 +406,6 @@ header #explode { width: 100px; }
 /* the view cube centred in the space over the section bar left of its buttons (scale reference, Fit), which sit at the right */
 .hud-br > .viewcube { align-self: stretch; }
 .hud-br > .viewcube > canvas { margin: 0 auto; }
+/* Planes in the feature tree: a folder at the top of the Bodies list; each row's tick shows it, a right-click edits it */
+.bodies .plane-row .plane-kind { margin-left: auto; padding-left: var(--sp-3); color: var(--ink-faint); font-size: 10px; white-space: nowrap; flex: none; }
+.bodies .plane-row input.plane-offset { width: 6em; }
