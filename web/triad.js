@@ -27,17 +27,17 @@ export function createTriad({ THREE, scene, getCamera, canvas }) {
     const dir = new THREE.Vector3(...a.dir), m = mat(a.color);
     // an arrow: a shaft and a cone head, along +axis from the centre; a fatter invisible rod to grab
     const arrow = new THREE.Group();
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.8, 12), m); shaft.position.y = 0.4;
-    const head = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.26, 20), m); head.position.y = 0.9;
-    const grab = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.05, 8), pickMat); grab.position.y = 0.52;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.8, 12), m); shaft.position.y = 0.4;
+    const head = new THREE.Mesh(new THREE.ConeGeometry(0.065, 0.2, 20), m); head.position.y = 0.9;
+    const grab = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 1.05, 8), pickMat); grab.position.y = 0.52;
     arrow.add(shaft, head, grab);
     arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
     group.add(arrow);
     handles.push({ obj: arrow, pick: grab, kind: 'move', axis: dir, key: a.key, material: m, color: a.color });
     // a ring round the axis, a little inside the arrows' reach; its grab is a thicker invisible torus
     const rm = mat(a.color);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.024, 8, 96), rm);
-    const rgrab = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.06, 8, 48), pickMat);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.011, 8, 96), rm);
+    const rgrab = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.09, 8, 48), pickMat);
     const r = new THREE.Group(); r.add(ring, rgrab);
     r.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);   // a torus lies in XY: its axis is z
     group.add(r);
@@ -54,11 +54,11 @@ export function createTriad({ THREE, scene, getCamera, canvas }) {
     ray.setFromCamera(ndc, getCamera());
     return ray.ray;
   };
-  /** Keep one size on screen: its arrows about a seventh of the view's height. */
+  /** Keep one size on screen: its arrows about a tenth of the view's height. */
   function scaleToView() {
     const cam = getCamera();
     const h = cam.isOrthographicCamera ? (cam.top - cam.bottom) / cam.zoom : 2 * Math.tan((cam.fov * Math.PI) / 360) * cam.position.distanceTo(group.position);
-    group.scale.setScalar(h * 0.16);
+    group.scale.setScalar(h * 0.1);
   }
   let hovered = null;
   const paint = (h) => {
