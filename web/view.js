@@ -447,7 +447,7 @@ function listBodies() {
     for (const m of model.children) setBodyVisible(m, true);
     syncRows();   // body ticks on, group ticks full (not half)
   });
-  panel.append(all);
+  panel.querySelector('.bodies-tools').prepend(all);   // in the header, beside the fold button
   syncRows();
   paintRows();
   requestAnimationFrame(fitNames);

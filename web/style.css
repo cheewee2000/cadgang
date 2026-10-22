@@ -261,10 +261,10 @@ select.ghost:hover { opacity: 0.55; }
 .bodies .group-body[hidden] { display: none; }
 .bodies .fold, .bodies .fold-gap { flex: none; width: 9px; height: 9px; }
 .bodies .fold { padding: 0; border: var(--bw-hair) solid var(--rule); font-size: 8px; line-height: 7px; text-align: center; }
-.bodies-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.bodies-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); position: sticky; top: calc(-1 * var(--sp-2)); z-index: 1; margin: calc(-1 * var(--sp-2)) calc(-1 * var(--sp-2)) 0; padding: var(--sp-2); background: var(--paper); }   /* stays put while a long list scrolls */
 .bodies-head button { padding: 0 var(--sp-1); line-height: 1; }
 .bodies-tools { display: flex; gap: var(--sp-1); }
-.bodies-all { align-self: flex-start; margin-top: var(--sp-1); padding: 0 var(--sp-1); line-height: 1; font-size: var(--fs-12); }
+.bodies-all { font-size: var(--fs-12); }
 .bodies.min .bodies-all { display: none; }
 .bodies.min label, .bodies.min .group { display: none; }
 .load-error { color: var(--signal-red); max-width: 60ch; }
