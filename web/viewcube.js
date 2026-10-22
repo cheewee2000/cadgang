@@ -71,13 +71,21 @@ export function createViewCube({ THREE, container, getCamera, onView, onFit }) {
     const hit = ray.intersectObject(cube)[0];
     if (!hit) return null;
     const p = cube.worldToLocal(hit.point.clone());
-    const dir = new THREE.Vector3(...[p.x, p.y, p.z].map((v) => (Math.abs(v) > EDGE ? Math.sign(v) : 0)));
-    return { dir: dir.normalize(), face: hit.face.materialIndex };
+    const cell = [p.x, p.y, p.z].map((v) => (Math.abs(v) > EDGE ? Math.sign(v) : 0));
+    return { dir: new THREE.Vector3(...cell).normalize(), cell };
   }
-  let hoverFace = -1;
-  const paint = (i) => { if (i === hoverFace) return; if (hoverFace >= 0) mats[hoverFace].color.set(0xffffff); hoverFace = i; if (i >= 0) mats[i].color.set(0xbcd6ff); };
-  renderer.domElement.addEventListener('pointermove', (e) => { paint(aim(e)?.face ?? -1); });
-  renderer.domElement.addEventListener('pointerleave', () => paint(-1));
+  // hover lights the part a click picks, as Fusion's cube does: a face's middle, an edge's strip or a corner
+  const lit = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0x5a9cff, transparent: true, opacity: 0.55, depthWrite: false }));
+  lit.visible = false; rig.add(lit);
+  const paint = (cell) => {
+    lit.visible = !!cell;
+    if (!cell) return;
+    const out = 0.006;   // just proud of the cube so it isn't hidden in it
+    lit.scale.set(...cell.map((c) => (c ? 0.5 - EDGE + out : 2 * EDGE)));
+    lit.position.set(...cell.map((c) => c * ((0.5 + EDGE) / 2 + out / 2)));
+  };
+  renderer.domElement.addEventListener('pointermove', (e) => { paint(aim(e)?.cell); });
+  renderer.domElement.addEventListener('pointerleave', () => paint(null));
   renderer.domElement.addEventListener('click', (e) => { const a = aim(e); if (a) onView(a.dir); });
 
   const inv = new THREE.Quaternion();
