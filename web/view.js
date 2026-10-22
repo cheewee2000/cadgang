@@ -2660,26 +2660,6 @@ function sweep({ joint = null, steps = 36, gap = 0, tol = checkTol(), free = fal
 }
 let snapshotTimer = null;
 /** Post what is on screen; coalesced, since a stroke is many change events. */
-// ASK CLAUDE: the frame, camera and markups queue on the server for cadgang_feedback, and the
-// server types the request into the Claude Code session it can name (Knife Terminal: the one working
-// in this file's folder, else the one that last used cadgang). With none, the request goes on the
-// clipboard to paste.
-async function sendToClaude() {
-  if (!subject || !bbox) { say('open a file first', true); return; }
-  say('asking Claude…');
-  try {
-    const body = { png: markup.snapshot(), subject, markups: markup.items, camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() } };
-    const r = await fetch('api/view/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.statusText);
-    const open = markup.items.filter((m) => !m.done).length;
-    if (j.delivered) { say(`asked Claude in Knife Terminal tab ${j.delivered.tab} · ${open} open markup${open === 1 ? '' : 's'}`); return; }
-    let copied = false; try { await navigator.clipboard.writeText(j.prompt); copied = true; } catch {}
-    say(copied ? 'no Claude session to ask: the request is copied, paste it into Claude Code (⌘V)' : 'no Claude session to ask: tell Claude to call cadgang_feedback', true);
-  } catch (e) { say(`could not ask Claude: ${e.message}`, true); }
-}
-$('#sendBtn').addEventListener('click', sendToClaude);
-
 function postSnapshot() {
   if (follow || window.cadgangServerless) return;
   clearTimeout(snapshotTimer);
@@ -3324,7 +3304,6 @@ const CMDS = [
   { sep: true },
   { key: 'd', label: 'Background: light / dark / dusk / dawn / night', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.bg !== 'light' },
   { key: 'o', meta: true, label: 'Open…', btn: '#openBtn', run: () => $('#fileInput').click() },
-  { key: 'Enter', meta: true, label: 'Ask Claude', btn: '#sendBtn', run: sendToClaude },
   { key: 's', meta: true, label: 'Save project…', btn: '#saveBtn', run: () => saveProject() },
   { key: 's', meta: true, shift: true, label: 'Save project as…', run: () => saveProject(true) },
   { key: 'z', meta: true, label: 'Undo', run: undo },
