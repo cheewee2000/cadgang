@@ -265,7 +265,6 @@ select.ghost:hover { opacity: 0.55; }
 .bodies-head button { padding: 0 var(--sp-1); line-height: 1; }
 .bodies-tools { display: flex; gap: var(--sp-1); }
 .bodies-all { font-size: var(--fs-12); }
-.bodies.min .bodies-all { display: none; }
 .bodies.min label, .bodies.min .group { display: none; }
 .load-error { color: var(--signal-red); max-width: 60ch; }
 .load-error:empty { display: none; }
