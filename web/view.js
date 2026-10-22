@@ -473,7 +473,6 @@ function fitNames() {
   };
   panel.style.setProperty('--mat-w', `${widest('.mat-tag select.mat-word')}px`);
   panel.style.setProperty('--fin-w', `${widest('.mat-tag .fin-word, .mat-tag .fin')}px`);
-  panel.style.setProperty('--col-w', `${widest('.mat-tag .col')}px`);
   probe.remove();
   panel.style.setProperty('--col-gap', `${Math.round(Math.min(14, Math.max(4, (panel.clientWidth - 380) / 12)))}px`);
 }
@@ -806,7 +805,7 @@ function openColorMenu(anchor, current, pick, done) {
   menu.style.top = `${r.bottom + 4 + h > innerHeight ? Math.max(8, r.top - h - 4) : r.bottom + 4}px`;
 }
 
-/** The finish · swatch · colour part of a row, after its material word; for a body (m), finish and colour are lists to change. */
+/** The finish · swatch part of a row, after its material word; for a body (m), finish and colour are lists to change. */
 function finishBits(f, m = null) {
   const frag = document.createDocumentFragment();
   if (m) {
@@ -820,17 +819,13 @@ function finishBits(f, m = null) {
     sw.style.background = hexOfRGB(f.color);
     sw.addEventListener('pointerdown', (e) => e.stopPropagation());
     sw.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openColorMenu(sw, hexOfRGB(f.color), (rgb) => { setTint([m], rgb); rerender(); paintFinishes(); paintSelection(); }, () => commit()); });
-    const col = Object.assign(document.createElement('span'), { className: 'col pick', textContent: f.colorText, title: sw.title });
-    col.addEventListener('pointerdown', (e) => e.stopPropagation());
-    col.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); sw.click(); });   // the colour's name opens the same menu as its swatch
-    frag.append(fin, sw, col);
+    frag.append(fin, sw);
     return frag;
   } else {
     frag.append(Object.assign(document.createElement('span'), { className: 'fin', textContent: f.finish || '' }));   // there even when empty: it holds the column
     const sw = Object.assign(document.createElement('span'), { className: 'swatch', title: hexOfRGB(f.color) }); sw.style.background = hexOfRGB(f.color);
     frag.append(sw);
   }
-  frag.append(Object.assign(document.createElement('span'), { className: 'col', textContent: f.colorText }));
   return frag;
 }
 /** The user's finish for these bodies (null: back to the file's). */

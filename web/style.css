@@ -352,7 +352,6 @@ footer > * { white-space: nowrap; }
 /* material · finish · colour in columns: each a fixed width, the tag at the row's right, so every row lines up */
 .bodies .mat-tag select.mat-word { width: var(--mat-w, auto); }
 .bodies .mat-tag .fin-word, .bodies .mat-tag .fin { width: var(--fin-w, auto); flex: none; white-space: nowrap; }
-.bodies .mat-tag .col { width: var(--col-w, auto); flex: none; white-space: nowrap; overflow: visible; }
 /* the columns never cut their words; the space between them shrinks instead (fitNames sets it) */
 .bodies .mat-tag, .bodies .mat-tag .bits { gap: var(--col-gap, 12px); }
 .bodies .mat-tag { padding-left: var(--col-gap, 12px); }
@@ -361,7 +360,6 @@ footer > * { white-space: nowrap; }
 .bodies .mat-tag select { text-align: right; text-align-last: right; }   /* material and finish sit at their columns' right edge */
 .bodies .mat-tag .fin { text-align: right; }
 .bodies label:has(.mat-tag) .see { margin-left: 0; }   /* the tag takes the slack, so its columns sit at the right */
-.bodies .mat-tag .col.pick { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }   /* reads as a word; a click opens the colours */
 /* the header's buttons are the HUD's smaller size */
 header button, header select.ghost { font-size: var(--fs-12); padding: 4px 8px; height: auto; }
 header select.ghost { padding-right: 22px; background-position: right 7px center; }
