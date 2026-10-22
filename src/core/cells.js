@@ -644,13 +644,13 @@ function cellKey(cell, inputKeys) {
   ])).digest('base64');
 }
 
-function cacheResult(key, value, logs, checks) {
+function cacheResult(key, value, logs, checks, flats = []) {
   if (resultCache.size >= RESULT_CACHE_LIMIT) {
     const [oldest, gone] = resultCache.entries().next().value;
     resultCache.delete(oldest);
     try { gone.shape.delete(); } catch { /* already freed */ }
   }
-  resultCache.set(key, { shape: setParts(value.clone(), partsOf(value)), logs, checks });
+  resultCache.set(key, { shape: setParts(value.clone(), partsOf(value)), logs, checks, flats });
 }
 
 /** Drop every cached shape (tests, and anything that changes what a cell means). */
@@ -690,6 +690,8 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
       id: cell.id, kind: cell.kind || CELL_KIND.model,
       status: 'ok', error: null, logs: [], checks: [], ms: 0,
     };
+    // sheet metal flats (sm parts' DXF) ride along for the DXF export, kept out of the JSON report
+    Object.defineProperty(entry, 'flats', { value: [], enumerable: false });
     report.push(entry);
 
     if (cell.code == null) {
@@ -724,6 +726,7 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
       resultCache.set(key, hit);
       entry.logs = hit.logs.map((l) => ({ ...l }));
       entry.checks.push(...hit.checks.map((c) => ({ ...c })));
+      entry.flats.push(...(hit.flats || []).map((f) => ({ ...f })));
       entry.cached = true;
       results.set(cell.id, setParts(trackBrepShape(hit.shape.clone()), partsOf(hit.shape)));   // a clone keeps the part names
       keys.set(cell.id, key);
@@ -737,7 +740,7 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
       const compiled = compiledFor(cell);
       const value = compiled.run(cellApi({
         params: cell.params, input, inputs, selections: cell.selections, sketch: cell.sketch,
-        checked: entry.checks,
+        checked: entry.checks, flats: entry.flats,
       }));
       entry.logs = compiled.logs.map((l) => ({ ...l }));
       // An assertion cell measures; it does not model. Its result is whatever
@@ -754,7 +757,7 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
         previous = results.get(cell.id);
         previousKey = key;
         lastGood = cell.id;
-        cacheResult(key, previous, entry.logs, entry.checks);
+        cacheResult(key, previous, entry.logs, entry.checks, entry.flats);
       }
     } catch (err) {
       // A lost pick is not a bug in the code — it is a question only the human

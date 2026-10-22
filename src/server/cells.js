@@ -574,6 +574,26 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
     } catch (e) { fail(res, e); }
   });
 
+  /**
+   * Flat patterns: one DXF per sheet metal part (sm.part(...).make) the target builds, written to
+   * exports/<file>_<part>.dxf. Refuses like STEP does. Answers JSON: the files, sizes and quantities.
+   */
+  r.get('/export/dxf', async (req, res) => {
+    try {
+      await withShape(req, ({ report }) => {
+        const flats = report.flatMap((e) => e.flats || []);
+        if (!flats.length) throw new GraphError('No sheet metal parts in this stack: build them with sm.part(...).make() to get flat patterns');
+        const base = req.query.file || 'flat';
+        const files = flats.map((f) => ({
+          part: f.name, qty: f.qty, gauge: f.gauge, flatMm: f.size.map((v) => Number(v.toFixed(2))),
+          savedTo: saveExport(`${base}_${f.name}`, 'dxf', f.dxf),
+        }));
+        if (files[0].savedTo) res.setHeader('X-Saved-To', files.map((f) => path.basename(f.savedTo)).join(', '));
+        res.json({ files });
+      }, { requireAssertions: true });
+    } catch (e) { fail(res, e); }
+  });
+
   /** PNG preview: the exact solid's tessellation, rasterised with its edges drawn over. */
   r.get('/preview.png', async (req, res) => {
     try {
