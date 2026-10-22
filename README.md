@@ -64,12 +64,14 @@ No build step; the page is plain ES modules. `CADGANG_PORT` picks the port, `CAD
 | Key | Action | Key | Action |
 |---|---|---|---|
 | F | Fit | X Y Z | Section axis (again: off) |
-| E W G O C | Edges, Wire, Grid, Ortho, Color | I / Esc | Invert section / cancel pick, section off |
+| W G O C | Wire, Grid, Ortho, Color | I / Esc | Invert section / cancel pick, section off |
 | L | Next look | 1–7 | Front, back, top, bottom, right, left, iso |
 | H T S Q | Hide, transparent, show only, move triad | ⇧H | Show all bodies |
 | M | Measure | B P A N ⇧T ⇧I R ⌫ | Bezier, Pencil, Arrow, Note, Text, Image, Erase, Clear markup |
-| B | Flip drawing over | [ ] | Turn 90° |
+| E J V | Joint / explode mode, new joint, explode direction | [ ] | Turn 90° |
 | D | Dark / light | ⌘O ⌘Z ⇧⌘Z | Open, Undo, Redo |
+
+These are the defaults. To remap one, right-click, click its key in the menu, then press the new key (⌫ removes it, Esc keeps it). A key another command had swaps over to it. Remaps are yours, kept on your Mac; **Reset hotkeys** at the bottom of the menu restores the defaults.
 
 ## Drawing
 

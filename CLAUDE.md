@@ -12,7 +12,7 @@ A macOS viewer + markup app for CAD files (Swift shell in `mac/`, node server in
 ## Decided
 - **Scrolling:** a footer selector, **Trackpad** (default) or **Mouse**. Trackpad: two fingers turn the model and ⇧ pans. Mouse: two fingers pan and ⇧ turns. Pinch zooms in both, and so does a mouse-wheel notch.
 - **Dragging a part, explode mode:** in Trackpad mode a plain drag slides the part along its explode axis and ⌥-drag places it freely. Mouse mode is the other way round.
-- **Hotkeys:** B Bezier (the Figma-style pen), P pencil, A arrow, N note, ⇧T text, ⇧I image, R erase. J new joint, E toggles joint/explode mode, V explode direction, Q move triad, F fit, ← → nudge the explode (hold to scrub). Esc cancels the current tool. Edges has no key, and neither does Flip.
+- **Hotkeys** (the defaults; anyone can remap their own from the right-click menu, so don't change a default just to suit yourself): B Bezier (the Figma-style pen), P pencil, A arrow, N note, ⇧T text, ⇧I image, R erase. J new joint, E toggles joint/explode mode, V explode direction, Q move triad, F fit, ← → nudge the explode (hold to scrub). Esc cancels the current tool. Edges has no key, and neither does Flip.
 - **Names:** the Figma-style pen is labelled **BEZIER**.
 - **Buttons:** a button that is on is drawn inverted. In the header, Open / Save / New sit at the left and the right-hand group stays right-justified.
 - **Bodies panel:** the grip on the column's edge sets the width, and that width beats the name-fit minimum. Material and finish are right-justified. The panel stops above the bottom-left buttons.

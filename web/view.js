@@ -3288,7 +3288,7 @@ const CMDS = [
   { sep: true },
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },
-  // P pen and ⇧P pencil, as in Figma ('pen' is the pencil's stroke kind in saved markups, kept for old files)
+  // B Bezier and P pencil ('pen' is the pencil's stroke kind in saved markups, kept for old files)
   ...[['b', 'path', 'Bezier'], ['p', 'pen', 'Pencil'], ['a', 'arrow', 'Arrow'], ['n', 'note', 'Note'], ['t', 'text', 'Text', true], ['i', 'image', 'Image', true], ['r', 'erase', 'Erase']].map(([key, t, label, shift]) => ({ key, shift, label, btn: `[data-tool="${t}"]`, run: () => { markup.setTool(t); if ($('[data-tool].on')) setMeasure(false); }, on: () => $(`[data-tool="${t}"]`).classList.contains('on') })),
   { key: 'Backspace', label: 'Clear markup', btn: '[data-clear]', run: () => $('[data-clear]').click() },
   { sep: true },
@@ -3302,7 +3302,41 @@ const CMDS = [
 ];
 const keyLabel = (c) => (c.shift ? '⇧' : '') + (c.meta ? '⌘' : '') + ({ Escape: 'Esc', Backspace: '⌫', Enter: '↵', ArrowLeft: '←', ArrowRight: '→' }[c.key] ?? c.key.toUpperCase());
 
+// KEY REMAPS: click a hotkey in the right-click menu, then press the new one (Esc keeps it, ⌫ leaves the command
+// without a key). A key another command had swaps over to it. Each person's own, kept in this Mac's localStorage.
+const KEYS_KEY = 'cadgang-keys', keyOf = (c) => ({ key: c.key, shift: !!c.shift, meta: !!c.meta });
+const DEFAULT_KEYS = new Map(CMDS.filter((c) => c.label).map((c) => [c.label, keyOf(c)]));
+let remapping = null;   // { c, kbd } while waiting for the new key
+function applyKeys() {
+  let map = {};
+  try { map = JSON.parse(localStorage.getItem(KEYS_KEY)) || {}; } catch {}
+  for (const c of CMDS) if (DEFAULT_KEYS.has(c.label)) Object.assign(c, DEFAULT_KEYS.get(c.label), map[c.label]);
+}
+function remap(c, k) {
+  let map = {};
+  try { map = JSON.parse(localStorage.getItem(KEYS_KEY)) || {}; } catch {}
+  const other = k.key && CMDS.find((d) => d !== c && d.key === k.key && !!d.shift === k.shift && !!d.meta === k.meta);
+  if (other) map[other.label] = keyOf(c);
+  map[c.label] = k;
+  try { localStorage.setItem(KEYS_KEY, JSON.stringify(map)); } catch {}
+  applyKeys(); paintTips();
+  say(`${c.label}: ${c.key ? keyLabel(c) : 'no key'}${other ? ` · ${other.label}: ${other.key ? keyLabel(other) : 'no key'}` : ''}`);
+}
+function resetKeys() { try { localStorage.removeItem(KEYS_KEY); } catch {} applyKeys(); paintTips(); say('hotkeys back to the defaults'); }
+CMDS.push({ sep: true }, { label: 'Reset hotkeys', run: resetKeys });
+applyKeys();
+window.addEventListener('storage', (e) => { if (e.key === KEYS_KEY) { applyKeys(); paintTips(); } });   // remapped in another tab
+
 window.addEventListener('keydown', (e) => {
+  if (remapping) {
+    if (['Shift', 'Meta', 'Control', 'Alt'].includes(e.key)) return;
+    e.preventDefault(); e.stopPropagation();
+    const { c } = remapping; remapping = null; hideMenu();
+    if (e.key === 'Escape') return;
+    remap(c, e.key === 'Backspace' || e.key === 'Delete' ? { key: undefined, shift: false, meta: false }
+      : { key: e.key.length === 1 ? e.key.toLowerCase() : e.key, shift: e.shiftKey, meta: e.metaKey || e.ctrlKey });
+    return;
+  }
   const nudge = e.target.id === 'explode' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');   // the focused slider's own arrows would step it, not scrub
   if ((e.target.matches?.('input,select,textarea') && !nudge && !((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's')) || e.altKey || $('#shareDialog').open) return;   // typing keeps its keys, but ⌘S saves from inside a field
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
@@ -3434,8 +3468,13 @@ function showItems(x, y, items) {
     if (c.head) return Object.assign(document.createElement('div'), { className: 'hd', textContent: c.head });
     const b = document.createElement('button');
     b.className = 'ghost' + (c.on?.() ? ' on' : '');
-    b.append(Object.assign(document.createElement('span'), { textContent: c.label }), Object.assign(document.createElement('kbd'), { textContent: c.key ? keyLabel(c) : '' }));
-    b.addEventListener('click', () => { hideMenu(); c.run(); });
+    const kbd = Object.assign(document.createElement('kbd'), { textContent: c.key ? keyLabel(c) : '' });
+    if (DEFAULT_KEYS.has(c.label) && CMDS.includes(c)) { kbd.classList.add('remap'); kbd.title = 'Click, then press a new key (⌫ none, Esc keep)'; }
+    b.append(Object.assign(document.createElement('span'), { textContent: c.label }), kbd);
+    b.addEventListener('click', (e) => {
+      if (e.target === kbd && kbd.classList.contains('remap')) { remapping = { c, kbd }; kbd.textContent = 'press a key'; kbd.classList.add('on'); return; }
+      hideMenu(); c.run();
+    });
     return b;
   }));
   menu.hidden = false;
@@ -3443,16 +3482,21 @@ function showItems(x, y, items) {
   menu.style.left = `${Math.max(8, Math.min(x, innerWidth - menu.offsetWidth - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(y, innerHeight - menu.offsetHeight - 8))}px`;   // never above the window's top: it scrolls instead
 }
-function hideMenu() { menu.hidden = true; }
+function hideMenu() { menu.hidden = true; remapping = null; }
 document.addEventListener('pointerdown', (e) => { if (!menu.contains(e.target)) hideMenu(); });
 
 // --- hover tips: the element's title, shown at once and with its hotkey
 const tip = Object.assign(document.createElement('div'), { id: 'tip', hidden: true });
 document.body.appendChild(tip);
-for (const c of CMDS) {
-  const el = c.btn && $(c.btn);
-  if (el) { el.dataset.tip = (el.title || c.label).replace(/\s*\([^)]*\)\s*$/, '') + (c.key ? ` · ${keyLabel(c)}` : ''); el.removeAttribute('title'); }
+function paintTips() {
+  for (const c of CMDS) {
+    const el = c.btn && $(c.btn);
+    if (!el) continue;
+    el.dataset.tipBase ??= (el.title || c.label).replace(/\s*\([^)]*\)\s*$/, ''); el.removeAttribute('title');
+    el.dataset.tip = el.dataset.tipBase + (c.key ? ` · ${keyLabel(c)}` : '');
+  }
 }
+paintTips();
 for (const el of [$('#explode'), $('#explodeSect')]) el.dataset.tip = `${el.dataset.tip ?? el.title} · ← → nudge, hold to scrub`, el.removeAttribute('title');
 document.addEventListener('pointerover', (e) => {
   const el = e.target.closest?.('[data-tip],[title]');
