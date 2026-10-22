@@ -211,6 +211,8 @@ select.ghost:hover { opacity: 0.55; }
 .tabs[hidden] { display: none; }
 .tabs button { font-size: var(--fs-12); padding: 4px 8px; white-space: nowrap; }
 .bodies label { display: flex; align-items: center; gap: var(--sp-2); cursor: pointer; white-space: nowrap; }
+/* a PCB's 14k rows: the first layout of all of them was 9 s; off-screen rows now skip it (height kept once seen) */
+.bodies.many label { content-visibility: auto; contain-intrinsic-width: auto 0px; contain-intrinsic-height: auto 17px; }
 .bodies input { accent-color: var(--ink); margin: 0; }
 .bodies label > span { flex: none; }
 .bodies label > span:not(.fold-gap):not(.body-edit) { flex: 0 1 auto; }   /* names give way, ellipsed, so the material picker stays right */

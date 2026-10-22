@@ -121,8 +121,14 @@ bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params)
     Standard_Real angDeflection = params.angularDeflection;
 
     if (params.linearDeflectionType == ImportParams::LinearDeflectionType::BoundingBoxRatio) {
+        // cadgang: face by face, leaving out unbounded ones. One untrimmed face in a PCB export made
+        // the box infinite and the deflection 1e97, which meshed every part at its coarsest.
         Bnd_Box boundingBox;
-        BRepBndLib::Add (shape, boundingBox, false);
+        for (TopExp_Explorer ex (shape, TopAbs_FACE); ex.More (); ex.Next ()) {
+            Bnd_Box faceBox;
+            BRepBndLib::Add (ex.Current (), faceBox, false);
+            if (!faceBox.IsVoid () && !faceBox.IsOpen () && faceBox.SquareExtent () < 1e18) boundingBox.Add (faceBox);
+        }
         if (boundingBox.IsVoid ()) {
             return false;
         }
@@ -141,6 +147,17 @@ bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params)
         }
     }
 
-    BRepMesh_IncrementalMesh mesh (shape, linDeflection, Standard_False, angDeflection, Standard_True);   // cadgang: parallel
+    // cadgang: parallel, and a solid at a time, then shells outside solids, then loose faces. BRepMesh
+    // keeps its working model of everything it is given until done: one call on a 21k-solid PCB
+    // export peaked at 30 GB (even with every solid already meshed, it still built that model).
+    for (TopExp_Explorer ex (shape, TopAbs_SOLID); ex.More (); ex.Next ()) {
+        BRepMesh_IncrementalMesh (ex.Current (), linDeflection, Standard_False, angDeflection, Standard_True);
+    }
+    for (TopExp_Explorer ex (shape, TopAbs_SHELL, TopAbs_SOLID); ex.More (); ex.Next ()) {
+        BRepMesh_IncrementalMesh (ex.Current (), linDeflection, Standard_False, angDeflection, Standard_True);
+    }
+    for (TopExp_Explorer ex (shape, TopAbs_FACE, TopAbs_SHELL); ex.More (); ex.Next ()) {
+        BRepMesh_IncrementalMesh (ex.Current (), linDeflection, Standard_False, angDeflection, Standard_True);
+    }
     return true;
 }

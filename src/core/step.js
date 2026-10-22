@@ -38,6 +38,9 @@ export function importCadFileInWorker(buffer, opts = {}, { timeoutMs = 600_000 }
 const outOfMemory = (msg) => /malloc failed|out of memory|Cannot enlarge memory|Aborted/i.test(String(msg || ''));
 const tooBig = (name, mb) => `'${name || 'file'}' (${mb} MB) is too big for the built-in importer, which ran out of memory — export it lighter (fewer parts, no PCB copper detail) and it will open`;
 
+// The STEP text is read as one latin1 string for groups and colours; V8 caps a string at 2^29 - 24 chars.
+const MAX_TEXT = 2 ** 29 - 24;
+
 let occtPromise = null;
 
 /** One-time async WASM init (~70ms); afterwards calls are synchronous. */
@@ -186,7 +189,7 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
  * Mesh k of a part is that part's solid k when the counts agree, else solid i of the file is mesh i.
  */
 function fillStyles(buffer, result, bodies, parents) {
-  if (buffer.byteLength > 200 * 1048576) return;
+  if (buffer.byteLength > MAX_TEXT) return;
   const styles = stepSolidStyles(Buffer.from(buffer.buffer ?? buffer, buffer.byteOffset ?? 0, buffer.byteLength).toString('latin1'));
   const fromText = styles.solids.length === bodies.length ? [...styles.solids] : [];
   const partOf = [];
@@ -222,7 +225,7 @@ function fillStyles(buffer, result, bodies, parents) {
  */
 export function stepParents(buffer) {
   const out = new Map();
-  if (buffer.byteLength > 200 * 1048576) return out;   // the importer refuses these anyway
+  if (buffer.byteLength > MAX_TEXT) return out;
   const text = Buffer.from(buffer.buffer ?? buffer, buffer.byteOffset ?? 0, buffer.byteLength).toString('latin1');
   if (!text.includes('NEXT_ASSEMBLY_USAGE_OCCURRENCE')) return out;
   const unq = (s) => s.replace(/''/g, "'").replace(/\\X2\\([0-9A-F]+)\\X0\\/g, (_, h) => String.fromCharCode(...h.match(/.{4}/g).map((x) => parseInt(x, 16))));

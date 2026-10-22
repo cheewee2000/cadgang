@@ -314,6 +314,7 @@ function listBodies() {
   highlightBody(null);
   panel.replaceChildren(bodiesHead());
   panel.hidden = model.children.length < 2;
+  panel.classList.toggle('many', model.children.length > 500);   // rows off screen skip layout (style.css)
   // A body a later file repeats (the leg file opened over the bench that already holds the leg) would
   // draw twice in the same place and fight triangle by triangle: the same box to a micron → untick it.
   // (Not the vertex count: the standalone leg tessellates to 4041 vertices, the one in the bench to 3629.)
@@ -361,6 +362,7 @@ function listBodies() {
   treeRoot = root;
   const under = (node) => [...node.bodies, ...[...node.kids.values()].flatMap(under)];
   const see = (onclick) => Object.assign(document.createElement('button'), { className: 'ghost see', textContent: '◐', title: 'Transparent (T)', onclick: (e) => { e.preventDefault(); onclick(); } });
+  const gap = root.kids.size || model.children.some((o) => (o.userData.groups?.length ?? 0) > 1);   // once, not per row
   const render = (node, into, depth) => {
     for (const [g, kid] of node.kids) {
       const box = document.createElement('div'); box.className = 'group';
@@ -419,10 +421,10 @@ function listBodies() {
           r2.append(Object.assign(document.createElement('span'), { className: 'fname', textContent: g.name || 'finish', title: g.name }), finishBits(f));
           subs.append(r2);
         }
-      } else if (root.kids.size || model.children.some((o) => (o.userData.groups?.length ?? 0) > 1)) row.append(Object.assign(document.createElement('span'), { className: 'fold-gap' }));   // aligns with the +/−
+      } else if (gap) row.append(Object.assign(document.createElement('span'), { className: 'fold-gap' }));   // aligns with the +/−
       // the material word: a list that reads as text; a choice shows under the MATERIALS look, so it switches to it
       const pick = document.createElement('select'); pick.className = 'ghost mat-word';
-      for (const [k, d] of Object.entries(MATERIALS)) pick.append(new Option(d.label, k));
+      lazyOptions(pick, () => Object.entries(MATERIALS).map(([k, d]) => new Option(d.label, k)));
       pick.addEventListener('pointerdown', (e) => e.stopPropagation());
       pick.addEventListener('click', (e) => e.stopPropagation());
       pick.addEventListener('change', () => {
@@ -462,14 +464,20 @@ function fitNames() {
   // a list's own width is its longest option's; what shows is the chosen one, so that is what is measured
   const probe = Object.assign(document.createElement('span'), { style: 'position:absolute;visibility:hidden;white-space:nowrap;left:-9999px' });
   document.body.append(probe);
+  // Read every row first, then measure each distinct word once per kind of element: a probe write
+  // between layout reads re-laid the whole panel per row, minutes on a 14k-body PCB.
   const widest = (sel) => {
-    let w = 0;
+    const words = new Map();   // tag + classes -> {cs, texts}
     for (const el of panel.querySelectorAll(sel)) {
-      if (!el.offsetParent) continue;   // in a folded folder
-      const cs = getComputedStyle(el);
+      if (el.closest('[hidden]')) continue;   // in a folded folder (not offsetParent: that lays out every row)
+      const key = el.tagName + el.className;   // rows' styles come from their classes: one getComputedStyle per kind, not per row
+      if (!words.has(key)) { const cs = getComputedStyle(el); words.set(key, { cs: { font: cs.font, letterSpacing: cs.letterSpacing, textTransform: cs.textTransform, fontStyle: cs.fontStyle, pad: parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) }, texts: new Set() }); }
+      words.get(key).texts.add(el.tagName === 'SELECT' ? el.selectedOptions[0]?.textContent ?? '' : el.textContent);
+    }
+    let w = 0;
+    for (const { cs, texts } of words.values()) {
       for (const k of ['font', 'letterSpacing', 'textTransform', 'fontStyle']) probe.style[k] = cs[k];
-      probe.textContent = el.tagName === 'SELECT' ? el.selectedOptions[0]?.textContent ?? '' : el.textContent;
-      w = Math.max(w, Math.ceil(probe.getBoundingClientRect().width + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)) + 1);
+      for (const t of texts) { probe.textContent = t; w = Math.max(w, Math.ceil(probe.getBoundingClientRect().width + cs.pad) + 1); }
     }
     return w;
   };
@@ -808,12 +816,24 @@ function openColorMenu(anchor, current, pick, done) {
 }
 
 /** The finish · swatch part of a row, after its material word; for a body (m), finish and colour are lists to change. */
+/**
+ * A row's list holds only its current choice until it is opened: two lists of 14 options on each of a
+ * PCB's 14k rows were 400k of its 560k nodes, and styling them the first time took 9 s.
+ */
+function lazyOptions(sel, all) {
+  const fill = () => { if (sel._full) return; sel._full = true; const v = sel.value; sel.replaceChildren(...all()); sel.value = v; };
+  for (const ev of ['pointerdown', 'focus', 'keydown']) sel.addEventListener(ev, fill);
+}
+function choose(sel, value, label) {
+  if (![...sel.options].some((o) => o.value === value)) { if (sel._full) sel.append(new Option(label, value)); else sel.replaceChildren(new Option(label, value)); }
+  sel.value = value;
+}
 function finishBits(f, m = null) {
   const frag = document.createDocumentFragment();
   if (m) {
     const fin = Object.assign(document.createElement('select'), { className: 'fin-word', title: 'Its finish: click to change it' });
-    fin.append(new Option(f.finish || 'Finish', ''), ...Object.entries(FINISHES).map(([k, d]) => new Option(d.label, k)));
-    fin.value = m.userData.finish ?? '';
+    lazyOptions(fin, () => [new Option(f.finish || 'Finish', ''), ...Object.entries(FINISHES).map(([k, d]) => new Option(d.label, k))]);
+    choose(fin, m.userData.finish ?? '', m.userData.finish ? FINISHES[m.userData.finish].label : f.finish || 'Finish');
     if (!m.userData.finish) fin.options[0].textContent = f.finish || 'Finish';   // the file's (or the material's) until one is chosen
     for (const ev of ['pointerdown', 'click']) fin.addEventListener(ev, (e) => e.stopPropagation());
     fin.addEventListener('change', () => { setFinish([m], fin.value || null); commit(); });
@@ -844,7 +864,7 @@ function paintFinishes() {
   paintWeight();
   for (const el of document.querySelectorAll('#bodies .mat-tag')) {
     const m = el._body, sel = el.querySelector('select.mat-word'), picked = pickedMaterial(m);
-    sel.value = materialOf(m);
+    choose(sel, materialOf(m), MATERIALS[materialOf(m)]?.label ?? materialOf(m));
     const guess = !picked && !m.userData.material && !(m.userData.groups ?? []).some((g) => g.name);
     sel.classList.toggle('guess', guess);
     sel.title = guess ? 'A guess from its name (the file names no material): click to choose one' : picked ? 'Your choice: click to change it' : `The file says ${m.userData.material || 'its finishes'}: click to choose another`;
@@ -2262,10 +2282,15 @@ function parseCad(buffer) {
   const names = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, off, nNameBytes)));
   const faces = Array.from({ length: nFaces }, (_, i) => ({ first: fr[2 * i], count: fr[2 * i + 1] }));
   const parts = [];
+  // faces and bodies both run in triangle order: walk them together (a filter per body was
+  // bodies × faces, 14k × 1M on a PCB export, and the page never came back)
+  let fi = 0;
   for (let b = 0; b < nBodies; b++) {
     const first = br[2 * b], count = br[2 * b + 1];
     const sub = subGeometry(pos, idx, first, count, nrm);
-    const own = faces.filter((f) => f.first >= first && f.first < first + count).map((f) => ({ first: f.first - first, count: f.count }));
+    while (fi < nFaces && faces[fi].first < first) fi++;
+    const own = [];
+    for (; fi < nFaces && faces[fi].first < first + count; fi++) own.push({ first: faces[fi].first - first, count: faces[fi].count });
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(sub.pos, 3));
     if (sub.nrm) geo.setAttribute('normal', new THREE.BufferAttribute(sub.nrm, 3));

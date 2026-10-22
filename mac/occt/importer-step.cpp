@@ -24,6 +24,10 @@ bool ImporterStep::TransferToDocument (const std::vector<std::uint8_t>& fileCont
     if (readStatus != IFSelect_RetDone) {
         return false;
     }
+    // cadgang: no shape healing on big files. It is single-threaded ShapeFix on every solid, ~90% of
+    // the read of a PCB export (300 s of a 150 MB file's 330), and a viewer can do without it.
+    // Only DirectFaces (cheap) is kept. Must follow ReadStream: the reader has no actor to hold the flags before it.
+    if (fileContent.size () > 50 * 1024 * 1024) { ShapeProcess::OperationsFlags f; f.set (ShapeProcess::DirectFaces); stepReader.SetShapeProcessFlags (f); }
 
     if (!stepCafReader.Transfer (document)) {
         return false;
