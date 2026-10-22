@@ -134,6 +134,7 @@ function styleMesh(m) {
     if (m.userData.opacity < 1 && SOLID_LOOKS.has(ui.look)) Object.assign(mat, { transparent: true, opacity: m.userData.opacity, depthWrite: false });
     if (m.userData.ghost) Object.assign(mat, { transparent: true, opacity: Math.min(mat.opacity, 0.15), depthWrite: false, transmission: 0 });
     if (m.userData.map && !ui.color && 'map' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) { mat.map = m.userData.map; mat.color?.set(0xffffff); }
+    if (m.userData.glow && !m.userData.map && !ui.color && 'emissive' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.emissive.copy(mat.color).multiplyScalar(m.userData.glow);   // a lamp's lens: lit in every solid look
     mat.side = section.axis && bbox ? THREE.FrontSide : THREE.DoubleSide;
     mat.flatShading = !!m.userData.flat;
     // WIRE is a CAD wireframe: the model's real edges (a B-rep's face borders, a mesh's creases) with the
@@ -157,6 +158,7 @@ let grid = null;
 let bbox = null;
 let joints = [];   // see JOINTS: the bodies that move on an axis
 let sources = [];   // what each open file loaded as: [{name, cad, buffer}] (CAD tessellated), for Share to web and project files
+let lights = [];   // a glTF's lamps (KHR_lights_punctual), file frame: {pos, dir, color, cos: [outer, inner]}, for the Metal render
 
 function clearModel() {
   for (const g of [model, edges]) {
@@ -164,7 +166,7 @@ function clearModel() {
     g.clear();
   }
   bbox = null;
-  sources = [];
+  sources = []; lights = [];
   joints = []; renderJoints();
   selected.clear(); paintSelection();
   rot.identity();
@@ -2193,7 +2195,7 @@ function collectGeometries(obj, assoc = null, out = []) {
   obj.updateMatrixWorld(true);
   // keep the file's part name and its material's colour, roughness and metalness (glTF carries them)
   const look = (mat) => ({ name: mat?.name || '', color: mat?.color ? mat.color.getRGB(new THREE.Color(), THREE.SRGBColorSpace).toArray() : null,
-    pbr: mat?.isMeshStandardMaterial ? { roughness: mat.roughness, metalness: mat.metalness } : null, map: mat?.map ?? null, glow: mat?.map && mat.emissiveMap ? Math.max(...mat.emissive.toArray()) : 0 });   // map: a glTF's image texture (a screen's picture); glow: it lights itself (an emissive texture too)
+    pbr: mat?.isMeshStandardMaterial ? { roughness: mat.roughness, metalness: mat.metalness } : null, map: mat?.map ?? null, glow: mat?.emissive ? Math.max(...mat.emissive.toArray()) * (mat.emissiveIntensity ?? 1) : 0 });   // map: a glTF's image texture (a screen's picture); glow: it lights itself (an emissive texture too)
   const geoOf = (o) => o.geometry.clone().applyMatrix4(o.matrixWorld);
   // the named nodes above a body, outermost first: the tree's folders (as a STEP's assembly path)
   const pathOf = (o) => { const p = []; for (let a = o.parent; a && a !== obj; a = a.parent) if (a.name && a.name !== p[0]) p.unshift(a.name); return p; };
@@ -2239,6 +2241,13 @@ async function parseMesh(ext, buffer, name) {
   if (ext === 'obj') return collectGeometries(loader.parse(new TextDecoder().decode(buffer)));
   if (ext === '3mf' || ext === 'fbx') return collectGeometries(loader.parse(buffer, ''));
   const gltf = await new Promise((ok, bad) => loader.parse(buffer, '', ok, bad));
+  gltf.scene.updateMatrixWorld(true);
+  gltf.scene.traverse((o) => {   // point lights and spots; three aims a glTF spot down its node's -z (its target)
+    if (!o.isPointLight && !o.isSpotLight) return;
+    const pos = new THREE.Vector3().setFromMatrixPosition(o.matrixWorld), at = o.target ? new THREE.Vector3().setFromMatrixPosition(o.target.matrixWorld) : pos;
+    lights.push({ pos, dir: at.clone().sub(pos).normalize(), color: o.color.clone().multiplyScalar(o.intensity),
+      cos: o.isSpotLight ? [Math.cos(o.angle), Math.cos(o.angle * (1 - o.penumbra))] : [-2, -1] });
+  });
   return collectGeometries(gltf.scene, gltf.parser.associations);
 }
 
@@ -2802,11 +2811,12 @@ function nativeScene() {
     // a body with a material per group (several finishes) sends one material per group
     if (ms.length > 1) for (const gr of g.groups) tri.fill(base + gr.materialIndex, to + gr.start / 3, to + Math.min(gr.start + gr.count, n) / 3);
     else tri.fill(base, to, to + n / 3);
-    for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5, mat.map === map ? pic : -1, pic >= 0 ? m.userData.glow : 0]); }
+    for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5, mat.map === map ? pic : -1, pic >= 0 || !m.userData.map ? m.userData.glow : 0]); }
     vo += pos.count; to += n / 3;
   });
   const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff);
-  post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b], uv: b64(uv), pngs: pics.map(pngOf) });
+  const lamps = lights.map((l) => [...l.pos.clone().applyQuaternion(rot).toArray(), ...l.dir.clone().applyQuaternion(rot).toArray(), ...l.color.toArray(), ...l.cos]);   // turned with the bodies (Turn bakes into them)
+  post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b], uv: b64(uv), pngs: pics.map(pngOf), lights: lamps });
 }
 // Glass pulled in by `d` along its welded normals (every copy of a corner moves the same way: no cracks), for
 // the tracer only. A pane lying on aluminium shares that face: the tracer took either surface per ray (speckle),

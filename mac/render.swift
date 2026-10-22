@@ -10,7 +10,7 @@ struct RenderUniforms {
     var camPos = SIMD4<Float>(), camFwd = SIMD4<Float>(), camRight = SIMD4<Float>(), camUp = SIMD4<Float>()
     var sunDir = SIMD4<Float>(), sunCol = SIMD4<Float>(), skyTop = SIMD4<Float>(), skyBot = SIMD4<Float>()
     var bg = SIMD4<Float>(), clip = SIMD4<Float>()   // clip: keep where dot(xyz, p) + w >= 0; xyz = 0 is off
-    var scene = SIMD4<Float>()                       // x: scene diagonal, y: ray offset, z: floor height
+    var scene = SIMD4<Float>()                       // x: scene diagonal, y: ray offset, z: floor height, w: lamps
     var info = SIMD4<UInt32>()                       // x: samples so far, y: ortho, z: samples this frame, w: floor's first triangle
 }
 
@@ -19,7 +19,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     private let queue: MTLCommandQueue
     private let pipe: MTLComputePipelineState
     private var accel: MTLAccelerationStructure?
-    private var vtx: MTLBuffer?, idx: MTLBuffer?, tri: MTLBuffer?, mats: MTLBuffer?, uvs: MTLBuffer?
+    private var vtx: MTLBuffer?, idx: MTLBuffer?, tri: MTLBuffer?, mats: MTLBuffer?, uvs: MTLBuffer?, lamps: MTLBuffer?
     private var texs: [MTLTexture] = []   // the bodies' pictures (a glTF's image textures), up to maxTextures
     static let maxTextures = 8
     private var accum: MTLTexture?
@@ -55,12 +55,14 @@ final class PathTracer: NSObject, MTKViewDelegate {
 
     private var shown: Bool { view.window?.occlusionState.contains(.visible) ?? false }
 
-    func stop() { view.isHidden = true; view.isPaused = true; accel = nil; vtx = nil; idx = nil; tri = nil; mats = nil; uvs = nil; texs = [] }
+    func stop() { view.isHidden = true; view.isPaused = true; accel = nil; vtx = nil; idx = nil; tri = nil; mats = nil; uvs = nil; lamps = nil; texs = [] }
 
     /// verts: [x y z nx ny nz] per vertex, world space. idx: 3 per triangle. tri: material per triangle.
     /// mats: [r g b metalness roughness transmission ior texture glow] (linear colour; texture: an index into
-    /// pngs or -1, glow: how much the picture lights itself, a screen). uv: [u v] per vertex (zeros where untextured).
-    func setScene(verts: Data, idx idxData: Data, tri triData: Data, mats matList: [[Double]], cap: [Double], bg: [Double], uv uvData: Data? = nil, pngs: [Data] = []) {
+    /// pngs or -1, glow: how much it lights itself, a screen's picture or a lamp's lens). uv: [u v] per vertex (zeros where untextured).
+    /// lights: [x y z dx dy dz r g b cosOuter cosInner] per lamp (a glTF's spots and points; a point has cos -2, -1), colour times
+    /// intensity in the sun's units at 1 m (scene mm), falling off with the square of the distance.
+    func setScene(verts: Data, idx idxData: Data, tri triData: Data, mats matList: [[Double]], cap: [Double], bg: [Double], uv uvData: Data? = nil, pngs: [Data] = [], lights: [[Double]] = []) {
         let dev = view.device!
         var v = [Float](repeating: 0, count: verts.count / 4); _ = v.withUnsafeMutableBytes { verts.copyBytes(to: $0) }
         var ix = [UInt32](repeating: 0, count: idxData.count / 4); _ = ix.withUnsafeMutableBytes { idxData.copyBytes(to: $0) }
@@ -89,8 +91,11 @@ final class PathTracer: NSObject, MTKViewDelegate {
         tri = dev.makeBuffer(bytes: tm, length: tm.count * 4, options: .storageModeShared)
         mats = dev.makeBuffer(bytes: mats8, length: mats8.count * 4, options: .storageModeShared)
         uvs = dev.makeBuffer(bytes: uv, length: uv.count * 4, options: .storageModeShared)
+        let lm: [Float] = lights.filter { $0.count >= 11 }.flatMap { l in [0, 1, 2, 9, 3, 4, 5, 10, 6, 7, 8].map { Float(l[$0]) } + [0] }   // three float4 per lamp: pos + cosOuter, dir + cosInner, colour
+        lamps = dev.makeBuffer(bytes: lm.isEmpty ? [Float](repeating: 0, count: 12) : lm, length: max(lm.count, 12) * 4, options: .storageModeShared)
         u.bg = SIMD4(Float(bg[0]), Float(bg[1]), Float(bg[2]), 1)
-        u.scene = SIMD4(diag, diag * 2e-5, z, 0)
+        u.scene = SIMD4(diag, diag * 2e-5, z, Float(lm.count / 12))
+        u.sunCol = SIMD4(2.6, 2.5, 2.35, 0) * (lm.isEmpty ? 1 : 0.35)   // the file's lamps light it; the sun drops to a fill so their pools read
         u.info.w = UInt32(ix.count / 3 - 2)
 
         let g = MTLAccelerationStructureTriangleGeometryDescriptor()
@@ -157,7 +162,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         enc.setBuffer(vtx, offset: 0, index: 1); enc.setBuffer(idx, offset: 0, index: 2)
         enc.setBuffer(tri, offset: 0, index: 3); enc.setBuffer(mats, offset: 0, index: 4)
         enc.setAccelerationStructure(accel, bufferIndex: 5)
-        enc.setBuffer(uvs, offset: 0, index: 6)
+        enc.setBuffer(uvs, offset: 0, index: 6); enc.setBuffer(lamps, offset: 0, index: 7)
         for i in 0..<Self.maxTextures { enc.setTexture(i < texs.count ? texs[i] : accum, index: 2 + i) }   // unused slots get any texture; no material points at them
         enc.setTexture(accum, index: 0); enc.setTexture(out, index: 1)
         enc.dispatchThreadgroups(MTLSize(width: (out.width + 7) / 8, height: (out.height + 7) / 8, depth: 1), threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
@@ -175,6 +180,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     struct U { float4 camPos, camFwd, camRight, camUp, sunDir, sunCol, skyTop, skyBot, bg, clip, scene; uint4 info; };
     struct Vtx { packed_float3 p; packed_float3 n; };
     struct Mat { float4 color; float4 prm; float4 tex; };   // prm: metalness, roughness, transmission, ior; tex: picture index (-1 none), glow
+    struct Lamp { float4 pos; float4 dir; float4 col; };     // pos.w: cos of the cone's edge, dir.w: cos where it is full
 
     static uint pcg(thread uint& s) { s = s * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
     static float rnd(thread uint& s) { return float(pcg(s)) * (1.0 / 4294967296.0); }
@@ -225,14 +231,14 @@ final class PathTracer: NSObject, MTKViewDelegate {
 
     // How much sun gets through from o along d: clear bodies let it through tinted, anything else stops it.
     static float3 shadow(constant U& u, primitive_acceleration_structure accel, device const Vtx* vtx, device const uint* idx,
-                         device const uint* tri, device const Mat* mats, float3 o, float3 d) {
+                         device const uint* tri, device const Mat* mats, float3 o, float3 d, float tmax = INFINITY) {
         float3 t = 1.0;
         for (int k = 0; k < 8; k++) {
-            Hit h = closest(u, accel, vtx, idx, tri, o, d, INFINITY);
+            Hit h = closest(u, accel, vtx, idx, tri, o, d, tmax);
             if (!h.hit) return t;
             if (h.cap || mats[h.mat].prm.z < 0.5) return 0.0;
             t *= mats[h.mat].color.rgb;
-            o += d * (h.t + u.scene.y);
+            o += d * (h.t + u.scene.y); tmax -= h.t + u.scene.y;
         }
         return 0.0;
     }
@@ -267,7 +273,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     kernel void trace(uint2 gid [[thread_position_in_grid]], constant U& u [[buffer(0)]],
                       device const Vtx* vtx [[buffer(1)]], device const uint* idx [[buffer(2)]],
                       device const uint* tri [[buffer(3)]], device const Mat* mats [[buffer(4)]],
-                      primitive_acceleration_structure accel [[buffer(5)]], device const float2* uvs [[buffer(6)]],
+                      primitive_acceleration_structure accel [[buffer(5)]], device const float2* uvs [[buffer(6)]], device const Lamp* lamps [[buffer(7)]],
                       texture2d<float, access::read_write> accum [[texture(0)]], texture2d<float, access::write> out [[texture(1)]],
                       array<texture2d<float>, 8> texs [[texture(2)]]) {
         constexpr sampler pic(filter::linear, address::clamp_to_edge);
@@ -296,8 +302,8 @@ final class PathTracer: NSObject, MTKViewDelegate {
                     uint i = h.prim;
                     float2 uv = uvs[idx[3 * i]] * (1.0 - h.bc.x - h.bc.y) + uvs[idx[3 * i + 1]] * h.bc.x + uvs[idx[3 * i + 2]] * h.bc.y;
                     col = texs[uint(m.tex.x)].sample(pic, uv, level(0)).rgb;
-                    L += T * col * m.tex.y;
                 }
+                if (!h.cap) L += T * col * m.tex.y;   // a screen or a lamp's lens lights itself
                 float metal = m.prm.x, a = max(m.prm.y * m.prm.y, 0.002), a2 = a * a, trans = m.prm.z;
                 float3 v = -d;
                 if (trans > 0.5) {   // glass: Fresnel-weighted reflect or refract, IOR 1.5
@@ -317,6 +323,14 @@ final class PathTracer: NSObject, MTKViewDelegate {
                 float3 sd = normalize(u.sunDir.xyz + onb(u.sunDir.xyz, float3((rnd(seed) * 2.0 - 1.0), (rnd(seed) * 2.0 - 1.0), 0.0)) * u.sunDir.w);
                 if (dot(n, sd) > 0.0)
                     L += T * brdf(n, v, sd, col, metal, a2) * dot(n, sd) * u.sunCol.rgb * shadow(u, accel, vtx, idx, tri, mats, o, sd);
+                // Lamps: one shadowed sample each, inverse square in metres (the scene is mm), soft cone edge.
+                for (uint li = 0; li < uint(u.scene.w); li++) {
+                    Lamp lp = lamps[li];
+                    float3 to = lp.pos.xyz - o; float dist = length(to); float3 ld = to / dist;
+                    float cone = smoothstep(lp.pos.w, lp.dir.w, dot(-ld, lp.dir.xyz)), nl = dot(n, ld);
+                    if (cone <= 0.0 || nl <= 0.0) continue;
+                    L += T * brdf(n, v, ld, col, metal, a2) * nl * lp.col.rgb * cone * 1e6 / (dist * dist) * shadow(u, accel, vtx, idx, tri, mats, o, ld, dist);
+                }
                 // Next direction: GGX lobe or cosine hemisphere, weighted by their mixture pdf.
                 float pSpec = mix(0.25, 1.0, metal);
                 float3 l;
