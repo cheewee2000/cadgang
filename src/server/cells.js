@@ -585,7 +585,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
         if (!flats.length) throw new GraphError('No sheet metal parts in this stack: build them with sm.part(...).make() to get flat patterns');
         const base = req.query.file || 'flat';
         const files = flats.map((f) => ({
-          part: f.name, qty: f.qty, gauge: f.gauge, flatMm: f.size.map((v) => Number(v.toFixed(2))),
+          part: f.name, qty: f.qty, gauge: f.gauge, hardware: f.hardware ?? {}, flatMm: f.size.map((v) => Number(v.toFixed(2))),
           savedTo: saveExport(`${base}_${f.name}`, 'dxf', f.dxf),
         }));
         if (files[0].savedTo) res.setHeader('X-Saved-To', files.map((f) => path.basename(f.savedTo)).join(', '));

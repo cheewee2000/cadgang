@@ -65,3 +65,51 @@ test('the rules bite: a flange under the minimum, a part over the sheet, flanges
     assert.throws(() => sm.part('clash', g).base(200, 200).flange('base.r', 40).flange('base.t', 40).flange('base.r.r', 30).make(), /clear of each other/);
   } finally { scope.dispose(); }
 });
+
+test('a Z bend: one flange folds the other way, flat is the outside sizes less one bend deduction per bend', () => {
+  const scope = beginBrepScope();
+  try {
+    const checked = [], sm = sheetMetalNamespace(checked, []);
+    const p = sm.part('z', g).base(100, 60).flange('base.b', 20).flange('base.t', 25, { reverse: true });
+    const s = p.make();
+    assert.equal(ops.bodies(s), 1);
+    const bb = ops.bbox(s);
+    assert.ok(Math.abs(bb.min[2] - (g.t - 25)) < 0.01 && Math.abs(bb.max[2] - 20) < 0.01, `z from ${bb.min[2]} to ${bb.max[2]}`);
+    assert.ok(Math.abs(p.flat().size[1] - (60 + 20 + 25 - 2 * g.bd)) < 0.05, `flat ${p.flat().size}`);
+    assert.match(p.dxf(), /\nBEND_REVERSE\n/);
+    assert.ok(checked.every((c) => c.ok), JSON.stringify(checked.filter((c) => !c.ok)));
+  } finally { scope.dispose(); }
+});
+
+test('PEM hardware: placed by a frame point, fused in, counted; the catalog distances bite', () => {
+  const scope = beginBrepScope();
+  try {
+    const checked = [], flats = [], sm = sheetMetalNamespace(checked, flats);
+    const frame = { origin: [0, 0, 0], u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, 1] };
+    const p = sm.part('nutted', g).base(200, 100).flange('base.b', 25);
+    p.pem('base.b', 'SP-M5-0', p.at('base.b', [100, 0, 14], frame)).pem('base', 'FH4-M5-10', [100, 50], { face: 'out' });
+    const s = p.make(frame);
+    assert.equal(ops.bodies(s), 1, 'hardware fused in');
+    assert.ok(Math.abs(ops.bbox(s).min[2] - (g.t - 0.394 * 25.4)) < 0.01, 'the stud stands out of the outer face, its head flush in the inside one');
+    assert.deepEqual(flats[0].hardware, { 'SP-M5-0': 1, 'FH4-M5-10': 1 });
+    assert.ok(checked.some((c) => /hardware 1 SP-M5-0, 1 FH4-M5-10/.test(c.label) && c.ok));
+    // 5 mm up the flange is inside its .313 in of the bend
+    assert.throws(() => sm.part('tight', g).base(200, 100).flange('base.b', 25).pem('base.b', 'SP-M5-0', [100, 5]).make(), /from an edge or bend/);
+    assert.throws(() => sm.part('x', g).base(50, 50).pem('base', 'SP-M9', [25, 25]), /no hardware 'SP-M9'/);
+    assert.throws(() => sm.part('thin', sm.gauge('scs-304', 0.048)).base(80, 80).pem('base', 'SP-M6-1', [40, 40]).make(), /wants 0.06 to 0.5 in sheet/);
+  } finally { scope.dispose(); }
+});
+
+test('countersinks: aluminium .187 takes M4, stainless and .125 do not', () => {
+  const scope = beginBrepScope();
+  try {
+    const sm = sheetMetalNamespace([], []), al = (t) => sm.gauge('scs-5052', t);
+    const plate = sm.part('plate', al(0.187)).base(90, 110).countersink('base', 'M4', [10, 10]);
+    const before = 90 * 110 * al(0.187).t;
+    assert.ok(ops.volume(plate.make()) < before - 50, 'the cone is cut');
+    assert.throws(() => sm.part('thin plate', al(0.125)).base(90, 110).countersink('base', 'M4', [10, 10]).make(), /M4 is 1.93 mm deep/);
+    assert.throws(() => sm.part('steel plate', g).base(90, 110).countersink('base', 'M4', [10, 10]).make(), /not countersunk/);
+    assert.throws(() => sm.part('small', al(0.187)).base(70, 70).countersink('base', 'M4', [10, 10]).make(), /outside 1 x 4/);
+    assert.throws(() => sm.part('bent al', al(0.125)).base(90, 110).flange('base.b', 20), /cut flat only/);
+  } finally { scope.dispose(); }
+});
