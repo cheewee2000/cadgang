@@ -235,7 +235,7 @@ select.ghost:hover { opacity: 0.55; }
 .hud-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 /* reference planes, beside Section: Front / Top / Right toggles and the + menu (offset, on a face, yours) */
 .planes { position: relative; }
-.planes button.ghost { border-color: transparent; }   /* Front / Top / Right / +: no border either way, so turning one on (inverted) does not read as a size change */
+.planes button.ghost, .planes button.ghost.on { border-color: transparent; }   /* Front / Top / Right / +: no border off or on (the on rule's ink border grew the inverted block by a pixel all round), so turning one on does not read as a size change */
 .planes-menu { position: absolute; left: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; gap: 6px; min-width: 280px; background: var(--paper); border: var(--bw-hair) solid var(--ink); padding: 8px; font-size: var(--fs-12); white-space: nowrap; }
 .planes-menu[hidden] { display: none; }
 .planes-menu .row { display: flex; align-items: center; gap: 6px; }
