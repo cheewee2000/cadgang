@@ -2003,7 +2003,7 @@ function renderJoints() {
   const panelFolded = !!jointFolds.panel;
   el.classList.toggle('folded', panelFolded);
   head.append(foldBtn(panelFolded, () => { jointFolds.panel = !panelFolded; saveJointFolds(); renderJoints(); }),
-    Object.assign(document.createElement('span'), { textContent: joints.length ? `Joints (${joints.length})` : 'Joints' }));
+    Object.assign(document.createElement('span'), { className: 'joints-title', textContent: joints.length ? `Joints (${joints.length})` : 'Joints', title: JOINT_HINTS }));   // how to make and move joints: on hover, not always in the way
   if (joints.length) head.append(Object.assign(document.createElement('button'), { className: 'ghost', textContent: 'Check', title: 'Drive every joint through its range, find what its parts run into, and set its limits just short of the first crash each way', onclick: checkJoints }));
   const rows = joints.map((j) => {
     const row = jointRow(j), folded = !!jointFolds[j.id];
@@ -2011,7 +2011,7 @@ function renderJoints() {
     row.querySelector('.jl').prepend(foldBtn(folded, (e) => { e.preventDefault(); jointFolds[j.id] = !folded; saveJointFolds(); renderJoints(); }));
     return row;
   });
-  el.replaceChildren(head, ...rows, div('joints-hint', JOINT_HINTS));
+  el.replaceChildren(head, ...rows);
 }
 /**
  * The Check button: each joint's crashes over its whole range (its old limits ignored, so a check can widen them
