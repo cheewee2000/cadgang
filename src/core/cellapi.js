@@ -17,6 +17,7 @@ import { q as queryRoot, topology, Query } from './query.js';
 import { Sketch } from './sketch.js';
 import * as checks from './checks.js';
 import { GraphError } from './errors.js';
+import { sheetMetalNamespace } from './sheetmetal.js';
 
 /** The `brep` namespace: primitives, booleans, modifiers, measures. */
 const brep = Object.freeze({
@@ -194,7 +195,7 @@ const assert = assertions([]);
  * name what it means.
  */
 export function cellApi({
-  params = {}, input = null, inputs = {}, selections = {}, sketch = null, checked = [],
+  params = {}, input = null, inputs = {}, selections = {}, sketch = null, checked = [], flats = [],
 }) {
   return Object.freeze({
     p: Object.freeze({ ...params }),
@@ -202,6 +203,7 @@ export function cellApi({
     q,
     sk: sketchNamespace(params, sketch),
     assert: assertions(checked),
+    sm: sheetMetalNamespace(checked, flats),
     topology,
     input,
     inputs: Object.freeze({ ...inputs }),

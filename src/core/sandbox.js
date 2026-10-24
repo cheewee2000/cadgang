@@ -38,6 +38,8 @@ import { GraphError } from './errors.js';
 const COMPILE_TIMEOUT_MS = 2000;
 /** Wall-clock budget for one call of the cell's default export. */
 const RUN_TIMEOUT_MS = 20000;
+/** A cell that needs longer says so (`export const budget = 60`, seconds), up to this. */
+const MAX_BUDGET_MS = 120000;
 /** Console lines kept per run; a program that logs in a loop truncates. */
 const LOG_LIMIT = 200;
 
@@ -60,6 +62,10 @@ export function transformCellSource(code) {
     /(^|[;\n])[ \t]*export[ \t]+const[ \t]+params[ \t]*=/,
     (_, lead) => `${lead}const params = ${CARRIER}.params =`
   );
+  out = out.replace(
+    /(^|[;\n])[ \t]*export[ \t]+const[ \t]+budget[ \t]*=/,
+    (_, lead) => `${lead}const budget = ${CARRIER}.budget =`
+  );
   out = out.replace(/(^|[;\n])[ \t]*export[ \t]+default\b[ \t]*/, (_, lead) => `${lead}${CARRIER}.default = `);
   // A dynamic import cannot be refused from inside the realm: Node invokes the
   // loader callback in a microtask, so the failure lands after the cell has
@@ -70,7 +76,7 @@ export function transformCellSource(code) {
   const leftover = out.match(/(?:^|[;\n])[ \t]*(export\b.*)/);
   if (leftover) {
     throw new GraphError(
-      `A cell may only 'export const params' and 'export default'. Found: ${leftover[1].trim()}`
+      `A cell may only 'export const params', 'export const budget' (seconds) and 'export default'. Found: ${leftover[1].trim()}`
     );
   }
   if (!out.includes(`${CARRIER}.default`)) {
@@ -133,6 +139,11 @@ export function compileCell(code, { id = 'cell', timeoutMs = RUN_TIMEOUT_MS } = 
   }
 
   const call = new vm.Script(`${CARRIER}.default(${ARGS});`, { filename });
+  // the default 20 s stays for every cell that does not ask; a big assembly can ask for up to 120 s
+  if (carrier.budget != null) {
+    if (!(typeof carrier.budget === 'number' && carrier.budget > 0)) throw new GraphError(`Cell '${id}': budget must be a number of seconds`);
+    timeoutMs = Math.min(MAX_BUDGET_MS, carrier.budget * 1000);
+  }
 
   return {
     id,

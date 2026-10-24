@@ -950,9 +950,7 @@ function bodyAt(e) {
     .filter((h) => !section.axis || section.plane.distanceToPoint(h.point) >= -1e-6);
   return (hits.find((h) => !h.object.userData.ghost) ?? hits[0])?.object ?? null;
 }
-const hexOf = (rgb) => `#${new THREE.Color().setRGB(...rgb, THREE.SRGBColorSpace).getHexString(THREE.SRGBColorSpace)}`;
 const rgbOf = (hex) => { const o = {}; new THREE.Color().setStyle(hex, THREE.SRGBColorSpace).getRGB(o, THREE.SRGBColorSpace); return [o.r, o.g, o.b].map((v) => +v.toFixed(3)); };
-const shownColor = (m) => m.userData.tint ?? m.userData.color ?? m.userData.groups?.[0]?.color ?? [0.73, 0.72, 0.7];
 /** The user's colour for these bodies (null: back to the file's). */
 function setTint(ms, rgb) {
   for (const m of ms) {
@@ -1581,7 +1579,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   const slide = ui.scroll === 'trackpad' ? !e.altKey : e.altKey;   // trackpad scheme: a plain drag slides the part along its axis, ⌥ places it freely; mouse: the other way round
   if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
   else if (e.button === 0 && !e.shiftKey && !measure.on && e.pointerType !== 'touch') {
-    const hit = partAt(e);
+    const hit = model.children.length > 1 ? partAt(e) : null;   // one body is not an assembly: a drag on it orbits, but it still hovers, selects and takes the right-click menu
     const j = ui.mode === 'joint' && hit && (e.metaKey ? jointOf(hit.body) : drivingJoint(hit.body));   // ⌘: the part's own joint offset, even on a rigid one
     if (ui.mode === 'joint') { if (j && !(e.metaKey && j.type === 'ball')) drag.joint = { j, offset: e.metaKey, m: bodyOfKey(j.body), hit: hit.body, local: hit.point.clone().applyMatrix4(hit.body.matrixWorld.clone().invert()) }; }   // joint mode: a jointed part turns or slides on its joint, anything else orbits
     else if (hit && slide) {
@@ -1749,7 +1747,6 @@ function onCap(e) {
 }
 // The body under the pointer (a hit on its cap counts, a clipped-away face does not), with the point.
 function partAt(e) {
-  if ($('#bodies').hidden) return null;   // one body is not an assembly
   const r = renderer.domElement.getBoundingClientRect();
   raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   const h = raycaster.intersectObjects(model.children, true).find((h) => h.object.isMesh && h.object.visible && h.object.parent.visible && (!section.axis || section.plane.distanceToPoint(h.point) > -1e-6));
@@ -2725,26 +2722,6 @@ function sweep({ joint = null, steps = 36, gap = 0, tol = checkTol(), free = fal
 }
 let snapshotTimer = null;
 /** Post what is on screen; coalesced, since a stroke is many change events. */
-// ASK CLAUDE: the frame, camera and markups queue on the server for cadgang_feedback, and the
-// server types the request into the Claude Code session it can name (Knife Terminal: the one working
-// in this file's folder, else the one that last used cadgang). With none, the request goes on the
-// clipboard to paste.
-async function sendToClaude() {
-  if (!subject || !bbox) { say('open a file first', true); return; }
-  say('asking Claude…');
-  try {
-    const body = { png: markup.snapshot(), subject, markups: markup.items, camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() } };
-    const r = await fetch('api/view/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.statusText);
-    const open = markup.items.filter((m) => !m.done).length;
-    if (j.delivered) { say(`asked Claude in Knife Terminal tab ${j.delivered.tab} · ${open} open markup${open === 1 ? '' : 's'}`); return; }
-    let copied = false; try { await navigator.clipboard.writeText(j.prompt); copied = true; } catch {}
-    say(copied ? 'no Claude session to ask: the request is copied, paste it into Claude Code (⌘V)' : 'no Claude session to ask: tell Claude to call cadgang_feedback', true);
-  } catch (e) { say(`could not ask Claude: ${e.message}`, true); }
-}
-$('#sendBtn').addEventListener('click', sendToClaude);
-
 function postSnapshot() {
   if (follow || window.cadgangServerless) return;
   clearTimeout(snapshotTimer);
@@ -3390,7 +3367,6 @@ const CMDS = [
   { sep: true },
   { key: 'd', label: 'Background: light / dark / dusk / dawn / night', btn: '#themeToggle', run: () => $('#themeToggle').click(), on: () => document.documentElement.dataset.bg !== 'light' },
   { key: 'o', meta: true, label: 'Open…', btn: '#openBtn', run: () => $('#fileInput').click() },
-  { key: 'Enter', meta: true, label: 'Ask Claude', btn: '#sendBtn', run: sendToClaude },
   { key: 's', meta: true, label: 'Save project…', btn: '#saveBtn', run: () => saveProject() },
   { key: 's', meta: true, shift: true, label: 'Save project as…', run: () => saveProject(true) },
   { key: 'z', meta: true, label: 'Undo', run: undo },

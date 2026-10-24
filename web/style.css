@@ -183,7 +183,6 @@ select.ghost:hover { opacity: 0.55; }
 .progress.guess .track > div { width: 30%; transition: none; animation: progress-slide 1.2s linear infinite; }
 @keyframes progress-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 .markup-tools { position: absolute; right: var(--sp-3); top: var(--sp-3); display: flex; gap: var(--sp-1); z-index: 2; }
-#sendBtn { border-color: var(--ink); font-weight: 700; }   /* Ask Claude, beside Share: the one action that hands the view on */
 .markup-tools button { font-size: var(--fs-12); padding: 4px 8px; background: var(--paper); }
 .markup-tools .swatch { width: 22px; padding: 0; background: var(--swatch); }
 .markup-tools .swatch.on { box-shadow: inset 0 0 0 2px var(--paper); border-color: var(--ink); }

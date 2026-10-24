@@ -19,6 +19,8 @@ const CELL_API = `A cell program is ES-module source with exactly two exports:
     return brep.shell(s, q.faces(s).planar().facing('+z').expect(1), 2);
   };
 
+A cell runs under a 20 s wall clock; one that genuinely needs longer (a big assembly) adds \`export const budget = 60\` (seconds, up to 120).
+
 Hoist every number a human might want to turn into 'params'. Changing a param re-runs the program; it never re-prompts. The program MUST return a solid.
 
 ARGUMENTS
@@ -32,7 +34,7 @@ ARGUMENTS
            Declare what you need with selections: {"lip": "edge"} and the cell parks until someone clicks
            (cadgang_cells_await_pick). Use this only when the reference genuinely needs a human; a written
            query is better whenever the geometry can describe itself.
-  brep, q, sk, assert, topology  as below
+  brep, q, sk, sm, assert, topology  as below
 
 brep — every operation is a pure function: shape in, new shape out. Nothing is mutated, so a cell is math all the way down.
   primitives: box(sx,sy,sz,{center}) — by DEFAULT centred in X and Y and sitting on z=0 (center:'xy'); center:'xyz' centres
@@ -144,6 +146,28 @@ assert — machine-checkable intent. Each one MEASURES, records the number in th
     resolved on \`shape\`, so union the parts first and write queries that pick each part's faces on the combined body.
   watertight(shape) — the mesh that would be exported is closed. Judged on the tessellation, which is what ships.
   singleBody(shape) — the result is ONE connected solid, not a compound of parts that never met.
+
+sm — sheet metal bent from one flat sheet, built to a shop's gauge table so the bends, reliefs and flat pattern are the
+  shop's own. sm.gauge('scs-304', 0.060) is SendCutSend 304 stainless at .060 in (radius, bend deduction, min flange,
+  max bend length, 30 x 44 in flat). sm.part(name, gauge, {hardware, round: 3}) then, in mm, outside sizes:
+    .base(U, V)  the base rectangle, u along x, v along y of its own frame
+    .flange('base.r', 25, {from, to, reverse})  a 90° flange that high off edge b (v 0), t (v V), l (u 0) or r (u U), folded to the
+      inside; flanges stack: 'base.r.t' is the tip of that flange, 'base.r.l' / '.r' its sides (a flange's b is its bend);
+      reverse: true folds it the other way (Z bends), its height from the parent's inside face, and it may not meet another at a corner
+    .cut('base', sm.rect(u0, v0, u1, v1, r), sm.circle(u, v, r), sm.slot(u0, v0, u1, v1, r), sm.poly(pts))  holes, in that panel's coordinates
+    .window('base', [u0, v0, u1, v1], depth)  an opening whose four edges fold in as mitred flaps
+    .at('base.b', [x, y, z], frame)  -> [u, v]: a point in the frame make() will get, in that panel's coordinates
+    .pem('base.b', 'SP-M5-0', [u, v], {face: 'in'|'out'})  PEM hardware the shop presses in (sm.hardware lists the SKUs:
+      SP nuts, SO4 standoffs, FH4 flush studs, metric); face: the side its body stands out of. Checked against the catalog's
+      sheet range, K / N (hole centre to any cut edge or bend allowance area) and M (same SKU spacing); fused into the solid
+    .countersink('base', 'M4', [u, v], {face})  a 90° metric countersink (draws the minor hole); SCS does these only in
+      aluminium and plastics .125 to .750 in, depth under 60% of the sheet, parts 1 x 4 to 14 x 46 in
+  sm.gauge('scs-5052', 0.187) is SendCutSend 5052 aluminium, flat parts only (no bend table yet).
+    .make({origin, u, v, n})  folds it into a solid placed on that right handed frame (n the inside), checks the shop's
+      rules (recorded like assert.*, a miss fails the cell) and keeps its flat for cadgang_cells_export format 'dxf'
+  Where two flanges meet at a corner they close to the shop's gap (.015 in) with a round relief; a flange that stops
+  mid edge gets a round ended relief slot; free outline corners are rounded by 'round'. A part made twice under one
+  name counts as qty 2 in the export; the export lists each part's hardware by SKU. 90° bends only.
 
 ASSERTION CELLS — add a cell with kind: 'assert' and its program states claims instead of building geometry.
   export default ({ assert, input }) => { assert.minWall(input, 1.5); assert.watertight(input); };
@@ -621,18 +645,18 @@ Args:
     'cadgang_cells_export',
     {
       title: 'Export the cell stack',
-      description: `Write the cell stack's solid to <filename>.step (or .stl) in the project folder and return the path.
+      description: `Write the cell stack's solid to <filename>.step (or .stl) in the project folder and return the path. format 'dxf' instead writes the flat pattern of every sheet metal part the stack makes (sm.part(...).make()), one <filename>_<part>.dxf each: outline and holes on layer CUT, bend lines dashed on BEND, mm.
 
 STEP is the default: cells are exact B-rep the whole way through, so the file reopens in Fusion, SolidWorks or OnShape as editable geometry rather than a faceted import. STL is for printing: the same solid tessellated (fine, scaled to the part).
 
 Args:
   - filename: base name, no extension. Name the part: 'wink_battery_lid', not 'part', 'export' or 'model'
   - cell: cell to export (defaults to the output/last cell)
-  - format: 'step' (default) | 'stl'`,
+  - format: 'step' (default) | 'stl' | 'dxf' (sheet metal flats)`,
       inputSchema: {
         filename: z.string().regex(/^[\w.-]+$/, 'Use letters, digits, dot, dash, underscore only'),
         cell: z.string().optional(),
-        format: z.enum(['step', 'stl']).optional(),
+        format: z.enum(['step', 'stl', 'dxf']).optional(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -645,6 +669,7 @@ Args:
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error || `cadgang API error (HTTP ${res.status})`);
         }
+        if (format === 'dxf') return ok(await res.json());
         const bytes = (await res.arrayBuffer()).byteLength;
         return ok({
           savedTo: res.headers.get('x-saved-to'),

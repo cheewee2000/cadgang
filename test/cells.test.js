@@ -95,6 +95,12 @@ test('a runaway cell is stopped rather than hanging the server', () => {
   assert.throws(() => compiled.run({}), /ran longer than 200ms/);
 });
 
+test('a cell can ask for a longer budget, in seconds, and only up to 120', () => {
+  const spin = (b) => compileCell(`export const budget = ${b};\nexport default () => { while (true) {} };`, { id: 'slow', timeoutMs: 200 });
+  assert.throws(() => spin(0.3).run({}), /ran longer than 300ms/);
+  assert.throws(() => compileCell('export const budget = "lots";\nexport default () => 1;'), /budget must be a number of seconds/);
+});
+
 test('console output is captured per run, not accumulated across runs', () => {
   const compiled = compileCell(`
     export default ({ p }) => { console.log('w is', p.w); return 1; };
