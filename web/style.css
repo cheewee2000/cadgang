@@ -148,7 +148,6 @@ footer {
 .drop-hint { font-size: var(--fs-12); }
 #viewport.dragover { outline: var(--bw-bold) solid var(--ink); outline-offset: -2px; }
 button.ghost.on:not(.swatch) { background: var(--ink); color: var(--paper); border-color: var(--ink); }   /* a tool or toggle that is on reads inverted */
-#orthoBtn.on { border-color: #fff; box-shadow: 0 0 0 1px #fff, 0 0 0 2px var(--ink); }   /* ORTHO on: a white stroke, so the flat view is never mistaken for perspective */
 /* the preset dropdown dresses as a toolbar button */
 select.ghost {
   appearance: none; -webkit-appearance: none; cursor: pointer;
