@@ -191,7 +191,7 @@ soft — softgoods the way CLO works a garment: pieces cut flat from fabric, sew
       shape it must not pass through (the frame unioned with the avatar, or null to hang free). Records, like assert.* but
       without failing the cell: each seam's length match and the gap it left, each piece's worst stretch against its fabric's
       maxStretch (the solver itself leaves 1 to 4%, so read anything under 5% as flat), how far it settled, and the closest
-      the cloth's surface comes to the body (ok when not inside it; the solver aims for `clearance` and lands within a few tenths). g.timing then has {total ms, steps, nodes}.
+      the cloth's surface comes to the body (ok when not inside it; the solver aims for the clearance asked and lands within a few tenths). g.timing then has {total ms, steps, nodes}.
   Pieces are faces, not solids: bbox, distance, area and STEP/STL export work; volume, mass and booleans do not. Start pieces
   near where they end up (a shoulder strap laid over the shoulder, not on the floor) — the drape is a relaxation, so a
   piece started far away or inside the body ends up somewhere strange. No self collision, darts or pleats yet.
