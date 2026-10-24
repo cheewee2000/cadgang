@@ -377,7 +377,7 @@ header { justify-content: flex-start; column-gap: var(--sp-4); }
 /* Planes and Add an image: no box round them, so they sit on the same line, at the same height, as Measure and the markup tools on the right */
 .hud .hud-row { gap: var(--sp-3); }
 .hud .hud-row > .sect { border: 0; padding: 0; background: none; gap: var(--sp-1); }
-.hud .hud-row > .sect > button { background: var(--paper); }
+.hud .hud-row > .sect > button:not(.on) { background: var(--paper); }   /* :not(.on): this rule is later than button.ghost.on's at the same specificity and was painting the on state paper on paper (invisible in the dark themes) */
 /* The header is one line, always: the file's name gives way (…), and the toolbar never wraps under it. */
 header { flex-wrap: nowrap; column-gap: var(--sp-3); }
 header .brand { flex: 0 1 auto; min-width: 6em; overflow: hidden; }
