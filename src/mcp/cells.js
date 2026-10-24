@@ -180,6 +180,8 @@ soft — softgoods the way CLO works a garment: pieces cut flat from fabric, sew
     g.piece(name, [[u, v], ...], fabric, {grid: 10, allowance: 10})  a closed outline in its own flat mm (u right, v up); grid
       is the solver's node spacing (finer is slower; 10 for straps, 15 to 20 for panels), allowance the seam allowance in the pattern
       .place(origin, u, v)  where the flat piece starts in 3D before it drapes: its (0, 0) at origin, u and v along those directions
+      .along([[x, y, z], ...], {u, at})  or start it bent along a path: flat v runs along the path, flat u = at (default the
+        middle) lies on it, u runs across along u. The right start for a strap: anchor, up the back, over the shoulder, down
       .pin([u, v], [x, y, z])  tack a pattern point to a world point (a bar tack, a rivet, a strap end on its frame anchor);
         pins hold the piece inextensible from there, so a strap between two pins hangs as it would
       .edge(i, j = i + 1)  the outline from point i to point j, for seams
@@ -188,8 +190,8 @@ soft — softgoods the way CLO works a garment: pieces cut flat from fabric, sew
     g.make({body, gravity: [0, 0, -1], g: 9810, steps, dt, iterations, clearance: 0.5})  -> the garment as faces; body is the
       shape it must not pass through (the frame unioned with the avatar, or null to hang free). Records, like assert.* but
       without failing the cell: each seam's length match and the gap it left, each piece's worst stretch against its fabric's
-      maxStretch (the solver itself leaves 1 to 4%, so read anything under 5% as flat), how far it settled, and the deepest
-      pass into the body (ok under clearance). g.timing then has {total ms, steps, nodes}.
+      maxStretch (the solver itself leaves 1 to 4%, so read anything under 5% as flat), how far it settled, and the closest
+      the cloth's surface comes to the body (ok when not inside it; the solver aims for `clearance` and lands within a few tenths). g.timing then has {total ms, steps, nodes}.
   Pieces are faces, not solids: bbox, distance, area and STEP/STL export work; volume, mass and booleans do not. Start pieces
   near where they end up (a shoulder strap laid over the shoulder, not on the floor) — the drape is a relaxation, so a
   piece started far away or inside the body ends up somewhere strange. No self collision, darts or pleats yet.

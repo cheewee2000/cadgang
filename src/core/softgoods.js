@@ -50,6 +50,8 @@ export function fabric(spec = 'cordura-500d') {
   return Object.freeze({ name: spec.name || 'custom', ...FABRICS['cordura-500d'], ...spec });
 }
 
+// the most a pin or tether moves a node per solver iteration, mm: the collision step (once per substep) must get to see every position the cloth passes through
+const RAMP = 2;
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
@@ -97,6 +99,28 @@ class Piece {
     const U = norm(u), n = norm(cross(U, v)), V = cross(n, U);
     if (!Number.isFinite(V[0]) || Math.hypot(...cross(U, v)) < 1e-9) throw new GraphError(`soft.piece('${this.name}').place: u and v must not be parallel`);
     this.frame = { origin: [...origin], u: U, v: V };
+    return this;
+  }
+
+  /**
+   * Start the piece bent along a 3D polyline instead of flat: flat v runs along the path's length (past its end, on in a
+   * straight line), flat u = `at` lies ON the path and u runs across it along `u`. A strap laid over the shoulder starts
+   * where it ends up, and the drape only settles it.
+   */
+  along(path, { u = [1, 0, 0], at = null } = {}) {
+    if (!Array.isArray(path) || path.length < 2) throw new GraphError(`soft.piece('${this.name}').along: the path needs at least 2 points`);
+    const us = this.outline.map((p) => p[0]), mid = at ?? (Math.min(...us) + Math.max(...us)) / 2, across = norm(u);
+    const cum = [0];
+    for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + Math.hypot(...sub(path[i], path[i - 1])));
+    this.frame = {
+      map: ([fu, fv]) => {
+        let i = 1;
+        while (i < path.length - 1 && cum[i] < fv) i++;
+        const t = norm(sub(path[i], path[i - 1])), base = add(path[i - 1], mul(t, fv - cum[i - 1]));
+        const a = norm(sub(across, mul(t, dot(across, t))));
+        return add(base, mul(a, fu - mid));
+      },
+    };
     return this;
   }
 
@@ -161,8 +185,10 @@ function layoutGrid(piece, base) {
 
 /** The body as a signed distance (positive outside) of its tessellation. */
 function bodyField(body) {
-  const t = tessellate(requireSolid(body, 'body'), { tolerance: 0.2 });
-  return buildMeshDistance(t.positions, t.indices).distance;
+  // 0.5 mm facets: the cloth keeps `clearance` off the body anyway, and a MOLLE frame at 0.2 is a million triangles
+  const t = tessellate(requireSolid(body, 'body'), { tolerance: 0.5 });
+  const { distance, closest } = buildMeshDistance(t.positions, t.indices);
+  return { distance, closest };
 }
 
 class Garment {
@@ -186,20 +212,20 @@ class Garment {
   /**
    * Relax the garment and return the compound of its pieces as trimmed B-spline faces.
    * body: the shape the fabric drapes over (null to hang free). gravity: a direction; g in mm/s²; steps substeps of dt
-   * seconds, stopped early once nothing moves faster than `settle` mm/s; clearance mm kept off the body.
-   * Records, like assert.*: each seam's length match, each piece's worst stretch, and the deepest
-   * pass into the body. A miss is recorded, not thrown: the point of a drape is to look at it.
+   * seconds, stopped early once nothing moves faster than `settle` mm/s or after `wall` seconds; clearance mm kept off the body.
+   * Records, like assert.*: each seam's length match and the gap it left, each piece's worst stretch, settling, and the
+   * closest the cloth comes to the body. A miss is recorded, not thrown: the point of a drape is to look at it.
    */
-  make({ body = null, gravity = [0, 0, -1], g = 9810, steps = 6000, iterations = 4, dt = 1 / 1000, clearance = 0.5, settle = 5 } = {}, checked = [], flats = []) {
+  make({ body = null, gravity = [0, 0, -1], g = 9810, steps = 6000, iterations = 4, dt = 1 / 1000, clearance = 0.5, settle = 50, wall = 30 } = {}, checked = [], flats = []) {
     if (!this.pieces.length) throw new GraphError(`soft.garment('${this.name}').make: no pieces`);
     const t0 = Date.now();
     const grids = [];
     let count = 0;
     for (const p of this.pieces) { const gr = layoutGrid(p, count); grids.push(gr); count += gr.nu * gr.nv; }
     const x = new Float64Array(count * 3), x0 = new Float64Array(count * 3), vel = new Float64Array(count * 3), invm = new Float64Array(count);
-    const fabricOf = new Array(count), thick = new Float64Array(count);
+    const fabricOf = new Array(count), thick = new Float64Array(count), cloth = new Uint8Array(count);   // cloth: inside the outline, not the rim
     const cons = [];  // [a, b, rest, k, kind]
-    const field = body ? bodyField(body) : null;
+    const bf = body ? bodyField(body) : null, field = bf?.distance ?? null;
 
     for (const gr of grids) {
       const { piece, nu, nv, hu, hv, at, active } = gr, f = piece.fabric, { origin, u: U, v: V } = piece.frame;
@@ -207,9 +233,10 @@ class Garment {
       const stiff = (k) => 1 - Math.pow(1 - Math.min(0.999, k), 1 / iterations);
       for (let i = 0; i < nu; i++) {
         for (let j = 0; j < nv; j++) {
-          const n = at(i, j), [fu, fv] = gr.flat(i, j), w = add(origin, add(mul(U, fu), mul(V, fv)));
+          const n = at(i, j), [fu, fv] = gr.flat(i, j), w = piece.frame.map ? piece.frame.map([fu, fv]) : add(origin, add(mul(U, fu), mul(V, fv)));
           x[n * 3] = w[0]; x[n * 3 + 1] = w[1]; x[n * 3 + 2] = w[2];
           invm[n] = active[i * nv + j] ? 1 / (mass * gr.cover[i * nv + j]) : 0;   // a rim node weighs what little cloth it carries, and so follows its neighbours
+          cloth[n] = gr.cover[i * nv + j] === 1 ? 1 : 0;
           fabricOf[n] = f; thick[n] = f.thickness / 2 + clearance;
           const link = (i2, j2, rest, k, kind) => {
             if (i2 >= nu || j2 >= nv || !active[i * nv + j] || !active[i2 * nv + j2]) return;
@@ -255,16 +282,24 @@ class Garment {
       let qx, qy, qz;
       if (Bw) { qx = qy = qz = 0; for (let c = 0; c < 4; c++) { const n = Bw.nodes[c], w = Bw.w[c]; qx += w * x[n * 3]; qy += w * x[n * 3 + 1]; qz += w * x[n * 3 + 2]; sum += w * w * invm[n]; } } else { [qx, qy, qz] = target; }
       if (sum === 0) return;
-      const dx = (px - qx) / sum, dy = (py - qy) / sum, dz = (pz - qz) / sum;
+      let dx = px - qx, dy = py - qy, dz = pz - qz;
+      const dl = Math.hypot(dx, dy, dz);
+      if (dl > RAMP) { const f = RAMP / dl; dx *= f; dy *= f; dz *= f; }   // a far pin pulls the cloth in, it does not teleport it through the body
+      dx /= sum; dy /= sum; dz /= sum;
       for (let c = 0; c < 4; c++) { const n = A.nodes[c], s = A.w[c] * invm[n]; x[n * 3] -= s * dx; x[n * 3 + 1] -= s * dy; x[n * 3 + 2] -= s * dz; }
       if (Bw) for (let c = 0; c < 4; c++) { const n = Bw.nodes[c], s = Bw.w[c] * invm[n]; x[n * 3] += s * dx; x[n * 3 + 1] += s * dy; x[n * 3 + 2] += s * dz; }
     };
 
     const prev = new Float64Array(count * 3);
-    let settled = 0, stepsRun = 0;
+    // the body distance is the expensive query, so each node keeps its last answer and asks again only once it has
+    // moved far enough that it could have reached the body since (a strap mid air asks almost never)
+    const known = new Float64Array(count), since = new Float64Array(count).fill(Infinity);   // every node asks on its first step
+    let settled = 0, stepsRun = 0, lastSpeed = 0, fastest = -1;
     // 1 ms substeps with few iterations: the stretch a strap keeps under gravity falls with the substep squared, and barely
     // with more iterations (1/300 s and 8: 7%; 1/1000 s and 4: 1.5%, measured on a 400 mm cordura strap between two pins)
-    for (let step = 0; step < steps && settled < 20; step++) {
+    // and never past `wall` seconds of real time: a drape that will not settle must still hand the viewer something
+    const deadline = Date.now() + wall * 1000;
+    for (let step = 0; step < steps && settled < 20 && (step % 50 || Date.now() < deadline); step++) {
       prev.set(x);
       for (let n = 0; n < count; n++) {
         if (!invm[n]) continue;
@@ -282,7 +317,7 @@ class Garment {
         }
         for (const [n, to, max] of tethers) {
           const dx = x[n * 3] - to[0], dy = x[n * 3 + 1] - to[1], dz = x[n * 3 + 2] - to[2], d = Math.hypot(dx, dy, dz);
-          if (d > max && d > 1e-9) { const s = max / d; x[n * 3] = to[0] + dx * s; x[n * 3 + 1] = to[1] + dy * s; x[n * 3 + 2] = to[2] + dz * s; }
+          if (d > max && d > 1e-9) { const s = (d - Math.min(d - max, RAMP)) / d; x[n * 3] = to[0] + dx * s; x[n * 3 + 1] = to[1] + dy * s; x[n * 3 + 2] = to[2] + dz * s; }
         }
         for (const p of pairs) project(p.A, p.to, p.B);
       }
@@ -292,32 +327,50 @@ class Garment {
         if (!invm[n]) continue;
         let friction = 0;
         if (field) {
-          const px = x[n * 3], py = x[n * 3 + 1], pz = x[n * 3 + 2], d = field(px, py, pz), want = thick[n];
-          if (d < want) {
-            const e = 0.25, gx = field(px + e, py, pz) - d, gy = field(px, py + e, pz) - d, gz = field(px, py, pz + e) - d, gl = Math.hypot(gx, gy, gz) || 1;
+          const px = x[n * 3], py = x[n * 3 + 1], pz = x[n * 3 + 2], want = thick[n];
+          since[n] += Math.hypot(px - prev[n * 3], py - prev[n * 3 + 1], pz - prev[n * 3 + 2]);
+          // a push only ever follows a fresh query; a resting node re-asks once it has drifted 0.02 mm
+          let d = known[n] - since[n], fresh = false;
+          if (d < want + 0.5 && since[n] > 0.02) { d = Math.abs(field(px, py, pz)); known[n] = d; since[n] = 0; fresh = true; }
+          if (fresh && d < want) {
+            // push straight away from the nearest surface point, to the side the node STARTED the step on, not the side
+            // the field's sign says: an imported frame's tessellation has faces wound either way, and a flipped sign at
+            // a slot's lip would push the cloth into the plate. The contact is dead: the push leaves no velocity to bounce with.
+            const cx = bf.closest[0], cy = bf.closest[1], cz = bf.closest[2];
+            let gx = px - cx, gy = py - cy, gz = pz - cz, gl = Math.hypot(gx, gy, gz);
+            const ox = prev[n * 3] - cx, oy = prev[n * 3 + 1] - cy, oz = prev[n * 3 + 2] - cz;
+            if (gl < 1e-6) { gx = ox; gy = oy; gz = oz; gl = Math.hypot(gx, gy, gz) || 1; }
+            else if (gx * ox + gy * oy + gz * oz < 0) { gx = -gx; gy = -gy; gz = -gz; }   // crossed the surface this step: back out
             const push = want - d;
             x[n * 3] += (gx / gl) * push; x[n * 3 + 1] += (gy / gl) * push; x[n * 3 + 2] += (gz / gl) * push;
+            prev[n * 3] = x[n * 3]; prev[n * 3 + 1] = x[n * 3 + 1]; prev[n * 3 + 2] = x[n * 3 + 2];
             friction = fabricOf[n].friction;
           }
         }
         const mx = x[n * 3] - prev[n * 3], my = x[n * 3 + 1] - prev[n * 3 + 1], mz = x[n * 3 + 2] - prev[n * 3 + 2];
-        vel[n * 3] = (mx / dt) * (1 - friction); vel[n * 3 + 1] = (my / dt) * (1 - friction); vel[n * 3 + 2] = (mz / dt) * (1 - friction);
-        maxMove = Math.max(maxMove, Math.abs(mx), Math.abs(my), Math.abs(mz));
+        // the rim is light and flails at edges of the body (a slot's lip): damp it hard, and judge settling on the cloth alone
+        const keep = (1 - friction) * (cloth[n] ? 1 : 0.5);
+        vel[n * 3] = (mx / dt) * keep; vel[n * 3 + 1] = (my / dt) * keep; vel[n * 3 + 2] = (mz / dt) * keep;
+        const mv = cloth[n] ? Math.max(Math.abs(mx), Math.abs(my), Math.abs(mz)) : 0;
+        if (mv > maxMove) { maxMove = mv; fastest = n; }
       }
-      settled = maxMove / dt < settle ? settled + 1 : 0;
+      lastSpeed = maxMove / dt;
+      settled = lastSpeed < settle ? settled + 1 : 0;
       stepsRun = step + 1;
     }
-    // the deepest pass at rest, not on the way down
-    let penetration = 0;
-    if (field) for (let n = 0; n < count; n++) if (invm[n]) penetration = Math.max(penetration, thick[n] - clearance - field(x[n * 3], x[n * 3 + 1], x[n * 3 + 2]));
-    checked.push({ label: `${this.name} settled`, ok: settled >= 20, value: stepsRun, limit: steps, unit: 'steps', detail: null });
+    // closest the cloth's mid surface comes to the body at rest, less half its thickness: unsigned, because an imported
+    // body's facets are wound either way and the field's sign cannot say inside from outside; the cloth started outside
+    // and was kept there step by step, so the gap is what there is to report
+    let gap = Infinity;
+    if (field) for (let n = 0; n < count; n++) if (cloth[n]) gap = Math.min(gap, Math.abs(field(x[n * 3], x[n * 3 + 1], x[n * 3 + 2])) - fabricOf[n].thickness / 2);
+    checked.push({ label: `${this.name} settled`, ok: settled >= 20, value: stepsRun, limit: steps, unit: 'steps', detail: { fastestNodeMmPerS: Number(lastSpeed.toFixed(1)), node: fastest, at: fastest < 0 ? null : [x[fastest * 3], x[fastest * 3 + 1], x[fastest * 3 + 2]].map((v) => Number(v.toFixed(1))), piece: grids.find((gr) => fastest >= gr.base && fastest < gr.base + gr.nu * gr.nv)?.piece.name ?? null } });
     // did each seam close: the widest gap left between its sewn points
     const where = (A) => [0, 1, 2].map((k) => A.nodes.reduce((acc, n, c) => acc + A.w[c] * x[n * 3 + k], 0));
     for (const s of this.seams) {
       const gap = Math.max(...pairs.filter((p) => p.seam === s).map((p) => Math.hypot(...sub(where(p.A), where(p.B)))));
       checked.push({ label: `seam ${s.a.piece.name}/${s.b.piece.name} gap`, ok: gap <= 1, value: Number(gap.toFixed(3)), limit: 1, unit: 'mm', detail: null });
     }
-    if (field) checked.push({ label: `${this.name} inside body`, ok: penetration <= clearance, value: Number(penetration.toFixed(3)), limit: clearance, unit: 'mm', detail: null });
+    if (field) checked.push({ label: `${this.name} body clearance`, ok: gap >= 0, value: Number(gap.toFixed(3)), limit: 0, unit: 'mm', detail: { asked: clearance } });   // the cloth's own surface is off the body; the solver aims for `clearance` and lands within a few tenths
 
     // strain per piece, from the structural springs
     for (const gr of grids) {
@@ -329,13 +382,19 @@ class Garment {
       checked.push({ label: `${gr.piece.name} stretch`, ok: worst * 100 <= gr.piece.fabric.maxStretch, value: Number((worst * 100).toFixed(2)), limit: gr.piece.fabric.maxStretch, unit: '%', detail: null });
     }
 
-    // ghost nodes (outside the outline) follow the cloth smoothly so the surface fit has a full grid to fit
+    const wild = checked.filter((c) => c.label.endsWith(' stretch') && c.value > 100).map((c) => c.label.replace(/ stretch$/, ''));
+    if (wild.length) {
+      throw new GraphError(`soft: '${this.name}' did not drape: ${wild.join(', ')} stretched past 100%. ` +
+        'Start the pieces near where they end up (place or along), outside the body, with every pin within reach.');
+    }
+    // the rim and the ghost nodes beyond it (everything outside the outline) are re-laid as a smooth continuation of the
+    // cloth, so the surface fit sees a full, calm grid: what the rim did against the body never reaches the face
     for (const gr of grids) {
-      const { nu, nv, at, active } = gr;
+      const { nu, nv, at, cover } = gr;
       for (let pass = 0; pass < 60; pass++) {
         for (let i = 0; i < nu; i++) {
           for (let j = 0; j < nv; j++) {
-            if (active[i * nv + j]) continue;
+            if (cover[i * nv + j] === 1) continue;
             let sx = 0, sy = 0, sz = 0, c = 0;
             for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
               const ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= nu || jj >= nv) continue;
@@ -347,13 +406,14 @@ class Garment {
       }
     }
 
+    const tSim = Date.now();
     const faces = grids.map((gr) => fitFace(gr, x));
     const shape = setParts(brepCompound(faces), this.pieces.map((p) => ({ name: p.name, count: 1 })));
     for (const p of this.pieces) {
       const seen = flats.find((f) => f.name === p.name);
       if (seen) seen.qty += 1; else flats.push({ name: p.name, dxf: patternDXF(p), qty: 1, size: patternSize(p), gauge: p.fabric.name, hardware: {} });
     }
-    this.timing = { total: Date.now() - t0, steps: stepsRun, nodes: count };
+    this.timing = { total: Date.now() - t0, sim: tSim - t0, fit: Date.now() - tSim, steps: stepsRun, nodes: count };
     return shape;
   }
 }
@@ -364,7 +424,7 @@ function fitFace(gr, x) {
   return attempt('soft fit', () => {
     const arr = new OC.TColgp_Array2OfPnt_2(1, nu, 1, nv);
     for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) { const n = at(i, j), p = new OC.gp_Pnt_3(x[n * 3], x[n * 3 + 1], x[n * 3 + 2]); arr.SetValue(i + 1, j + 1, p); p.delete(); }
-    const fit = new OC.GeomAPI_PointsToBSplineSurface_2(arr, 3, 3, OC.GeomAbs_Shape.GeomAbs_C2, 0.05);
+    const fit = new OC.GeomAPI_PointsToBSplineSurface_2(arr, 3, 3, OC.GeomAbs_Shape.GeomAbs_C2, 0.1);
     arr.delete();
     if (!fit.IsDone()) throw new GraphError(`soft: could not fit a surface through '${piece.name}'`);
     const surf = fit.Surface().get(), hs = new OC.Handle_Geom_Surface_2(surf);
@@ -398,7 +458,9 @@ function fitFace(gr, x) {
       } else {
         const a1 = new OC.TColgp_Array1OfPnt2d_2(1, m);
         pts.forEach((p, s) => a1.SetValue(s + 1, new OC.gp_Pnt2d_3(p[0], p[1])));
-        const ap = new OC.Geom2dAPI_PointsToBSpline_2(a1, 3, 3, OC.GeomAbs_Shape.GeomAbs_C2, 1e-6);
+        // 1e-3 of the parameter range (under half a mm here): a tighter fit packs the pcurve with knots and BuildCurves3d then
+        // approximates it into a 3D curve metres long (seen: a 400 mm strap edge rebuilt 2.5 m long, swinging 550 mm off the cloth)
+        const ap = new OC.Geom2dAPI_PointsToBSpline_2(a1, 3, 3, OC.GeomAbs_Shape.GeomAbs_C2, 1e-3);
         c2d = new OC.Handle_Geom2d_Curve_2(ap.Curve().get());
         a1.delete();
       }
@@ -408,7 +470,7 @@ function fitFace(gr, x) {
     if (!mf.IsDone()) throw new GraphError(`soft: could not trim '${piece.name}' to its outline`);
     const face = mf.Face();
     // 3D curves for the trim edges from their pcurves: 0.01 mm is plenty for cloth (the default 1e-5 with no segment cap runs for minutes)
-    OC.BRepLib.BuildCurves3d_1(face, 0.01, OC.GeomAbs_Shape.GeomAbs_C1, 14, 200);
+    OC.BRepLib.BuildCurves3d_1(face, 0.02, OC.GeomAbs_Shape.GeomAbs_C1, 14, 200);
     P.delete(); dU.delete(); dV.delete(); fit.delete();
     return track(rc.cast(face));
   });

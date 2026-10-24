@@ -25,7 +25,7 @@ test('a strap pinned at both ends sags onto a bar: one trimmed face, resting on 
     assert.ok(bb.min[2] > 5 && bb.min[2] < 60, `the strap came down onto the bar and its edges curl down its sides (min z ${bb.min[2].toFixed(1)}; bar top 30, start 80)`);
     assert.ok(bb.max[2] <= 100, `only the 20 mm tails past the pins rise above them (max z ${bb.max[2].toFixed(1)})`);
     assert.ok(bb.size[1] > 45 && bb.size[1] < 65, `width stays about 60, less what curls down the bar's sides (${bb.size[1].toFixed(1)})`);
-    assert.ok(row(checked, 'test inside body').ok, `no pass into the bar: ${JSON.stringify(row(checked, 'test inside body'))}`);
+    assert.ok(row(checked, 'test body clearance').ok, `the strap keeps its clearance off the bar: ${JSON.stringify(row(checked, 'test body clearance'))}`);
     assert.ok(row(checked, 'strap stretch').value < 6, `stretch within the solver's residual, 1 to 4% (${row(checked, 'strap stretch').value}%)`);
     assert.equal(flats.length, 1);
     assert.deepEqual(flats[0].size, [420, 80], 'pattern is the outline plus 10 mm allowance all round');

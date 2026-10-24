@@ -286,7 +286,8 @@ function mollerTrumbore(positions, indices, tri, ox, oy, oz, dx, dy, dz, tMin, t
  * Compile triangles [triStart, triStart+triCount) of an indexed mesh into a
  * signed distance closure.
  *
- * Returns { distance(x,y,z), bbox, normal } where `normal` is the
+ * Returns { distance(x,y,z), closest, bbox, normal } — `closest` holds the surface point nearest the
+ * last distance() query — where `normal` is the
  * area-weighted average facet normal of the range (the natural extrusion
  * direction for a face patch).
  */
@@ -344,6 +345,7 @@ export function buildMeshDistance(positions, indices, triStart = 0, triCount = i
 
   const q = new Float64Array(4);
   const stack = new Int32Array(64);
+  const closest = new Float64Array(3);   // the surface point nearest the last query, for callers that push along it
 
   function distance(x, y, z) {
     let bestSq = Infinity;
@@ -394,6 +396,7 @@ export function buildMeshDistance(positions, indices, triStart = 0, triCount = i
     const dx = x - bx, dy = y - by, dz = z - bz;
     const side = dx * n[0] + dy * n[1] + dz * n[2];
     const dist = Math.sqrt(bestSq);
+    closest[0] = bx; closest[1] = by; closest[2] = bz;
     return side >= 0 ? dist : -dist;
   }
 
@@ -410,5 +413,5 @@ export function buildMeshDistance(positions, indices, triStart = 0, triCount = i
     }
   }
 
-  return { distance, bbox: { min, max }, normal };
+  return { distance, closest, bbox: { min, max }, normal };
 }
