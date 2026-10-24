@@ -236,6 +236,7 @@ select.ghost:hover { opacity: 0.55; }
 /* reference planes, beside Section: Front / Top / Right toggles and the + menu (offset, on a face, yours) */
 .planes { position: relative; }
 .hud button.ghost, .hud button.ghost.on { border-color: transparent; }   /* every HUD toggle (Section, Edges/Wire/Color/Ortho/Render, Planes, +): no border off or on. The shared on rule draws an ink border round the ink fill, a pixel bigger all round than the text's box, so a button turning on read as a size change */
+header button.ghost, header button.ghost.on { border-color: transparent; }   /* the header toolbar too (Open/Save/New, Explode/Joint, Rotate, the markup tools, Share): same reason */
 .planes-menu { position: absolute; left: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; gap: 6px; min-width: 280px; background: var(--paper); border: var(--bw-hair) solid var(--ink); padding: 8px; font-size: var(--fs-12); white-space: nowrap; }
 .planes-menu[hidden] { display: none; }
 .planes-menu .row { display: flex; align-items: center; gap: 6px; }
