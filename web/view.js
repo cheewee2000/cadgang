@@ -1514,7 +1514,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   const slide = ui.scroll === 'trackpad' ? !e.altKey : e.altKey;   // trackpad scheme: a plain drag slides the part along its axis, ⌥ places it freely; mouse: the other way round
   if (e.button === 0 && !e.shiftKey && !measure.on && onCap(e)) drag.sect = sectionScreenAxis(e);
   else if (e.button === 0 && !e.shiftKey && !measure.on && e.pointerType !== 'touch') {
-    const hit = partAt(e);
+    const hit = model.children.length > 1 ? partAt(e) : null;   // one body is not an assembly: a drag on it orbits, but it still hovers, selects and takes the right-click menu
     const j = ui.mode === 'joint' && hit && (e.metaKey ? jointOf(hit.body) : drivingJoint(hit.body));   // ⌘: the part's own joint offset, even on a rigid one
     if (ui.mode === 'joint') { if (j && !(e.metaKey && j.type === 'ball')) drag.joint = { j, offset: e.metaKey, m: bodyOfKey(j.body), hit: hit.body, local: hit.point.clone().applyMatrix4(hit.body.matrixWorld.clone().invert()) }; }   // joint mode: a jointed part turns or slides on its joint, anything else orbits
     else if (hit && slide) {
@@ -1682,7 +1682,6 @@ function onCap(e) {
 }
 // The body under the pointer (a hit on its cap counts, a clipped-away face does not), with the point.
 function partAt(e) {
-  if ($('#bodies').hidden) return null;   // one body is not an assembly
   const r = renderer.domElement.getBoundingClientRect();
   raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   const h = raycaster.intersectObjects(model.children, true).find((h) => h.object.isMesh && h.object.visible && h.object.parent.visible && (!section.axis || section.plane.distanceToPoint(h.point) > -1e-6));
