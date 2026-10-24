@@ -885,9 +885,7 @@ function bodyAt(e) {
     .filter((h) => !section.axis || section.plane.distanceToPoint(h.point) >= -1e-6);
   return (hits.find((h) => !h.object.userData.ghost) ?? hits[0])?.object ?? null;
 }
-const hexOf = (rgb) => `#${new THREE.Color().setRGB(...rgb, THREE.SRGBColorSpace).getHexString(THREE.SRGBColorSpace)}`;
 const rgbOf = (hex) => { const o = {}; new THREE.Color().setStyle(hex, THREE.SRGBColorSpace).getRGB(o, THREE.SRGBColorSpace); return [o.r, o.g, o.b].map((v) => +v.toFixed(3)); };
-const shownColor = (m) => m.userData.tint ?? m.userData.color ?? m.userData.groups?.[0]?.color ?? [0.73, 0.72, 0.7];
 /** The user's colour for these bodies (null: back to the file's). */
 function setTint(ms, rgb) {
   for (const m of ms) {

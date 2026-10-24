@@ -97,16 +97,8 @@ export function pack(m) {
  *                                       sweep) and wait up to ?wait= seconds (default 20) for its answer
  *   POST    /api/view/answer {id, ...}  the page's answer
  */
-/** The one file in a multipart/form-data body (what a shared-link upload sends; ponytail: one part, no streaming). */
-function multipartFile(buf, ctype) {
-  const b = Buffer.from('--' + /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(ctype).slice(1).find(Boolean));
-  const start = buf.indexOf('\r\n\r\n', buf.indexOf(b)) + 4;
-  return buf.subarray(start, buf.indexOf(Buffer.concat([Buffer.from('\r\n'), b]), start));
-}
-const SHARE_KEY_FILE = path.join(os.homedir(), '.cadgang', 'share_key');
 const VERCEL_TOKEN_FILE = path.join(os.homedir(), '.cadgang', 'vercel_token');
 const vercelToken = () => { try { return fsSync.readFileSync(VERCEL_TOKEN_FILE, 'utf8').trim(); } catch { return ''; } };
-const shareKey = () => { try { return fsSync.readFileSync(SHARE_KEY_FILE, 'utf8').trim(); } catch { return process.env.CADGANG_SHARE_KEY || ''; } };
 
 export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   const watch = fileWatcher(broadcast);
@@ -399,31 +391,6 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       const token = vercelToken();
       if (!token) throw Object.assign(new Error('Add a Vercel token first'), { status: 428 });
       res.json({ url: await deployShare(req.body, token) });
-    } catch (e) { next(e); }
-  });
-  // Older shared links: bundles stored on the VPS under an unguessable id (the app no longer uploads there).
-  r.post('/share/store', express.raw({ type: () => true, limit: '8mb' }), async (req, res, next) => {
-    try {
-      const key = shareKey(), got = String(req.headers.authorization || '').replace(/^Bearer /, '');
-      if (!key || got.length !== key.length || !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(key))) throw Object.assign(new Error('Bad share key'), { status: 401 });
-      const part = parseInt(req.query.part) || 0, of = parseInt(req.query.of) || 1;
-      const chunk = /multipart/i.test(req.headers['content-type'] || '') ? multipartFile(req.body, req.headers['content-type']) : req.body;
-      let id = String(req.query.id || '');
-      const tmp = () => `${sharePath(id)}.part`;
-      if (part === 0) {
-        id = crypto.randomBytes(12).toString('base64url');
-        await fs.mkdir(path.join(dataDir, 'shares'), { recursive: true });
-        await fs.writeFile(tmp(), chunk);
-      } else {
-        if (!/^[\w-]{16}$/.test(id) || !fsSync.existsSync(tmp())) throw Object.assign(new Error('No such upload'), { status: 404 });
-        await fs.appendFile(tmp(), chunk);
-      }
-      if (part === of - 1) {
-        const buf = await fs.readFile(tmp());
-        JSON.parse(buf.subarray(4, 4 + buf.readUInt32LE(0)).toString('utf8'));   // a bundle that does not parse is refused
-        await fs.rename(tmp(), sharePath(id));
-      }
-      res.json({ id });
     } catch (e) { next(e); }
   });
   r.get('/share/:id', (req, res) => {
