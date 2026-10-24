@@ -408,3 +408,15 @@ header #explode { width: 100px; }
 /* Planes in the feature tree: a folder at the top of the Bodies list; each row's tick shows it, a right-click edits it */
 .bodies .plane-row .plane-kind { margin-left: auto; padding-left: var(--sp-3); color: var(--ink-faint); font-size: 10px; white-space: nowrap; flex: none; }
 .bodies .plane-row input.plane-offset { width: 6em; }
+.scaleref-menu .scaleref-head { color: var(--ink-faint); font-size: 10px; letter-spacing: var(--ls-label); text-transform: uppercase; padding: 6px 6px 2px; }
+.scaleref-menu .scaleref-del { margin-left: var(--sp-2); color: var(--ink-faint); padding: 0 4px; }
+.scaleref-menu .scaleref-del:hover { color: var(--ink); }
+.scaleref-menu .scaleref-add { padding: 4px 0 0; border-top: var(--bw-hair) solid var(--rule); margin-top: 4px; }
+.scaleref-menu .scaleref-add form { display: flex; flex-direction: column; gap: 4px; }
+.scaleref-menu .scaleref-add input { font: inherit; font-size: var(--fs-12); padding: 2px 4px; border: var(--bw-hair) solid var(--rule); background: var(--paper); color: var(--ink); box-sizing: border-box; }
+.scaleref-menu .scaleref-dims { display: flex; align-items: center; gap: 4px; font-size: var(--fs-12); }
+/* each entry on one line, name and size: the menu is as wide as its longest, up to the window less a gutter */
+.scaleref-menu { width: max-content; max-width: calc(100vw - 32px); }
+.scaleref-menu button { white-space: nowrap; }
+.scaleref-menu .scaleref-size { margin-left: auto; }
+.scaleref-menu button { gap: var(--sp-2); padding-left: 6px; padding-right: 6px; }   /* a narrower menu */

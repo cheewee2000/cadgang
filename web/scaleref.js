@@ -3,6 +3,9 @@
  * a sheet of looseleaf, a basketball. Each is made here at its real size in mm, sitting on the grid
  * beside the model on its left. Never part of the model: no pick, measure, weight or explode.
  *
+ * Or a printer's build volume round the model: a see-through box of the printable width × depth ×
+ * height, standing on the grid and centred on the model, its outline red when the model does not fit.
+ *
  * The button above Fit turns it on and off; its ▾ picks which. Kept in this browser.
  */
 const KEY = 'cadgang.scaleref';
@@ -15,6 +18,17 @@ export const REFS = {
   paper: { label: 'Looseleaf paper', size: '8½ × 11 in' },
   basketball: { label: 'Basketball', size: '239 mm across' },
 };
+// Printable width × depth × height, mm, from the makers' spec pages. The H2D's is what both nozzles
+// reach (one nozzle alone: 325 × 320 × 325). Printers of your own are added from the menu and kept here.
+export const VOLUMES = {
+  a1mini: { label: 'Bambu Lab A1 mini', vol: [180, 180, 180] },
+  bambu256: { label: 'Bambu Lab X1C, P1S…', tip: 'Bambu Lab A1, P1S, P1P, P2S, X1C and X1E: all 256 × 256 × 256 mm', vol: [256, 256, 256] },
+  h2s: { label: 'Bambu Lab H2S', vol: [340, 320, 340] },
+  h2d: { label: 'Bambu Lab H2D', tip: 'Bambu Lab H2D: 300 × 320 × 325 mm is what both nozzles reach (one nozzle alone: 325 × 320 × 325 mm)', vol: [300, 320, 325] },
+  prusaxl: { label: 'Prusa XL', vol: [360, 360, 360] },
+};
+const sized = (v) => ({ ...v, size: `${v.vol.join(' × ')} mm` });
+for (const k of Object.keys(VOLUMES)) VOLUMES[k] = sized(VOLUMES[k]);
 const IN = 25.4;
 
 function canvasTexture(THREE, w, h, draw) {
@@ -151,12 +165,40 @@ function basketball(THREE) {
 }
 
 const MAKERS = { quarter, tennis: tennisBall, paper: looseleaf, basketball };
+
+/** A printer's build volume as a see-through box with its edges and its name at the top front corner; red when `size` does not fit. */
+function buildVolume(THREE, { label, vol }, size) {
+  const [W, D, H] = vol;
+  const fits = size.z <= H + 1e-6 && ((size.x <= W + 1e-6 && size.y <= D + 1e-6) || (size.x <= D + 1e-6 && size.y <= W + 1e-6));   // turned a quarter on the plate counts
+  const color = fits ? 0x1d6bff : 0xd0524c;
+  const g = new THREE.Group();
+  const geo = new THREE.BoxGeometry(W, D, H); geo.translate(0, 0, H / 2);
+  const box = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.05, depthWrite: false, side: THREE.DoubleSide }));
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.8 }));
+  box.renderOrder = edges.renderOrder = 4;
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(W, D), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.08, depthWrite: false, side: THREE.DoubleSide }));
+  plate.position.z = 0.05;   // the build plate, a shade darker
+  const c = document.createElement('canvas'), ctx = c.getContext('2d'), px = 40, text = `${label} · ${vol.join(' × ')} mm${fits ? '' : ' · does not fit'}`;
+  ctx.font = `${px}px "Space Mono", monospace`; c.width = Math.ceil(ctx.measureText(text).width + 16); c.height = px + 16;
+  ctx.font = `${px}px "Space Mono", monospace`; ctx.fillStyle = fits ? '#1d4fc4' : '#c0392b'; ctx.textBaseline = 'middle'; ctx.fillText(text, 8, c.height / 2);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true }));
+  const th = Math.max(W, D) * 0.035; tag.scale.set(th * c.width / c.height, th, 1);
+  tag.position.set(-W / 2 + (th * c.width / c.height) / 2, -D / 2, H + th * 0.8);   // over the top front left edge
+  g.add(plate, box, edges, tag);
+  return { obj: g, fits };
+}
 const ICON = '<svg viewBox="0 0 24 16" width="22" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 15h22"/><circle cx="3.2" cy="12.5" r="2"/><rect x="7" y="7.5" width="6" height="7"/><circle cx="19.3" cy="10" r="4.3"/></svg>';
 
 export function createScaleRef({ THREE, scene, getBox, onChange = () => {} }) {
   let state = { on: false, which: 'quarter' };
   try { state = { ...state, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch {}
-  if (!REFS[state.which]) state.which = 'quarter';
+  // printers of your own: { id, label, vol: [w, d, h] }, chosen as 'mine:<id>'
+  if (!Array.isArray(state.mine)) state.mine = [];
+  const mine = (k) => (k?.startsWith('mine:') ? state.mine.find((p) => `mine:${p.id}` === k) : null);
+  const volumeOf = (k) => VOLUMES[k] ?? (mine(k) && sized(mine(k)));
+  if (!REFS[state.which] && !volumeOf(state.which)) state.which = 'quarter';
+  const entry = (k) => REFS[k] ?? volumeOf(k);
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} };
 
   const group = new THREE.Group();
@@ -167,9 +209,18 @@ export function createScaleRef({ THREE, scene, getBox, onChange = () => {} }) {
     group.clear();
     const box = getBox();
     if (!state.on || !box) { onChange(); return; }
+    const size = box.getSize(new THREE.Vector3());
+    const vol = volumeOf(state.which);
+    if (vol) {   // a build volume: round the model, on the grid, red when it does not fit
+      const v = buildVolume(THREE, vol, size);
+      v.obj.position.set((box.min.x + box.max.x) / 2, (box.min.y + box.max.y) / 2, box.min.z);
+      v.obj.traverse((o) => { o.raycast = () => {}; });
+      group.add(v.obj);
+      onChange(v.fits ? '' : `${vol.label}: the model (${[size.x, size.y, size.z].map((n) => n.toFixed(0)).join(' × ')} mm) does not fit`);
+      return;
+    }
     const ref = (made[state.which] ??= MAKERS[state.which](THREE));
     ref.obj.traverse((o) => { o.raycast = () => {}; });   // never a pick, measure or snap target
-    const size = box.getSize(new THREE.Vector3());
     const gap = Math.max(8, 0.08 * Math.max(size.x, size.y, ref.w));
     // a sheet of paper lies centred under the model, as it would on a desk; the rest stand beside it on
     // its left, centred front to back, on the grid
@@ -187,13 +238,52 @@ export function createScaleRef({ THREE, scene, getBox, onChange = () => {} }) {
   wrap.append(btn, more, menu);
   function paint() {
     btn.classList.toggle('on', state.on);
-    btn.title = `${state.on ? 'Hide' : 'Show'} a ${REFS[state.which].label.toLowerCase()} beside the model, for scale (${REFS[state.which].size})`;
-    menu.replaceChildren(...Object.entries(REFS).map(([k, r]) => {
-      const b = Object.assign(document.createElement('button'), { className: 'ghost' + (k === state.which ? ' on' : '') });
+    const e = entry(state.which);
+    btn.title = volumeOf(state.which) ? `${state.on ? 'Hide' : 'Show'} the ${e.label} build volume round the model (${e.size})` : `${state.on ? 'Hide' : 'Show'} a ${e.label.toLowerCase()} beside the model, for scale (${e.size})`;
+    const item = ([k, r]) => {
+      const b = Object.assign(document.createElement('button'), { className: 'ghost' + (k === state.which ? ' on' : ''), title: r.tip ?? `${r.label}: ${r.size}` });
       b.append(r.label, Object.assign(document.createElement('span'), { className: 'scaleref-size', textContent: r.size }));
       b.addEventListener('click', () => { state.which = k; state.on = true; menu.hidden = true; save(); paint(); place(); });
       return b;
-    }));
+    };
+    const head = (t) => Object.assign(document.createElement('div'), { className: 'scaleref-head', textContent: t });
+    const own = state.mine.map((p) => {
+      const b = item([`mine:${p.id}`, sized(p)]);
+      const del = Object.assign(document.createElement('span'), { className: 'scaleref-del', textContent: '×', title: `Remove ${p.label}` });
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        state.mine = state.mine.filter((x) => x !== p);
+        if (state.which === `mine:${p.id}`) { state.which = 'bambu256'; state.on = false; }
+        save(); paint(); place(); menu.hidden = false;
+      });
+      b.append(del);
+      return b;
+    });
+    menu.replaceChildren(head('For scale'), ...Object.entries(REFS).map(item), head('Printer build volume'), ...Object.entries(VOLUMES).map(item), ...own, addForm());
+  }
+  /** "Add a printer…": its name and its width × depth × height in mm, then Add. */
+  function addForm() {
+    const box = Object.assign(document.createElement('div'), { className: 'scaleref-add' });
+    const open = Object.assign(document.createElement('button'), { className: 'ghost', textContent: 'Add a printer…', title: 'A build volume of your own: its name and width × depth × height in mm' });
+    const form = Object.assign(document.createElement('form'), { hidden: true });
+    const field = (ph, type, w) => Object.assign(document.createElement('input'), { placeholder: ph, type, ...(type === 'number' && { min: '1', step: 'any' }), style: `width:${w}` });
+    const name = field('Printer name', 'text', '100%'), W = field('W', 'number', '4.5em'), D = field('D', 'number', '4.5em'), H = field('H', 'number', '4.5em');
+    const go = Object.assign(document.createElement('button'), { className: 'ghost', type: 'submit', textContent: 'Add' });
+    const row = Object.assign(document.createElement('div'), { className: 'scaleref-dims' });
+    row.append(W, '×', D, '×', H, 'mm', go);
+    form.append(name, row);
+    for (const el of [name, W, D, H]) el.addEventListener('keydown', (e) => e.stopPropagation());   // typing is not a hotkey
+    open.addEventListener('click', (e) => { e.stopPropagation(); open.hidden = true; form.hidden = false; name.focus(); });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const vol = [W, D, H].map((x) => parseFloat(x.value));
+      if (!name.value.trim() || vol.some((v) => !(v > 0))) return;
+      const p = { id: Math.random().toString(36).slice(2, 8), label: name.value.trim(), vol };
+      state.mine.push(p); state.which = `mine:${p.id}`; state.on = true;
+      menu.hidden = true; save(); paint(); place();
+    });
+    box.append(open, form);
+    return box;
   }
   btn.addEventListener('click', () => { state.on = !state.on; save(); paint(); place(); });
   more.addEventListener('click', (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; });
