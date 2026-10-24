@@ -377,7 +377,7 @@ function listBodies() {
   const panel = $('#bodies');
   highlightBody(null);
   panel.replaceChildren(bodiesHead());
-  panel.hidden = model.children.length < 2;
+  panel.hidden = !model.children.length;   // one body still lists it, and the Planes folder above it (hidden under 2 bodies until 2026-10-24)
   panel.classList.toggle('many', model.children.length > 500);   // rows off screen skip layout (style.css)
   // A body a later file repeats (the leg file opened over the bench that already holds the leg) would
   // draw twice in the same place and fight triangle by triangle: the same box to a micron → untick it.
@@ -763,7 +763,7 @@ function paintSelection() {
 function selectPlane(id) {
   if (selected.size) selectBodies([], 'set');
   planes.select(id);
-  if (id && triadOn && planes.list().find((p) => p.id === id)?.kind === 'base') say(`${planes.list().find((p) => p.id === id).name} stays through the centre: the triad moves an offset plane or one of your own`);
+  if (id && planes.list().find((p) => p.id === id)?.kind === 'base') say(`${planes.list().find((p) => p.id === id).name} stays through the centre: the triad moves an offset plane or one of your own`);
 }
 function selectBodies(list, mode = 'set') {
   if (list.length && planes.selected) planes.select(null);   // a part or a plane, not both
@@ -1564,7 +1564,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   if (th) {   // the triad: an arrow slides the selection along its axis, a ring turns it about the triad's centre
     const origin = triad.group.position.clone(), axis = th.axis.clone();
     const ref = new THREE.Vector3(axis.y, axis.z, axis.x);   // a direction square to the axis (x → y, y → z, z → x): where a ring's angle counts from
-    const from = th.kind === 'move' ? triad.along(e, origin, axis) : triad.angle(e, origin, axis, ref);
+    const from = th.kind === 'move' ? triad.along(e, origin, axis) : th.kind === 'plane' ? triad.on(e, origin, axis) : triad.angle(e, origin, axis, ref);
     if (from != null) {
       const bodies = sel().filter((m) => m.isMesh), plane = !bodies.length && planes.selected ? { id: planes.selected, start: planes.pose(planes.selected) } : null;   // no parts: the selected plane
       drag = { id: e.pointerId, x: e.clientX, y: e.clientY, downX: e.clientX, downY: e.clientY, triad: { kind: th.kind, key: th.key, axis, origin, ref, from, bodies, plane, starts: bodies.map((m) => placeMatrix(m)) } };
@@ -3015,7 +3015,7 @@ const planes = createPlanes({
   // the bodies where they are now (dragged, exploded): their own boxes, not their overlays
   getBox: () => { if (!bbox) return null; const b = new THREE.Box3(); for (const m of model.children) { m.updateMatrixWorld(); if (m.geometry.boundingBox) b.union(m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld)); } return b.isEmpty() ? bbox : b; },
   pickFace: (done) => { pickPlane = done; renderer.domElement.classList.add('picking'); say('click a face for the new plane · Esc cancels'); },
-  onChange: () => paintPlaneRows(),   // the feature tree's Planes follow
+  onChange: () => { paintPlaneRows(); commit(); },   // the feature tree's Planes follow; every change (a move, a rename, a delete) is a ⌘Z step
 });
 const planesRow = Object.assign(document.createElement('div'), { className: 'hud-row' });   // Planes and Add an image, one line under Section
 $('#sectAxis').after(planesRow);
@@ -3056,7 +3056,7 @@ function setTriad(on) {
 function updateTriad() {
   const ms = triadOn && !ui.flat ? sel().filter((m) => m.isMesh && m.visible) : [];
   if (!ms.length) {   // no parts: on the selected plane of your own (Front, Top and Right have no pose: they stay put)
-    const pose = triadOn && !ui.flat && planes.pose(planes.selected);
+    const pose = !ui.flat && planes.pose(planes.selected);   // a selected plane always takes the triad: there is nothing else to do with it
     if (!pose) { triad.place(null); return; }
     if (!drag?.triad) triad.place(pose.point);
     triad.frame(); return;
@@ -3069,6 +3069,17 @@ function updateTriad() {
   triad.frame();
 }
 function dragTriad(e, t) {
+  if (t.kind === 'plane') {   // a square: the selection slides in that plane, wherever the pointer takes it
+    const now = triad.on(e, t.origin, t.axis);
+    if (!now) return;
+    const d = now.clone().sub(t.from);
+    if (e.shiftKey && gridStep) d.set(...d.toArray().map((v) => Math.round(v / gridStep) * gridStep));
+    if (t.plane) planes.place(t.plane.id, { ...t.plane.start, point: t.plane.start.point.clone().add(d) });
+    else { const T = new THREE.Matrix4().makeTranslation(d.x, d.y, d.z); t.bodies.forEach((m, i) => setPlaceMatrix(m, T.clone().multiply(t.starts[i]))); applyExplode(); }
+    triad.group.position.copy(t.origin).add(d);
+    say(`moved ${fmtLen(d.length())} in ${t.key}`);
+    return;
+  }
   if (t.kind === 'move') {
     const now = triad.along(e, t.origin, t.axis);
     if (now == null) return;
@@ -3447,7 +3458,7 @@ function snap() {
   return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value, rot: rotArr(),
     bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), finishes: model.children.map((m) => m.userData.finish ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3), null, m.userData.exTo?.toArray().map((v) => +v.toFixed(4)) ?? null, placeArr(m)]),
-    markup: markup.items, dims: measure.dims, joints, names: namesOf() });
+    markup: markup.items, dims: measure.dims, joints, names: namesOf(), planes: planes.state });
 }
 function commit() {
   const s = snap();
@@ -3491,6 +3502,7 @@ function apply(s) {
   syncRows();
   if (JSON.stringify(markup.items) !== JSON.stringify(st.markup)) { markup.load(st.markup); markupChanged(st.markup); }
   if (JSON.stringify(measure.dims) !== JSON.stringify(st.dims ?? [])) measure.load(st.dims ?? []);
+  if (st.planes !== undefined && JSON.stringify(st.planes) !== JSON.stringify(planes.state)) { planes.restore(st.planes); paintPlaneRows(); }   // planes moved, added, renamed or deleted since
 }
 function undo() { if (history.i > 0) apply(history.list[--history.i]); }
 function redo() { if (history.i < history.list.length - 1) apply(history.list[++history.i]); }

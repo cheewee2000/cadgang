@@ -1,16 +1,22 @@
 /**
  * The move triad, as SolidWorks has it: on the selected parts, three arrows (x red, y green, z blue)
- * that slide them along that axis, and three rings that turn them about it. It keeps one size on
+ * that slide them along that axis, three rings that turn them about it, and three small squares, one in
+ * each pair of axes, that slide them in that plane. It keeps one size on
  * screen at any zoom and is drawn over the model. Turned on and off by its button (and Q); it shows
  * only while something is selected.
  *
  * It only draws and picks. What a drag means is the caller's: hit(e) names the handle under the
- * pointer, along(e, from) and angle(e, from) read a drag along an axis or round it.
+ * pointer; along(), on() and angle() read a drag along an axis, in a plane or round an axis.
  */
 const AXES = [
   { key: 'x', dir: [1, 0, 0], color: 0xd0524c },
   { key: 'y', dir: [0, 1, 0], color: 0x56a85a },
   { key: 'z', dir: [0, 0, 1], color: 0x2a35a8 },   // a deep blue: it must read on the selection's blue
+];
+const PLANES = [   // a square in each pair of axes, named for them, coloured like the axis it is square to
+  { key: 'xy', u: 'x', v: 'y', normal: [0, 0, 1], color: 0x2a35a8 },
+  { key: 'yz', u: 'y', v: 'z', normal: [1, 0, 0], color: 0xd0524c },
+  { key: 'zx', u: 'z', v: 'x', normal: [0, 1, 0], color: 0x56a85a },
 ];
 const HOVER = 0xffc400;
 
@@ -20,7 +26,7 @@ export function createTriad({ THREE, scene, getCamera, canvas }) {
   group.renderOrder = 20;
   group.visible = false;
   scene.add(group);
-  const handles = [];   // { mesh, kind: 'move' | 'turn', axis: Vector3, key, material, color }
+  const handles = [];   // { obj, pick, kind: 'move' | 'turn' | 'plane', axis: Vector3 (the plane's normal for 'plane'), key, material, color }
   const mat = (color) => new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false, transparent: true, opacity: 0.95 });
   const pickMat = new THREE.MeshBasicMaterial({ visible: false });
   for (const a of AXES) {
@@ -42,6 +48,18 @@ export function createTriad({ THREE, scene, getCamera, canvas }) {
     r.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);   // a torus lies in XY: its axis is z
     group.add(r);
     handles.push({ obj: r, pick: rgrab, kind: 'turn', axis: dir, key: a.key, material: rm, color: a.color });
+  }
+  for (const p of PLANES) {   // a small square a little out from the centre, inside the rings; its grab is a larger invisible one
+    const n = new THREE.Vector3(...p.normal), pm = mat(p.color); pm.side = THREE.DoubleSide; pm.opacity = 0.55;
+    const unit = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+    const u = new THREE.Vector3(...unit[p.u]), v = new THREE.Vector3(...unit[p.v]);
+    const sq = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.13), pm);
+    const grab = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.22), new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide }));
+    const g = new THREE.Group(); g.add(sq, grab);
+    g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, v, n));   // the square lies in u, v
+    g.position.copy(u).multiplyScalar(0.3).addScaledVector(v, 0.3);
+    group.add(g);
+    handles.push({ obj: g, pick: grab, kind: 'plane', axis: n, key: p.key, material: pm, color: p.color });
   }
   const centre = new THREE.Mesh(new THREE.SphereGeometry(0.05, 16, 12), mat(0x3a3a38));
   group.add(centre);
@@ -85,7 +103,9 @@ export function createTriad({ THREE, scene, getCamera, canvas }) {
       group.updateMatrixWorld(true);
       ray.ray.copy(aim(e));
       const hits = ray.intersectObjects(handles.map((h) => h.pick), false);
-      return hits.length ? handles.find((h) => h.pick === hits[0].object) : null;
+      // the squares draw over the arrows and rings, whose fat invisible grabs would otherwise take the pointer in front of them
+      const top = hits.find((x) => handles.find((h) => h.pick === x.object).kind === 'plane') ?? hits[0];
+      return top ? handles.find((h) => h.pick === top.object) : null;
     },
     hover(e) { paint(this.hit(e)); return hovered; },
     /** Along `axis` through `origin`: how far along it the pointer is (the closest point of the line to its ray). */
@@ -95,6 +115,8 @@ export function createTriad({ THREE, scene, getCamera, canvas }) {
       const den = 1 - b * b;
       return den < 1e-6 ? null : (b * ee - d) / den;
     },
+    /** In the plane through `origin` square to `normal`: where the pointer's ray meets it (world), or null edge-on. */
+    on(e, origin, normal) { return aim(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin), new THREE.Vector3()); },
     /** Round `axis` through `origin`: the pointer's angle in that plane (radians), or null edge-on. */
     angle(e, origin, axis, ref) {
       const r = aim(e), plane = new THREE.Plane().setFromNormalAndCoplanarPoint(axis, origin);

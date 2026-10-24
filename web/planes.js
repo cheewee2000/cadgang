@@ -168,7 +168,7 @@ export function createPlanes({ THREE, scene, getBox, getSubject, onChange = () =
     /** The plane whose square the ray hits first: { id, distance }, or null. */
     pick(raycaster) { const h = raycaster.intersectObjects(quads, false)[0]; return h ? { id: h.object.userData.planeId, distance: h.distance } : null; },
     get selected() { return selectedId; },
-    select(id) { selectedId = id ?? null; render(); onChange(); },
+    select(id) { selectedId = id ?? null; render(); onChange(); },   // (onChange repaints the tree; a selection is no document change, so commit() finds nothing new)
     /** Where one of your own planes is drawn, for the triad: { point, normal, up }, or null (Front, Top, Right stay through the centre). */
     pose(id) {
       const c = id && centres.get(id), p = c && state.custom.find((x) => x.id === id);
