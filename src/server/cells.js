@@ -582,7 +582,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
     try {
       await withShape(req, ({ report }) => {
         const flats = report.flatMap((e) => e.flats || []);
-        if (!flats.length) throw new GraphError('No sheet metal parts in this stack: build them with sm.part(...).make() to get flat patterns');
+        if (!flats.length) throw new GraphError('No flat patterns in this stack: sheet metal (sm.part(...).make()) and softgoods (soft.garment(...).make()) make them');
         const base = req.query.file || 'flat';
         const files = flats.map((f) => ({
           part: f.name, qty: f.qty, gauge: f.gauge, hardware: f.hardware ?? {}, flatMm: f.size.map((v) => Number(v.toFixed(2))),

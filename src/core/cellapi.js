@@ -18,6 +18,7 @@ import { Sketch } from './sketch.js';
 import * as checks from './checks.js';
 import { GraphError } from './errors.js';
 import { sheetMetalNamespace } from './sheetmetal.js';
+import { softNamespace } from './softgoods.js';
 
 /** The `brep` namespace: primitives, booleans, modifiers, measures. */
 const brep = Object.freeze({
@@ -204,6 +205,7 @@ export function cellApi({
     sk: sketchNamespace(params, sketch),
     assert: assertions(checked),
     sm: sheetMetalNamespace(checked, flats),
+    soft: softNamespace(checked, flats),
     topology,
     input,
     inputs: Object.freeze({ ...inputs }),
