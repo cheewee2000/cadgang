@@ -544,19 +544,28 @@ function ellipseFor(circumference, ratio = 0.72) {
 }
 
 /**
- * A torso to drape on: lofted ellipses at hip (z 0), waist, chest and shoulder, closed over the top,
- * standing up z, front toward -y, centred on x. Circumferences in mm (defaults near a men's M).
+ * A mannequin to drape on: lofted torso (hip at z 0, centred on x, front toward +y), shoulders, neck, head and arms
+ * hanging at the sides with the forearms a little forward. Circumferences and lengths in mm (defaults near a men's M):
+ * torso is hip to shoulder, head chin to crown, arm shoulder to elbow. A compound of solids, not fused.
  */
-export function avatar({ chest = 1000, waist = 860, hip = 980, torso = 480 } = {}) {
+export function avatar({ chest = 1000, waist = 860, hip = 980, torso = 480, shoulders = 400, neck = 390, head = 230, arm = 300 } = {}) {
   const rc = brepKernel();
   return attempt('soft avatar', () => {
-    const sec = (c, z, ratio) => { const [a, b] = ellipseFor(c, ratio); return rc.drawEllipse(a, b).sketchOnPlane('XY', z); };
-    const [ca] = ellipseFor(chest);
-    const solid = sec(hip, 0, 0.72).loftWith([
-      sec(waist, torso * 0.35, 0.72), sec(chest, torso * 0.75, 0.72), sec(chest * 0.92, torso * 0.92, 0.5),
-      rc.drawEllipse(ca * 0.45, ca * 0.3).sketchOnPlane('XY', torso * 1.08),
-    ], { ruled: false });
-    return track(solid);
+    const ell = (a, b, z) => rc.drawEllipse(a, b).sketchOnPlane('XY', z);
+    const sec = (c, z, ratio = 0.72) => ell(...ellipseFor(c, ratio), z);
+    const sw = shoulders / 2, [na, nb] = ellipseFor(neck, 0.85), top = torso * 1.08, chin = top + 75;
+    const hd = (a, b, t) => ell(a * head, b * head, chin + t * head);
+    const parts = [
+      sec(hip, 0).loftWith([sec(waist, torso * 0.35), sec(chest, torso * 0.75), ell(sw, 100, torso), ell(na * 1.2, nb * 1.2, top)]),
+      ell(na * 1.2, nb * 1.2, top).loftWith([ell(na, nb, top + 40), ell(na, nb, chin)]),
+      ell(na, nb, chin).loftWith([hd(0.3, 0.36, 0.04), hd(0.34, 0.43, 0.3), hd(0.34, 0.43, 0.55), hd(0.3, 0.38, 0.8), hd(0.2, 0.26, 0.93), hd(0.07, 0.09, 1)]),
+    ];
+    for (const sx of [-1, 1]) {
+      const at = [sx * (sw - 10), 0, torso - 30], l = Math.hypot(0.12, 1), dir = [sx * 0.12 / l, 0, -1 / l];
+      const elbow = at.map((c, i) => c + dir[i] * arm);
+      parts.push(rc.makeSphere(62).translate(...at), rc.makeCylinder(47, arm, at, dir), rc.makeSphere(45).translate(...elbow), rc.makeCylinder(40, arm * 0.85, elbow, [sx * 0.05, 0.35, -1]));
+    }
+    return track(brepCompound(parts.map(track)));
   });
 }
 

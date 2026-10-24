@@ -54,14 +54,15 @@ test('two panels sewn along their facing edges close the gap between them and ha
   } finally { scope.dispose(); }
 });
 
-test('avatar: one solid torso the height asked for; seam and fabric errors name the problem', () => {
+test('avatar: torso, neck, head and two arms at the sizes asked for; seam and fabric errors name the problem', () => {
   const scope = beginBrepScope();
   try {
     const soft = softNamespace();
-    const body = soft.avatar({ torso: 480 });
-    assert.equal(ops.bodies(body), 1);
+    const body = soft.avatar({ torso: 480, head: 230, shoulders: 400 });
+    assert.equal(ops.bodies(body), 11, 'torso, neck, head, and shoulder, upper arm, elbow, forearm each side');
     const bb = ops.bbox(body);
-    assert.ok(Math.abs(bb.size[2] - 480 * 1.08) < 1, `height ${bb.size[2].toFixed(1)}`);
+    assert.ok(Math.abs(bb.max[2] - (480 * 1.08 + 75 + 230)) < 1, `crown at ${bb.max[2].toFixed(1)}: shoulder line, 75 of neck, 230 of head`);
+    assert.ok(bb.size[0] > 400 && bb.size[0] < 600, `arms hang just outside the 400 shoulder line (${bb.size[0].toFixed(0)} wide)`);
     assert.ok(bb.size[0] > bb.size[1], 'wider than deep');
     assert.throws(() => fabric('denim'), /no fabric 'denim'/);
     assert.throws(() => soft.garment().piece('x', [[0, 0], [1, 0]]), /at least 3/);

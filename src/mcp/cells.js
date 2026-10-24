@@ -174,8 +174,10 @@ soft — softgoods the way CLO works a garment: pieces cut flat from fabric, sew
   the compound named per piece, and each piece's cutting pattern joins the DXF export (outline on STITCH, outline plus
   seam allowance on CUT). It settles to the rest shape; it is not an animation. mm throughout.
   soft.fabric('cordura-500d' | 'nylon-210d' | 'spacer-mesh' | 'eva-10mm' | {weight g/m², thickness, stretch, shear, bend 0..1, friction, maxStretch %})
-  soft.avatar({chest: 1000, waist: 860, hip: 980, torso: 480})  a torso solid to drape on: circumferences, standing up z,
-    hip at z 0, front toward -y, centred on x; translate it to where the wearer stands against the frame
+  soft.avatar({chest: 1000, waist: 860, hip: 980, torso: 480, shoulders: 400, neck: 390, head: 230, arm: 300})  a mannequin to
+    drape on (torso, neck, head, arms at the sides): circumferences and lengths, standing up z, hip at z 0, front toward +y,
+    centred on x; translate it to where the wearer stands against the frame. A strap over the shoulder passes between
+    the neck and the shoulder ball, about x = ±100 for 400 mm shoulders
   const g = soft.garment('harness') then
     g.piece(name, [[u, v], ...], fabric, {grid: 10, allowance: 10})  a closed outline in its own flat mm (u right, v up); grid
       is the solver's node spacing (finer is slower; 10 for straps, 15 to 20 for panels), allowance the seam allowance in the pattern
