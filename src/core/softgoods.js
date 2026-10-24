@@ -387,27 +387,52 @@ class Garment {
       throw new GraphError(`soft: '${this.name}' did not drape: ${wild.join(', ')} stretched past 100%. ` +
         'Start the pieces near where they end up (place or along), outside the body, with every pin within reach.');
     }
-    // the rim and the ghost nodes beyond it (everything outside the outline) are re-laid as a smooth continuation of the
-    // cloth, so the surface fit sees a full, calm grid: what the rim did against the body never reaches the face
+    // the rim and the ghost nodes beyond it (everything outside the outline) are re-laid as the cloth's straight continuation:
+    // each is extrapolated along its row and column from the two nearest cloth nodes, so the surface fit sees a full, calm
+    // grid. (Averaging them from their neighbours instead folded the rim back onto the cloth's edge, and the fit rang.)
     for (const gr of grids) {
       const { nu, nv, at, cover } = gr;
-      for (let pass = 0; pass < 60; pass++) {
-        for (let i = 0; i < nu; i++) {
-          for (let j = 0; j < nv; j++) {
-            if (cover[i * nv + j] === 1) continue;
-            let sx = 0, sy = 0, sz = 0, c = 0;
-            for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-              const ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= nu || jj >= nv) continue;
-              const m = at(ii, jj); sx += x[m * 3]; sy += x[m * 3 + 1]; sz += x[m * 3 + 2]; c++;
-            }
-            const n = at(i, j); x[n * 3] = sx / c; x[n * 3 + 1] = sy / c; x[n * 3 + 2] = sz / c;
-          }
+      const fixed = new Uint8Array(nu * nv);
+      for (let k = 0; k < nu * nv; k++) fixed[k] = cover[k] === 1 ? 1 : 0;
+      const laid = new Float64Array(x);
+      const walk = (i, j, di, dj) => {
+        let a = null, b = null;
+        for (let k = 1, ii = i + di, jj = j + dj; ii >= 0 && jj >= 0 && ii < nu && jj < nv; k++, ii += di, jj += dj) {
+          if (!fixed[ii * nv + jj]) continue;
+          if (!a) a = [k, at(ii, jj)]; else { b = [k, at(ii, jj)]; break; }
+        }
+        if (!a) return null;
+        const [ka, na] = a, nb = b ? b[1] : null, kb = b ? b[0] : null;
+        return [0, 1, 2].map((c) => nb === null ? x[na * 3 + c] : x[na * 3 + c] + ((x[na * 3 + c] - x[nb * 3 + c]) * ka) / (kb - ka));
+      };
+      let left = 0;
+      for (let i = 0; i < nu; i++) {
+        for (let j = 0; j < nv; j++) {
+          if (fixed[i * nv + j]) continue;
+          const cands = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([di, dj]) => walk(i, j, di, dj)).filter(Boolean);
+          const n = at(i, j);
+          if (!cands.length) { left++; continue; }
+          for (let c = 0; c < 3; c++) laid[n * 3 + c] = cands.reduce((acc, q) => acc + q[c], 0) / cands.length;
+        }
+      }
+      x.set(laid);
+      // corners no row or column of cloth reaches: average what is around them
+      for (let pass = 0; pass < 40 && left; pass++) {
+        for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+          if (fixed[i * nv + j]) continue;
+          const cands = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([di, dj]) => walk(i, j, di, dj)).filter(Boolean);
+          if (cands.length) continue;
+          let sx = 0, sy = 0, sz = 0, c = 0;
+          for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= nu || jj >= nv) continue; const m = at(ii, jj); sx += x[m * 3]; sy += x[m * 3 + 1]; sz += x[m * 3 + 2]; c++; }
+          const n = at(i, j); x[n * 3] = sx / c; x[n * 3 + 1] = sy / c; x[n * 3 + 2] = sz / c;
         }
       }
     }
 
     const tSim = Date.now();
-    const faces = grids.map((gr) => fitFace(gr, x));
+    const fitted = grids.map((gr) => fitFace(gr, x));
+    for (let k = 0; k < grids.length; k++) checked.push({ label: `${grids[k].piece.name} surface`, ok: fitted[k].fitErr <= grids[k].piece.grid / 2, value: Number(fitted[k].fitErr.toFixed(2)), limit: grids[k].piece.grid / 2, unit: 'mm', detail: { note: 'how far the smooth surface sits from the simulated cloth at its worst' } });
+    const faces = fitted.map((f) => f.face);
     const shape = setParts(brepCompound(faces), this.pieces.map((p) => ({ name: p.name, count: 1 })));
     for (const p of this.pieces) {
       const seen = flats.find((f) => f.name === p.name);
@@ -418,22 +443,38 @@ class Garment {
   }
 }
 
-/** Fit one B-spline surface through a piece's relaxed grid and trim it to the outline. */
+/** One B-spline surface over a piece's relaxed grid, trimmed to the outline; also how far it sits from the grid. */
 function fitFace(gr, x) {
   const rc = brepKernel(), OC = rc.getOC(), { nu, nv, at, piece } = gr;
   return attempt('soft fit', () => {
     const arr = new OC.TColgp_Array2OfPnt_2(1, nu, 1, nv);
     for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) { const n = at(i, j), p = new OC.gp_Pnt_3(x[n * 3], x[n * 3 + 1], x[n * 3 + 2]); arr.SetValue(i + 1, j + 1, p); p.delete(); }
-    const fit = new OC.GeomAPI_PointsToBSplineSurface_2(arr, 3, 3, OC.GeomAbs_Shape.GeomAbs_C2, 0.1);
-    arr.delete();
-    if (!fit.IsDone()) throw new GraphError(`soft: could not fit a surface through '${piece.name}'`);
-    const surf = fit.Surface().get(), hs = new OC.Handle_Geom_Surface_2(surf);
-    // the outline's 3D points (bilinear on the relaxed grid) back to surface parameters, by Newton on D1
+    // The relaxed grid IS the control net of a clamped uniform cubic B-spline surface: it stays inside the net's hull, so it
+    // cannot ring however creased the cloth, and its parameters are known (node i sits near its Greville abscissa). The
+    // surface smooths the net by less than a grid step; a crease is rounded over about one cell, which is what cloth does.
+    // (Fitting a surface THROUGH the nodes instead, at 0.1 mm, rang metres wide on a strap folded over a shoulder.)
+    const knots = (count) => {
+      const m = count - 2, K = new OC.TColStd_Array1OfReal_2(1, m), M = new OC.TColStd_Array1OfInteger_2(1, m), full = [];
+      for (let k = 1; k <= m; k++) { const t = (k - 1) / (m - 1); K.SetValue(k, t); M.SetValue(k, k === 1 || k === m ? 4 : 1); for (let r = 0; r < (k === 1 || k === m ? 4 : 1); r++) full.push(t); }
+      const greville = Array.from({ length: count }, (_, i) => (full[i + 1] + full[i + 2] + full[i + 3]) / 3);
+      return { K, M, greville };
+    };
+    const ku = knots(nu), kv = knots(nv);
+    const surf = new OC.Geom_BSplineSurface_1(arr, ku.K, kv.K, ku.M, kv.M, 3, 3, false, false);
+    arr.delete(); ku.K.delete(); ku.M.delete(); kv.K.delete(); kv.M.delete();
+    const hs = new OC.Handle_Geom_Surface_2(surf);
+    const h = Math.min(gr.hu, gr.hv);
     const P = new OC.gp_Pnt_1(), dU = new OC.gp_Vec_1(), dV = new OC.gp_Vec_1();
+    const node = (i, j) => { const n = at(i, j); return [x[n * 3], x[n * 3 + 1], x[n * 3 + 2]]; };
+    const U = ku.greville, V = kv.greville;
+    let fitErr = 0;
+    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) { if (gr.cover[i * nv + j] !== 1) continue; const q = surf.Value(U[i], V[j]), m = node(i, j); fitErr = Math.max(fitErr, Math.hypot(q.X() - m[0], q.Y() - m[1], q.Z() - m[2])); }
+    const lerp = (par, f) => { const i = Math.max(0, Math.min(par.length - 2, Math.floor(f))), t = f - i; return par[i] + (par[i + 1] - par[i]) * Math.max(0, Math.min(1, t)); };
     const invert = ([fu, fv]) => {
       const a = gr.attach([fu, fv]);
       const tgt = [0, 1, 2].map((k) => a.nodes.reduce((s, n, c) => s + a.w[c] * x[n * 3 + k], 0));
-      let u = Math.max(0, Math.min(1, (fu - gr.u0) / (gr.hu * (nu - 1)))), v = Math.max(0, Math.min(1, (fv - gr.v0) / (gr.hv * (nv - 1))));
+      const u0 = lerp(U, (fu - gr.u0) / gr.hu), v0 = lerp(V, (fv - gr.v0) / gr.hv);
+      let u = u0, v = v0;
       for (let it = 0; it < 20; it++) {
         surf.D1(u, v, P, dU, dV);
         const r = [tgt[0] - P.X(), tgt[1] - P.Y(), tgt[2] - P.Z()], su = [dU.X(), dU.Y(), dU.Z()], sv = [dV.X(), dV.Y(), dV.Z()];
@@ -442,37 +483,40 @@ function fitFace(gr, x) {
         u = Math.max(0, Math.min(1, u + du)); v = Math.max(0, Math.min(1, v + dv));
         if (Math.abs(du) < 1e-10 && Math.abs(dv) < 1e-10) break;
       }
+      // Newton that ran off (a fold, a clamp at the border) is worse than the chord estimate: keep the estimate then
+      const q = surf.Value(u, v);
+      if (Math.hypot(tgt[0] - q.X(), tgt[1] - q.Y(), tgt[2] - q.Z()) > h / 4) return [u0, v0];
       return [u, v];
     };
+    // Trim: each outline segment becomes an edge whose 3D curve is fitted through points SAMPLED ON THE SURFACE every
+    // grid step; the wire healer then derives the parameter curves by projection. (Building the edges from 2D curves and
+    // asking the kernel to rebuild the 3D ones from them gave curves 1e16 mm long on a strap over a shoulder.)
     const mw = new OC.BRepBuilderAPI_MakeWire_1();
-    const h = Math.min(gr.hu, gr.hv);
     const n = piece.outline.length;
     for (let k = 0; k < n; k++) {
-      // one edge per outline segment, a 2D B-spline through the segment sampled every grid step, so a straight cut follows the cloth
       const a = piece.outline[k], b = piece.outline[(k + 1) % n], len = Math.hypot(b[0] - a[0], b[1] - a[1]), m = Math.max(2, Math.ceil(len / h) + 1);
-      const pts = Array.from({ length: m }, (_, s) => invert([a[0] + ((b[0] - a[0]) * s) / (m - 1), a[1] + ((b[1] - a[1]) * s) / (m - 1)]));
-      let c2d;
-      if (m === 2) {
-        const seg = new OC.GCE2d_MakeSegment_1(new OC.gp_Pnt2d_3(...pts[0]), new OC.gp_Pnt2d_3(...pts[1]));
-        c2d = new OC.Handle_Geom2d_Curve_2(seg.Value().get());
-      } else {
-        const a1 = new OC.TColgp_Array1OfPnt2d_2(1, m);
-        pts.forEach((p, s) => a1.SetValue(s + 1, new OC.gp_Pnt2d_3(p[0], p[1])));
-        // 1e-3 of the parameter range (under half a mm here): a tighter fit packs the pcurve with knots and BuildCurves3d then
-        // approximates it into a 3D curve metres long (seen: a 400 mm strap edge rebuilt 2.5 m long, swinging 550 mm off the cloth)
-        const ap = new OC.Geom2dAPI_PointsToBSpline_2(a1, 3, 3, OC.GeomAbs_Shape.GeomAbs_C2, 1e-3);
-        c2d = new OC.Handle_Geom2d_Curve_2(ap.Curve().get());
-        a1.delete();
+      const a1 = new OC.TColgp_Array1OfPnt_2(1, m);
+      for (let s = 0; s < m; s++) {
+        const [u, v] = invert([a[0] + ((b[0] - a[0]) * s) / (m - 1), a[1] + ((b[1] - a[1]) * s) / (m - 1)]);
+        const q = surf.Value(u, v); a1.SetValue(s + 1, q);
       }
-      mw.Add_1(new OC.BRepBuilderAPI_MakeEdge_30(c2d, hs).Edge());
+      // the samples are the CONTROL points of a clamped cubic (a curve fitted through them rang metres wide on a fold)
+      const deg = Math.min(3, m - 1), kn = m - deg + 1, K = new OC.TColStd_Array1OfReal_2(1, kn), M = new OC.TColStd_Array1OfInteger_2(1, kn);
+      for (let k = 1; k <= kn; k++) { K.SetValue(k, (k - 1) / (kn - 1)); M.SetValue(k, k === 1 || k === kn ? deg + 1 : 1); }
+      const curve = new OC.Geom_BSplineCurve_1(a1, K, M, deg, false);
+      mw.Add_1(new OC.BRepBuilderAPI_MakeEdge_24(new OC.Handle_Geom_Curve_2(curve)).Edge());
+      a1.delete(); K.delete(); M.delete();
     }
-    const mf = new OC.BRepBuilderAPI_MakeFace_21(hs, mw.Wire(), true);
+    const wire = mw.Wire();
+    const rough = new OC.BRepBuilderAPI_MakeFace_21(hs, wire, true);
+    if (!rough.IsDone()) throw new GraphError(`soft: could not trim '${piece.name}' to its outline`);
+    const sfw = new OC.ShapeFix_Wire_2(wire, rough.Face(), 0.02);
+    sfw.Perform();   // adds the pcurves (projection onto the surface), orders and closes the wire
+    const mf = new OC.BRepBuilderAPI_MakeFace_21(hs, sfw.Wire(), true);
     if (!mf.IsDone()) throw new GraphError(`soft: could not trim '${piece.name}' to its outline`);
     const face = mf.Face();
-    // 3D curves for the trim edges from their pcurves: 0.01 mm is plenty for cloth (the default 1e-5 with no segment cap runs for minutes)
-    OC.BRepLib.BuildCurves3d_1(face, 0.02, OC.GeomAbs_Shape.GeomAbs_C1, 14, 200);
-    P.delete(); dU.delete(); dV.delete(); fit.delete();
-    return track(rc.cast(face));
+    P.delete(); dU.delete(); dV.delete();
+    return { face: track(rc.cast(face)), fitErr };
   });
 }
 
