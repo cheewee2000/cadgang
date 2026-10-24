@@ -416,3 +416,4 @@ header #explode { width: 100px; }
 .scaleref-menu { width: max-content; max-width: calc(100vw - 32px); }
 .scaleref-menu button { white-space: nowrap; }
 .scaleref-menu .scaleref-size { margin-left: auto; }
+.scaleref-menu button { gap: var(--sp-2); padding-left: 6px; padding-right: 6px; }   /* a narrower menu */

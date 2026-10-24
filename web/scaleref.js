@@ -22,9 +22,9 @@ export const REFS = {
 // reach (one nozzle alone: 325 × 320 × 325). Printers of your own are added from the menu and kept here.
 export const VOLUMES = {
   a1mini: { label: 'Bambu Lab A1 mini', vol: [180, 180, 180] },
-  bambu256: { label: 'Bambu Lab A1 / P1S / P1P / P2S / X1C / X1E', vol: [256, 256, 256] },
+  bambu256: { label: 'Bambu Lab X1C, P1S…', tip: 'Bambu Lab A1, P1S, P1P, P2S, X1C and X1E: all 256 × 256 × 256 mm', vol: [256, 256, 256] },
   h2s: { label: 'Bambu Lab H2S', vol: [340, 320, 340] },
-  h2d: { label: 'Bambu Lab H2D (both nozzles)', vol: [300, 320, 325] },
+  h2d: { label: 'Bambu Lab H2D', tip: 'Bambu Lab H2D: 300 × 320 × 325 mm is what both nozzles reach (one nozzle alone: 325 × 320 × 325 mm)', vol: [300, 320, 325] },
   prusaxl: { label: 'Prusa XL', vol: [360, 360, 360] },
 };
 const sized = (v) => ({ ...v, size: `${v.vol.join(' × ')} mm` });
@@ -241,7 +241,7 @@ export function createScaleRef({ THREE, scene, getBox, onChange = () => {} }) {
     const e = entry(state.which);
     btn.title = volumeOf(state.which) ? `${state.on ? 'Hide' : 'Show'} the ${e.label} build volume round the model (${e.size})` : `${state.on ? 'Hide' : 'Show'} a ${e.label.toLowerCase()} beside the model, for scale (${e.size})`;
     const item = ([k, r]) => {
-      const b = Object.assign(document.createElement('button'), { className: 'ghost' + (k === state.which ? ' on' : '') });
+      const b = Object.assign(document.createElement('button'), { className: 'ghost' + (k === state.which ? ' on' : ''), title: r.tip ?? `${r.label}: ${r.size}` });
       b.append(r.label, Object.assign(document.createElement('span'), { className: 'scaleref-size', textContent: r.size }));
       b.addEventListener('click', () => { state.which = k; state.on = true; menu.hidden = true; save(); paint(); place(); });
       return b;
