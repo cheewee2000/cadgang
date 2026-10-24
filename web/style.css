@@ -412,3 +412,7 @@ header #explode { width: 100px; }
 .scaleref-menu .scaleref-add form { display: flex; flex-direction: column; gap: 4px; }
 .scaleref-menu .scaleref-add input { font: inherit; font-size: var(--fs-12); padding: 2px 4px; border: var(--bw-hair) solid var(--rule); background: var(--paper); color: var(--ink); box-sizing: border-box; }
 .scaleref-menu .scaleref-dims { display: flex; align-items: center; gap: 4px; font-size: var(--fs-12); }
+/* each entry on one line, name and size: the menu is as wide as its longest, up to the window less a gutter */
+.scaleref-menu { width: max-content; max-width: calc(100vw - 32px); }
+.scaleref-menu button { white-space: nowrap; }
+.scaleref-menu .scaleref-size { margin-left: auto; }
