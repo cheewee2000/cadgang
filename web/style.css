@@ -406,3 +406,9 @@ header #explode { width: 100px; }
 .hud-br > .viewcube { align-self: stretch; }
 .hud-br > .viewcube > canvas { margin: 0 auto; }
 .scaleref-menu .scaleref-head { color: var(--ink-faint); font-size: 10px; letter-spacing: var(--ls-label); text-transform: uppercase; padding: 6px 6px 2px; }
+.scaleref-menu .scaleref-del { margin-left: var(--sp-2); color: var(--ink-faint); padding: 0 4px; }
+.scaleref-menu .scaleref-del:hover { color: var(--ink); }
+.scaleref-menu .scaleref-add { padding: 4px 0 0; border-top: var(--bw-hair) solid var(--rule); margin-top: 4px; }
+.scaleref-menu .scaleref-add form { display: flex; flex-direction: column; gap: 4px; }
+.scaleref-menu .scaleref-add input { font: inherit; font-size: var(--fs-12); padding: 2px 4px; border: var(--bw-hair) solid var(--rule); background: var(--paper); color: var(--ink); box-sizing: border-box; }
+.scaleref-menu .scaleref-dims { display: flex; align-items: center; gap: 4px; font-size: var(--fs-12); }

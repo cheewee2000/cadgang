@@ -18,19 +18,17 @@ export const REFS = {
   paper: { label: 'Looseleaf paper', size: '8½ × 11 in' },
   basketball: { label: 'Basketball', size: '239 mm across' },
 };
-// Printable width × depth × height, mm, from the makers' spec pages. The H2D's is one nozzle's (both
-// nozzles reach 300 × 320 × 325).
+// Printable width × depth × height, mm, from the makers' spec pages. The H2D's is what both nozzles
+// reach (one nozzle alone: 325 × 320 × 325). Printers of your own are added from the menu and kept here.
 export const VOLUMES = {
   a1mini: { label: 'Bambu Lab A1 mini', vol: [180, 180, 180] },
-  a1: { label: 'Bambu Lab A1', vol: [256, 256, 256] },
-  p1s: { label: 'Bambu Lab P1S / P1P', vol: [256, 256, 256] },
-  p2s: { label: 'Bambu Lab P2S', vol: [256, 256, 256] },
-  x1c: { label: 'Bambu Lab X1C / X1E', vol: [256, 256, 256] },
+  bambu256: { label: 'Bambu Lab A1 / P1S / P1P / P2S / X1C / X1E', vol: [256, 256, 256] },
   h2s: { label: 'Bambu Lab H2S', vol: [340, 320, 340] },
-  h2d: { label: 'Bambu Lab H2D', vol: [325, 320, 325] },
+  h2d: { label: 'Bambu Lab H2D (both nozzles)', vol: [300, 320, 325] },
   prusaxl: { label: 'Prusa XL', vol: [360, 360, 360] },
 };
-for (const v of Object.values(VOLUMES)) v.size = `${v.vol.join(' × ')} mm`;
+const sized = (v) => ({ ...v, size: `${v.vol.join(' × ')} mm` });
+for (const k of Object.keys(VOLUMES)) VOLUMES[k] = sized(VOLUMES[k]);
 const IN = 25.4;
 
 function canvasTexture(THREE, w, h, draw) {
@@ -195,8 +193,12 @@ const ICON = '<svg viewBox="0 0 24 16" width="22" height="15" fill="none" stroke
 export function createScaleRef({ THREE, scene, getBox, onChange = () => {} }) {
   let state = { on: false, which: 'quarter' };
   try { state = { ...state, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch {}
-  if (!REFS[state.which] && !VOLUMES[state.which]) state.which = 'quarter';
-  const entry = (k) => REFS[k] ?? VOLUMES[k];
+  // printers of your own: { id, label, vol: [w, d, h] }, chosen as 'mine:<id>'
+  if (!Array.isArray(state.mine)) state.mine = [];
+  const mine = (k) => (k?.startsWith('mine:') ? state.mine.find((p) => `mine:${p.id}` === k) : null);
+  const volumeOf = (k) => VOLUMES[k] ?? (mine(k) && sized(mine(k)));
+  if (!REFS[state.which] && !volumeOf(state.which)) state.which = 'quarter';
+  const entry = (k) => REFS[k] ?? volumeOf(k);
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} };
 
   const group = new THREE.Group();
@@ -208,12 +210,13 @@ export function createScaleRef({ THREE, scene, getBox, onChange = () => {} }) {
     const box = getBox();
     if (!state.on || !box) { onChange(); return; }
     const size = box.getSize(new THREE.Vector3());
-    if (VOLUMES[state.which]) {   // a build volume: round the model, on the grid, red when it does not fit
-      const v = buildVolume(THREE, VOLUMES[state.which], size);
+    const vol = volumeOf(state.which);
+    if (vol) {   // a build volume: round the model, on the grid, red when it does not fit
+      const v = buildVolume(THREE, vol, size);
       v.obj.position.set((box.min.x + box.max.x) / 2, (box.min.y + box.max.y) / 2, box.min.z);
       v.obj.traverse((o) => { o.raycast = () => {}; });
       group.add(v.obj);
-      onChange(v.fits ? '' : `${VOLUMES[state.which].label}: the model (${[size.x, size.y, size.z].map((n) => n.toFixed(0)).join(' × ')} mm) does not fit`);
+      onChange(v.fits ? '' : `${vol.label}: the model (${[size.x, size.y, size.z].map((n) => n.toFixed(0)).join(' × ')} mm) does not fit`);
       return;
     }
     const ref = (made[state.which] ??= MAKERS[state.which](THREE));
@@ -236,7 +239,7 @@ export function createScaleRef({ THREE, scene, getBox, onChange = () => {} }) {
   function paint() {
     btn.classList.toggle('on', state.on);
     const e = entry(state.which);
-    btn.title = VOLUMES[state.which] ? `${state.on ? 'Hide' : 'Show'} the ${e.label} build volume round the model (${e.size})` : `${state.on ? 'Hide' : 'Show'} a ${e.label.toLowerCase()} beside the model, for scale (${e.size})`;
+    btn.title = volumeOf(state.which) ? `${state.on ? 'Hide' : 'Show'} the ${e.label} build volume round the model (${e.size})` : `${state.on ? 'Hide' : 'Show'} a ${e.label.toLowerCase()} beside the model, for scale (${e.size})`;
     const item = ([k, r]) => {
       const b = Object.assign(document.createElement('button'), { className: 'ghost' + (k === state.which ? ' on' : '') });
       b.append(r.label, Object.assign(document.createElement('span'), { className: 'scaleref-size', textContent: r.size }));
@@ -244,7 +247,43 @@ export function createScaleRef({ THREE, scene, getBox, onChange = () => {} }) {
       return b;
     };
     const head = (t) => Object.assign(document.createElement('div'), { className: 'scaleref-head', textContent: t });
-    menu.replaceChildren(head('For scale'), ...Object.entries(REFS).map(item), head('Printer build volume'), ...Object.entries(VOLUMES).map(item));
+    const own = state.mine.map((p) => {
+      const b = item([`mine:${p.id}`, sized(p)]);
+      const del = Object.assign(document.createElement('span'), { className: 'scaleref-del', textContent: '×', title: `Remove ${p.label}` });
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        state.mine = state.mine.filter((x) => x !== p);
+        if (state.which === `mine:${p.id}`) { state.which = 'bambu256'; state.on = false; }
+        save(); paint(); place(); menu.hidden = false;
+      });
+      b.append(del);
+      return b;
+    });
+    menu.replaceChildren(head('For scale'), ...Object.entries(REFS).map(item), head('Printer build volume'), ...Object.entries(VOLUMES).map(item), ...own, addForm());
+  }
+  /** "Add a printer…": its name and its width × depth × height in mm, then Add. */
+  function addForm() {
+    const box = Object.assign(document.createElement('div'), { className: 'scaleref-add' });
+    const open = Object.assign(document.createElement('button'), { className: 'ghost', textContent: 'Add a printer…', title: 'A build volume of your own: its name and width × depth × height in mm' });
+    const form = Object.assign(document.createElement('form'), { hidden: true });
+    const field = (ph, type, w) => Object.assign(document.createElement('input'), { placeholder: ph, type, ...(type === 'number' && { min: '1', step: 'any' }), style: `width:${w}` });
+    const name = field('Printer name', 'text', '100%'), W = field('W', 'number', '4.5em'), D = field('D', 'number', '4.5em'), H = field('H', 'number', '4.5em');
+    const go = Object.assign(document.createElement('button'), { className: 'ghost', type: 'submit', textContent: 'Add' });
+    const row = Object.assign(document.createElement('div'), { className: 'scaleref-dims' });
+    row.append(W, '×', D, '×', H, 'mm', go);
+    form.append(name, row);
+    for (const el of [name, W, D, H]) el.addEventListener('keydown', (e) => e.stopPropagation());   // typing is not a hotkey
+    open.addEventListener('click', (e) => { e.stopPropagation(); open.hidden = true; form.hidden = false; name.focus(); });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const vol = [W, D, H].map((x) => parseFloat(x.value));
+      if (!name.value.trim() || vol.some((v) => !(v > 0))) return;
+      const p = { id: Math.random().toString(36).slice(2, 8), label: name.value.trim(), vol };
+      state.mine.push(p); state.which = `mine:${p.id}`; state.on = true;
+      menu.hidden = true; save(); paint(); place();
+    });
+    box.append(open, form);
+    return box;
   }
   btn.addEventListener('click', () => { state.on = !state.on; save(); paint(); place(); });
   more.addEventListener('click', (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; });
