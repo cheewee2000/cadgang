@@ -252,7 +252,7 @@ select.ghost:hover { opacity: 0.55; }
 .bodies-grip:hover, .bodies-grip:active { background: var(--rule); }
 .hud-tl:has(.bodies.min) > .bodies-grip, .hud-tl:has(.bodies[hidden]) > .bodies-grip { display: none; }
 .bodies label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.bodies label > .body-name, .bodies label.group-row > span:not(.fold-gap):not(.mat-tag) { flex: 0 1 auto; min-width: 2.5em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }   /* one line: a long name ends in …, its tip has it whole */
+.bodies label > .body-name, .bodies label > .plane-name, .bodies label.group-row > span:not(.fold-gap):not(.mat-tag) { flex: 0 1 auto; min-width: 2.5em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }   /* one line: a long name ends in …, its tip has it whole */
 .bodies label { align-items: center; }
 .bodies .mat-tag select.fin-word { font: inherit; font-size: 10px; color: var(--ink-faint); border: 0; background: none; padding: 0; height: auto; cursor: pointer; appearance: none; -webkit-appearance: none; text-decoration: underline dotted; text-underline-offset: 2px; }
 .bodies .mat-tag button.swatch-pick { width: 11px; height: 11px; min-width: 0; padding: 0; border: var(--bw-hair) solid var(--rule); cursor: pointer; flex: none; }

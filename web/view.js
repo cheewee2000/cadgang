@@ -330,9 +330,10 @@ function paintPlaneRows() {
     const row = Object.assign(document.createElement('label'), { className: 'plane-row' });
     const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: p.on });
     cb.addEventListener('change', () => planes.set(p.id, { on: cb.checked }));
-    const nm = Object.assign(document.createElement('span'), { className: 'body-name', textContent: p.name, title: `${p.name}\nRight-click: show, hide${p.kind === 'base' ? '' : ', rename, edit, delete'}` });
-    const kind = Object.assign(document.createElement('span'), { className: 'plane-kind', textContent: p.kind === 'base' ? 'through the centre' : p.kind === 'offset' ? (p.name.startsWith(`${p.base} `) ? '' : `${p.base} ${p.offset >= 0 ? '+' : '−'}${fmtLen(Math.abs(p.offset))}`) : 'on a face' });   // an offset plane's own name already says it
-    nm.addEventListener('click', (e) => e.preventDefault());   // a click on the name is not a tick
+    row.classList.toggle('sel', p.id === planes.selected);
+    const nm = Object.assign(document.createElement('span'), { className: 'plane-name', textContent: p.name, title: `${p.name}\nClick: select it${p.kind === 'base' ? '' : ' (the triad moves it)'} · Right-click: show, hide${p.kind === 'base' ? '' : ', rename, edit, delete'}` });
+    const kind = Object.assign(document.createElement('span'), { className: 'plane-kind', textContent: p.kind === 'base' ? 'through the centre' : p.kind === 'offset' ? (p.name.startsWith(`${p.base} `) ? '' : `${p.base} ${p.offset >= 0 ? '+' : '−'}${fmtLen(Math.abs(p.offset))}`) : p.kind === 'placed' ? 'placed by hand' : 'on a face' });   // an offset plane's own name already says it
+    nm.addEventListener('click', (e) => { e.preventDefault(); selectPlane(p.id === planes.selected ? null : p.id); });   // a click on the name selects, not ticks
     if (p.kind !== 'base') nm.addEventListener('dblclick', (e) => { e.preventDefault(); editPlane(row, p, 'name'); });
     row.addEventListener('contextmenu', (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -359,7 +360,7 @@ function editPlane(row, p, what) {
   const input = Object.assign(document.createElement('input'), what === 'name'
     ? { type: 'text', value: p.name, className: 'body-rename' }
     : { type: 'number', step: 'any', value: String(p.offset), className: 'body-rename plane-offset', title: 'Offset in mm from the model\'s centre (negative: the other way)' });
-  const target = row.querySelector(what === 'name' ? '.body-name' : '.plane-kind');
+  const target = row.querySelector(what === 'name' ? '.plane-name' : '.plane-kind');
   let done = false;
   const finish = (ok) => {
     if (done) return; done = true;
@@ -758,7 +759,14 @@ function paintSelection() {
   paintWeight();
 }
 /** mode: 'set' replaces the selection, 'add' joins it, 'toggle' flips each one. */
+/** Select a plane (null: none), as a part is selected: parts drop out, the tree row and the square light up, the triad moves it (Q). */
+function selectPlane(id) {
+  if (selected.size) selectBodies([], 'set');
+  planes.select(id);
+  if (id && triadOn && planes.list().find((p) => p.id === id)?.kind === 'base') say(`${planes.list().find((p) => p.id === id).name} stays through the centre: the triad moves an offset plane or one of your own`);
+}
 function selectBodies(list, mode = 'set') {
+  if (list.length && planes.selected) planes.select(null);   // a part or a plane, not both
   if (mode === 'set') selected.clear();
   for (const m of list) { if (mode === 'toggle' && selected.has(m)) selected.delete(m); else selected.add(m); }
   paintSelection();
@@ -1558,8 +1566,8 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
     const ref = new THREE.Vector3(axis.y, axis.z, axis.x);   // a direction square to the axis (x → y, y → z, z → x): where a ring's angle counts from
     const from = th.kind === 'move' ? triad.along(e, origin, axis) : triad.angle(e, origin, axis, ref);
     if (from != null) {
-      const bodies = sel().filter((m) => m.isMesh);
-      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, downX: e.clientX, downY: e.clientY, triad: { kind: th.kind, key: th.key, axis, origin, ref, from, bodies, starts: bodies.map((m) => placeMatrix(m)) } };
+      const bodies = sel().filter((m) => m.isMesh), plane = !bodies.length && planes.selected ? { id: planes.selected, start: planes.pose(planes.selected) } : null;   // no parts: the selected plane
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, downX: e.clientX, downY: e.clientY, triad: { kind: th.kind, key: th.key, axis, origin, ref, from, bodies, plane, starts: bodies.map((m) => placeMatrix(m)) } };
       renderer.domElement.setPointerCapture(e.pointerId);
       return;
     }
@@ -1712,10 +1720,15 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     else selectBodies(bodiesInWindow(drag.downX, drag.downY, e.clientX, e.clientY, e.clientX < drag.downX), 'add');
   } else if (drag?.click && still && !drag.sect && !measure.on && !$('[data-tool].on') && e.button === 0) {   // a plain click: that part alone, or nothing
     const p = partAt(e), add = e.metaKey || e.ctrlKey;   // ⌘-click toggles one, as in Finder
-    if (add) { if (p) selectBodies([p.body], 'toggle'); } else selectBodies(p ? [p.body] : [], 'set');
+    const pl = !add && planes.pick(raycaster);   // partAt aimed the ray; a plane's square nearer than the part takes the click
+    if (add) { if (p) selectBodies([p.body], 'toggle'); }
+    else if (pl && (!p || pl.distance < p.point.distanceTo(raycaster.ray.origin))) selectPlane(pl.id);
+    else if (p) selectBodies([p.body], 'set');
+    else { selectBodies([], 'set'); planes.select(null); }
   }
   if (e.button === 2 && still) showMenu(e.clientX, e.clientY, partAt(e)?.body);
   if (drag?.limit) renderJoints();   // the min/max fields take the dragged limit
+  if (drag?.triad?.plane) planes.keep();   // the plane stays where the triad left it
   if (drag?.sect || drag?.part || drag?.joint || drag?.limit || drag?.move || drag?.triad) commit();
   drag = null;
   touches.delete(e.pointerId);
@@ -3042,7 +3055,12 @@ function setTriad(on) {
 /** Each frame: on the selection's centre while it is on and something is selected. */
 function updateTriad() {
   const ms = triadOn && !ui.flat ? sel().filter((m) => m.isMesh && m.visible) : [];
-  if (!ms.length) { triad.place(null); return; }
+  if (!ms.length) {   // no parts: on the selected plane of your own (Front, Top and Right have no pose: they stay put)
+    const pose = triadOn && !ui.flat && planes.pose(planes.selected);
+    if (!pose) { triad.place(null); return; }
+    if (!drag?.triad) triad.place(pose.point);
+    triad.frame(); return;
+  }
   if (!drag?.triad) {   // held still while it is dragged: the drag reads against where it was pressed
     const b = new THREE.Box3();
     for (const m of ms) { m.updateMatrixWorld(); b.expandByObject(m); }
@@ -3056,8 +3074,8 @@ function dragTriad(e, t) {
     if (now == null) return;
     let d = now - t.from;
     if (e.shiftKey && gridStep) d = Math.round(d / gridStep) * gridStep;
-    const T = new THREE.Matrix4().makeTranslation(t.axis.x * d, t.axis.y * d, t.axis.z * d);
-    t.bodies.forEach((m, i) => setPlaceMatrix(m, T.clone().multiply(t.starts[i])));
+    if (t.plane) planes.place(t.plane.id, { ...t.plane.start, point: t.plane.start.point.clone().addScaledVector(t.axis, d) });   // the plane slides
+    else { const T = new THREE.Matrix4().makeTranslation(t.axis.x * d, t.axis.y * d, t.axis.z * d); t.bodies.forEach((m, i) => setPlaceMatrix(m, T.clone().multiply(t.starts[i]))); }
     triad.group.position.copy(t.origin).addScaledVector(t.axis, d);
     say(`moved ${fmtLen(d)} along ${t.key}`);
   } else {
@@ -3069,14 +3087,15 @@ function dragTriad(e, t) {
     let turn = t.total;
     if (e.shiftKey) turn = Math.round(turn / (Math.PI / 12)) * (Math.PI / 12);
     const Rq = new THREE.Quaternion().setFromAxisAngle(t.axis, turn);
-    t.bodies.forEach((m, i) => {   // about the triad's centre, in the part's own (unexploded) frame
+    if (t.plane) planes.place(t.plane.id, { point: t.plane.start.point, normal: t.plane.start.normal.clone().applyQuaternion(Rq), up: t.plane.start.up?.clone().applyQuaternion(Rq) ?? null });   // the plane turns about its centre
+    else t.bodies.forEach((m, i) => {   // about the triad's centre, in the part's own (unexploded) frame
       const pr = t.origin.clone().sub(m.userData.exPos ?? new THREE.Vector3());
       const M = new THREE.Matrix4().makeTranslation(pr.x, pr.y, pr.z).multiply(new THREE.Matrix4().makeRotationFromQuaternion(Rq)).multiply(new THREE.Matrix4().makeTranslation(-pr.x, -pr.y, -pr.z));
       setPlaceMatrix(m, M.multiply(t.starts[i]));
     });
     say(`turned ${(turn * 180 / Math.PI).toFixed(1)}° about ${t.key}`);
   }
-  applyExplode();
+  if (!t.plane) applyExplode();
 }
 function resetPlacement() {
   const ms = sel().filter((m) => m.userData.place);
@@ -3359,7 +3378,7 @@ const CMDS = [
   { key: 'ArrowLeft', hold: true, label: 'Nudge explode in (hold to scrub)', run: () => scrubExplode(-1) },
   { key: 'h', label: 'Hide selected', run: hideSelected },
   { key: 'h', shift: true, label: 'Show all bodies', run: showAllBodies },
-  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (pickPlane) { pickPlane = null; renderer.domElement.classList.remove('picking'); say(''); return; } if (pickAxis) { endPickAxis(); return; } if (pickJoint) { endPickJoint(); return; } if (measure.on) { measure.cancel(); setMeasure(false); return; } const t = $('[data-tool].on')?.dataset.tool; if (t) { markup.setTool(t); return; } if (selected.size) { selectBodies([], 'set'); return; } setSectionAxis(''); setMeasure(false); } },
+  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (pickPlane) { pickPlane = null; renderer.domElement.classList.remove('picking'); say(''); return; } if (pickAxis) { endPickAxis(); return; } if (pickJoint) { endPickJoint(); return; } if (measure.on) { measure.cancel(); setMeasure(false); return; } const t = $('[data-tool].on')?.dataset.tool; if (t) { markup.setTool(t); return; } if (selected.size || planes.selected) { selectBodies([], 'set'); planes.select(null); return; } setSectionAxis(''); setMeasure(false); } },
   { sep: true },
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },

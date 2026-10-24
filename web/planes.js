@@ -43,15 +43,18 @@ export function createPlanes({ THREE, scene, getBox, getSubject, onChange = () =
     s.userData.aspect = c.width / c.height;
     return s;
   }
-  function planeMesh(name, point, n, up, box) {
+  function planeMesh(name, point, n, up, box, id, pinned = false) {   // pinned: the square sits on `point` itself (a plane placed by hand), not on the model's middle
+    const sel = id === selectedId, color = sel ? 0x1d6bff : COLOR;   // selected: the blue a selected part wears
     const size = box.getSize(new THREE.Vector3()), centre = box.getCenter(new THREE.Vector3());
     const half = Math.max(size.x, size.y, size.z) * 0.6 + 2;
     const u = upIn(n, up), r = u.clone().cross(n);
-    const at = centre.clone().addScaledVector(n, V3(point).sub(centre).dot(n));   // the model's middle, moved onto the plane
+    const at = pinned ? V3(point) : centre.clone().addScaledVector(n, V3(point).sub(centre).dot(n));   // the model's middle, moved onto the plane
+    centres.set(id, at.clone());
     const g = new THREE.Group();
-    const quad = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2), new THREE.MeshBasicMaterial({ color: COLOR, transparent: true, opacity: 0.1, depthWrite: false, side: THREE.DoubleSide }));
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: sel ? 0.25 : 0.1, depthWrite: false, side: THREE.DoubleSide }));
+    quad.userData.planeId = id;
     const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]].map(([a, b]) => new THREE.Vector3(a * half, b * half, 0));
-    const outline = new THREE.Line(new THREE.BufferGeometry().setFromPoints(corners), new THREE.LineBasicMaterial({ color: COLOR, transparent: true, opacity: 0.7 }));
+    const outline = new THREE.Line(new THREE.BufferGeometry().setFromPoints(corners), new THREE.LineBasicMaterial({ color, transparent: true, opacity: sel ? 1 : 0.7 }));
     const frame = new THREE.Group(); frame.add(quad, outline);
     frame.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(r, u, n));
     frame.position.copy(at);
@@ -64,21 +67,23 @@ export function createPlanes({ THREE, scene, getBox, getSubject, onChange = () =
     quads.push(quad);
     return g;
   }
-  const quads = [];   // the visible planes' squares: what hit() tests
+  const quads = [];   // the visible planes' squares: what hit() and pick() test
+  const centres = new Map();   // plane id -> where its square is drawn (the triad sits there)
+  let selectedId = null;   // the plane selected in the view or the tree, if any
   let lastCentre = '';
   function render() {
-    quads.length = 0;
+    quads.length = 0; centres.clear();
     for (const o of [...group.children]) { group.remove(o); o.traverse((x) => { x.geometry?.dispose(); x.material?.map?.dispose(); x.material?.dispose(); }); }
     const box = getBox();
     if (!box) return;
     const c = box.getCenter(new THREE.Vector3());
     lastCentre = c.toArray().map((v) => +v.toFixed(4)).join();
-    for (const [k, b] of Object.entries(BASE)) if (state.on[k]) group.add(planeMesh(b.name, c.toArray(), V3(b.normal), b.up, box));
+    for (const [k, b] of Object.entries(BASE)) if (state.on[k]) group.add(planeMesh(b.name, c.toArray(), V3(b.normal), b.up, box, k));
     for (const p of state.custom) {
       if (p.on === false) continue;
       const n = V3(p.normal).normalize();
       const at = p.base ? c.clone().addScaledVector(n, p.offset).toArray() : p.point;   // offset planes ride the centre too
-      group.add(planeMesh(p.name, at, n, p.up, box));
+      group.add(planeMesh(p.name, at, n, p.up, box, p.id, !!p.placed));
     }
   }
 
@@ -159,11 +164,46 @@ export function createPlanes({ THREE, scene, getBox, getSubject, onChange = () =
       return h ? { point: h.point, normal: h.face.normal.clone().transformDirection(h.object.matrixWorld).normalize(), distance: h.distance } : null;
     },
     get state() { return state; },
+    // ------------------------------------------------------------- selecting and moving, like a part
+    /** The plane whose square the ray hits first: { id, distance }, or null. */
+    pick(raycaster) { const h = raycaster.intersectObjects(quads, false)[0]; return h ? { id: h.object.userData.planeId, distance: h.distance } : null; },
+    get selected() { return selectedId; },
+    select(id) { selectedId = id ?? null; render(); onChange(); },
+    /** Where one of your own planes is drawn, for the triad: { point, normal, up }, or null (Front, Top, Right stay through the centre). */
+    pose(id) {
+      const c = id && centres.get(id), p = c && state.custom.find((x) => x.id === id);
+      return p ? { point: c.clone(), normal: V3(p.normal).normalize(), up: p.up ? V3(p.up) : null } : null;
+    },
+    /**
+     * Put one of your own planes at `point` facing `normal` (world). An offset plane slid along its own normal is
+     * still one, that far out (and keeps an automatic name in step); turned or slid any other way it becomes a plane
+     * of its own, placed by hand: its square then stays where it was put instead of riding the model's middle.
+     * Drawn at once; `keep` saves it (the triad drags with keep off, then keeps on release).
+     */
+    place(id, { point, normal, up }, keep = false) {
+      const p = state.custom.find((x) => x.id === id), box = getBox();
+      if (!p || !box) return;
+      const n = normal.clone().normalize(), bn = p.base && V3(BASE[p.base].normal);
+      const slide = point.clone().sub(centres.get(id) ?? point), alongNormal = slide.clone().addScaledVector(n, -slide.dot(n)).lengthSq() < 1e-9;
+      if (bn && alongNormal && Math.abs(n.dot(bn)) > 1 - 1e-6) {
+        const auto = p.name === autoName(p);
+        p.offset = +point.clone().sub(box.getCenter(new THREE.Vector3())).dot(bn).toFixed(2);
+        if (auto) p.name = autoName(p);
+      } else {
+        if (p.base && p.name === autoName(p)) p.name = `Plane ${state.custom.indexOf(p) + 1}`;   // 'Front +12 mm' no longer says where it is
+        delete p.base; delete p.offset; p.placed = true;
+        p.point = point.toArray().map((v) => +v.toFixed(4)); p.normal = n.toArray().map((v) => +v.toFixed(6));
+        if (up) p.up = up.clone().normalize().toArray().map((v) => +v.toFixed(6));
+      }
+      render();   // ponytail: rebuilds every plane's mesh per drag frame; move just this one's group if a model has dozens
+      if (keep) { save(); paint(); }
+    },
+    keep() { save(); paint(); },
     /** Every plane, for the feature tree: Front, Top, Right, then your own. kind: 'base' | 'offset' | 'face'. */
     list() {
       return [
         ...Object.entries(BASE).map(([k, b]) => ({ id: k, name: b.name, on: !!state.on[k], kind: 'base' })),
-        ...state.custom.map((p) => ({ id: p.id, name: p.name, on: p.on !== false, kind: p.base ? 'offset' : 'face', base: p.base && BASE[p.base].name, offset: p.offset })),
+        ...state.custom.map((p) => ({ id: p.id, name: p.name, on: p.on !== false, kind: p.base ? 'offset' : p.placed ? 'placed' : 'face', base: p.base && BASE[p.base].name, offset: p.offset })),
       ];
     },
     /** Change one plane: { on, name, offset, flip: true }. Front, Top and Right only show and hide. */
