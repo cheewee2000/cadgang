@@ -3625,7 +3625,7 @@ document.addEventListener('pointerover', (e) => {
   tip.textContent = el.dataset.tip; tip.hidden = false;
   const r = el.getBoundingClientRect();
   tip.style.left = `${Math.max(8, Math.min(r.left, innerWidth - tip.offsetWidth - 8))}px`;
-  tip.style.top = `${r.bottom + 6}px`;
+  tip.style.top = `${r.bottom + 6 + tip.offsetHeight > innerHeight ? r.top - 6 - tip.offsetHeight : r.bottom + 6}px`;   // above the element when there is no room under it (the footer's tips)
 });
 document.addEventListener('pointerout', (e) => { if (!e.relatedTarget?.closest?.('[data-tip],[title]')) tip.hidden = true; });
 document.addEventListener('pointerdown', () => { tip.hidden = true; });
