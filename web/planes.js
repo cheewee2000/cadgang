@@ -88,10 +88,11 @@ export function createPlanes({ THREE, scene, getBox, getSubject, onChange = () =
     state.custom.push({ id: Math.random().toString(36).slice(2, 9), name: name || `Plane ${n}`, point: point.map((v) => +v.toFixed(4)), normal: normal.map((v) => +v.toFixed(6)), ...(up && { up }), on: true });
     save(); render(); paint();
   }
+  const autoName = (p) => `${BASE[p.base].name} ${p.offset >= 0 ? '+' : '−'}${Math.abs(p.offset)} mm`;
   /** A plane parallel to Front, Top or Right, `d` mm along its normal from the model's centre. */
   function offset(base, d) {
     const b = BASE[base];
-    state.custom.push({ id: Math.random().toString(36).slice(2, 9), name: `${b.name} ${d >= 0 ? '+' : '−'}${Math.abs(d)} mm`, base, offset: d, normal: b.normal, up: b.up, on: true });
+    state.custom.push({ id: Math.random().toString(36).slice(2, 9), name: autoName({ base, offset: d }), base, offset: d, normal: b.normal, up: b.up, on: true });
     save(); render(); paint();
   }
 
@@ -158,6 +159,30 @@ export function createPlanes({ THREE, scene, getBox, getSubject, onChange = () =
       return h ? { point: h.point, normal: h.face.normal.clone().transformDirection(h.object.matrixWorld).normalize(), distance: h.distance } : null;
     },
     get state() { return state; },
+    /** Every plane, for the feature tree: Front, Top, Right, then your own. kind: 'base' | 'offset' | 'face'. */
+    list() {
+      return [
+        ...Object.entries(BASE).map(([k, b]) => ({ id: k, name: b.name, on: !!state.on[k], kind: 'base' })),
+        ...state.custom.map((p) => ({ id: p.id, name: p.name, on: p.on !== false, kind: p.base ? 'offset' : 'face', base: p.base && BASE[p.base].name, offset: p.offset })),
+      ];
+    },
+    /** Change one plane: { on, name, offset, flip: true }. Front, Top and Right only show and hide. */
+    set(id, { on, name, offset, flip } = {}) {
+      if (BASE[id]) { if (on != null) state.on[id] = !!on; }
+      else {
+        const p = state.custom.find((x) => x.id === id);
+        if (!p) return;
+        if (on != null) p.on = !!on;
+        if (name != null && String(name).trim()) p.name = String(name).trim();
+        const auto = p.base && p.name === autoName(p);   // a name it was given, not one typed: it follows the offset
+        if (offset != null && p.base && Number.isFinite(+offset)) p.offset = +offset;
+        if (flip && p.base) p.offset = -p.offset;   // the other side of its base plane
+        if (auto) p.name = autoName(p);
+        if (flip && !p.base) p.normal = p.normal.map((v) => -v);
+      }
+      save(); render(); paint();
+    },
+    remove(id) { state.custom = state.custom.filter((x) => x.id !== id); save(); render(); paint(); },
     restore(s) { state = JSON.parse(JSON.stringify(s)); try { localStorage.setItem(key(), JSON.stringify(state)); } catch {} render(); paint(); },
   };
 }
