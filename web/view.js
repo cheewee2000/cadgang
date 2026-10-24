@@ -2955,7 +2955,7 @@ const hudBR = Object.assign(document.createElement('div'), { className: 'hud hud
 viewport.append(hudBR);
 hudBR.append(viewCube.el, $('#sectAxis'));
 // For scale: a quarter, a tennis ball, a sheet of looseleaf or a basketball beside the model, above Fit.
-const scaleRef = createScaleRef({ THREE, scene, getBox: () => bbox, onChange: () => rerender() });
+const scaleRef = createScaleRef({ THREE, scene, getBox: () => bbox, onChange: (note) => { rerender(); if (note) say(note, true); } });   // note: a build volume the model does not fit
 viewCube.side.prepend(scaleRef.el);
 
 // THE TRIAD (Q, or Triad on the selection bar): SolidWorks' move triad on the selected parts. An arrow

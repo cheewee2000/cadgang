@@ -405,3 +405,4 @@ header #explode { width: 100px; }
 /* the view cube centred in the space over the section bar left of its buttons (scale reference, Fit), which sit at the right */
 .hud-br > .viewcube { align-self: stretch; }
 .hud-br > .viewcube > canvas { margin: 0 auto; }
+.scaleref-menu .scaleref-head { color: var(--ink-faint); font-size: 10px; letter-spacing: var(--ls-label); text-transform: uppercase; padding: 6px 6px 2px; }
