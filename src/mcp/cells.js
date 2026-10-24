@@ -87,7 +87,7 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     distance(a, b) closest approach; length(shape, edgeQuery) total edge length
   importStep(file, {body}) — an exact solid from a STEP file in the project folder (path relative to it): body i in file
     order, or every body as one compound. Parsed once per file; then edit it like anything built here (pushPull, split, subtract).
-  NOT available (kernel build lacks the binding): delete/replace face, non-uniform scale, surface tools, sheet metal, text.
+  NOT available (kernel build lacks the binding): delete/replace face, non-uniform scale, surface tools, text.
 
 q — q.faces(shape) / q.edges(shape), then chain filters. A revolved line reads as cylindrical/conical and a shelled
   cylinder's inner wall as cylindrical, whatever OCCT calls the surface underneath.
@@ -168,6 +168,31 @@ sm — sheet metal bent from one flat sheet, built to a shop's gauge table so th
   Where two flanges meet at a corner they close to the shop's gap (.015 in) with a round relief; a flange that stops
   mid edge gets a round ended relief slot; free outline corners are rounded by 'round'. A part made twice under one
   name counts as qty 2 in the export; the export lists each part's hardware by SKU. 90° bends only.
+
+soft — softgoods the way CLO works a garment: pieces cut flat from fabric, sewn edge to edge, pinned to hardware and
+  draped onto a body under gravity; each relaxed piece comes back as an exact B-spline face trimmed to its outline,
+  the compound named per piece, and each piece's cutting pattern joins the DXF export (outline on STITCH, outline plus
+  seam allowance on CUT). It settles to the rest shape; it is not an animation. mm throughout.
+  soft.fabric('cordura-500d' | 'nylon-210d' | 'spacer-mesh' | 'eva-10mm' | {weight g/m², thickness, stretch, shear, bend 0..1, friction, maxStretch %})
+  soft.avatar({chest: 1000, waist: 860, hip: 980, torso: 480})  a torso solid to drape on: circumferences, standing up z,
+    hip at z 0, front toward -y, centred on x; translate it to where the wearer stands against the frame
+  const g = soft.garment('harness') then
+    g.piece(name, [[u, v], ...], fabric, {grid: 10, allowance: 10})  a closed outline in its own flat mm (u right, v up); grid
+      is the solver's node spacing (finer is slower; 10 for straps, 15 to 20 for panels), allowance the seam allowance in the pattern
+      .place(origin, u, v)  where the flat piece starts in 3D before it drapes: its (0, 0) at origin, u and v along those directions
+      .pin([u, v], [x, y, z])  tack a pattern point to a world point (a bar tack, a rivet, a strap end on its frame anchor);
+        pins hold the piece inextensible from there, so a strap between two pins hangs as it would
+      .edge(i, j = i + 1)  the outline from point i to point j, for seams
+    g.seam(a.edge(1), b.edge(3), {flip: false, ease: 0.03})  sew two edges start to start (flip runs the second backwards);
+      their lengths must match within ease, recorded like assert.*
+    g.make({body, gravity: [0, 0, -1], g: 9810, steps, dt, iterations, clearance: 0.5})  -> the garment as faces; body is the
+      shape it must not pass through (the frame unioned with the avatar, or null to hang free). Records, like assert.* but
+      without failing the cell: each seam's length match and the gap it left, each piece's worst stretch against its fabric's
+      maxStretch (the solver itself leaves 1 to 4%, so read anything under 5% as flat), how far it settled, and the deepest
+      pass into the body (ok under clearance). g.timing then has {total ms, steps, nodes}.
+  Pieces are faces, not solids: bbox, distance, area and STEP/STL export work; volume, mass and booleans do not. Start pieces
+  near where they end up (a shoulder strap laid over the shoulder, not on the floor) — the drape is a relaxation, so a
+  piece started far away or inside the body ends up somewhere strange. No self collision, darts or pleats yet.
 
 ASSERTION CELLS — add a cell with kind: 'assert' and its program states claims instead of building geometry.
   export default ({ assert, input }) => { assert.minWall(input, 1.5); assert.watertight(input); };
@@ -645,14 +670,14 @@ Args:
     'cadgang_cells_export',
     {
       title: 'Export the cell stack',
-      description: `Write the cell stack's solid to <filename>.step (or .stl) in the project folder and return the path. format 'dxf' instead writes the flat pattern of every sheet metal part the stack makes (sm.part(...).make()), one <filename>_<part>.dxf each: outline and holes on layer CUT, bend lines dashed on BEND, mm.
+      description: `Write the cell stack's solid to <filename>.step (or .stl) in the project folder and return the path. format 'dxf' instead writes the flat pattern of every sheet metal part (sm.part(...).make()) and every softgoods piece (soft.garment(...).make()) the stack makes, one <filename>_<part>.dxf each: outline and holes on layer CUT, bend lines dashed on BEND, stitch lines on STITCH, mm.
 
 STEP is the default: cells are exact B-rep the whole way through, so the file reopens in Fusion, SolidWorks or OnShape as editable geometry rather than a faceted import. STL is for printing: the same solid tessellated (fine, scaled to the part).
 
 Args:
   - filename: base name, no extension. Name the part: 'wink_battery_lid', not 'part', 'export' or 'model'
   - cell: cell to export (defaults to the output/last cell)
-  - format: 'step' (default) | 'stl' | 'dxf' (sheet metal flats)`,
+  - format: 'step' (default) | 'stl' | 'dxf' (sheet metal flats and softgoods patterns)`,
       inputSchema: {
         filename: z.string().regex(/^[\w.-]+$/, 'Use letters, digits, dot, dash, underscore only'),
         cell: z.string().optional(),
