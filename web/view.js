@@ -1989,14 +1989,29 @@ document.documentElement.dataset.mode = ui.mode;
 
 // The panel: one row per joint, a slider to drive it, its parent and limits; how to make and move them under.
 const JOINT_HINTS = 'J: new joint (moving part, then base). Drag: drive · ⌥ turn · ⌘ offset.\nTrack dots: min/max, double-click frees.';
+// The Joints panel folds to its head, and each joint to its title line (type, part, ×), as the Bodies
+// folders do. What is folded is this browser's, by joint id; a new joint comes in open.
+const JOINT_FOLDS = 'cadgang.jointFolds';
+const jointFolds = (() => { try { return JSON.parse(localStorage.getItem(JOINT_FOLDS)) ?? {}; } catch { return {}; } })();   // { panel: bool, [id]: bool }
+const saveJointFolds = () => { try { localStorage.setItem(JOINT_FOLDS, JSON.stringify(jointFolds)); } catch {} };
+const foldBtn = (folded, onclick) => Object.assign(document.createElement('button'), { className: 'ghost fold', textContent: folded ? '+' : '−', title: folded ? 'Unfold' : 'Fold', onclick });
 function renderJoints() {
   const el = $('#joints');
   el.hidden = !joints.length && ui.mode !== 'joint';   // the joints in either mode; in Joint mode the hints even before the first one
   const div = (className, textContent) => Object.assign(document.createElement('div'), { className, textContent });
   const head = div('joints-head', '');
-  head.append(Object.assign(document.createElement('span'), { textContent: 'Joints' }));
+  const panelFolded = !!jointFolds.panel;
+  el.classList.toggle('folded', panelFolded);
+  head.append(foldBtn(panelFolded, () => { jointFolds.panel = !panelFolded; saveJointFolds(); renderJoints(); }),
+    Object.assign(document.createElement('span'), { textContent: joints.length ? `Joints (${joints.length})` : 'Joints' }));
   if (joints.length) head.append(Object.assign(document.createElement('button'), { className: 'ghost', textContent: 'Check', title: 'Drive every joint through its range, find what its parts run into, and set its limits just short of the first crash each way', onclick: checkJoints }));
-  el.replaceChildren(head, ...joints.map(jointRow), div('joints-hint', JOINT_HINTS));
+  const rows = joints.map((j) => {
+    const row = jointRow(j), folded = !!jointFolds[j.id];
+    row.classList.toggle('folded', folded);
+    row.querySelector('.jl').prepend(foldBtn(folded, (e) => { e.preventDefault(); jointFolds[j.id] = !folded; saveJointFolds(); renderJoints(); }));
+    return row;
+  });
+  el.replaceChildren(head, ...rows, div('joints-hint', JOINT_HINTS));
 }
 /**
  * The Check button: each joint's crashes over its whole range (its old limits ignored, so a check can widen them
