@@ -158,9 +158,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       if (dir.length() > scale * 0.3) {
         objs.push(fatLine(pts, lineMat));
       }
-      const dot = new THREE.Mesh(new THREE.SphereGeometry(scale * 0.3, 12, 8), solidMat);   // a leader ends in a dot
-      dot.position.copy(pts[1]);
-      objs.push(dot);
+      objs.push(dotAt(pts[1], 0.012 * 0.3, solidMat));   // a leader ends in a dot
     } else if (item.kind === 'path' && pts.length > 1) {
       objs.push(fatLine(pts, lineMat));
     } else if (item.kind === 'text' && item.text) {
@@ -168,15 +166,21 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     } else if (item.kind === 'image' && item.src) {
       objs.push(picture(item, pts[0]));
     } else if (item.kind === 'note') {
-      const dot = new THREE.Mesh(new THREE.SphereGeometry(scale * 0.25, 12, 8), solidMat);
-      dot.position.copy(pts[0]);
-      objs.push(dot);
+      objs.push(dotAt(pts[0], 0.012 * 0.25, solidMat));
     }
     const holder = new THREE.Group();   // moved by the part's explode offset each frame
     holder.userData.item = item; follow(holder, item);
     for (const o of objs.filter(Boolean)) { o.renderOrder = Math.max(o.renderOrder, 5); o.userData.item = item; holder.add(o); }
     group.add(holder);
     return objs;
+  }
+
+  // A dot that stays the same size on screen: a unit sphere, scaled to k × the camera distance every frame
+  // (projectLabels), so a zoom after the mark was built does not leave it the old size.
+  function dotAt(p, k, mat) {
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), mat);
+    dot.position.copy(p); dot.userData.dotK = k; dot.scale.setScalar(orbit.dist * k);
+    return dot;
   }
 
   // TEXT: words laid on the face that was clicked, centred on the click, at the size they were made
@@ -648,7 +652,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   function projectLabels() {
     const r = canvas.getBoundingClientRect();
     for (const m of mats.values()) m.line.resolution.set(r.width, r.height);
-    for (const h of group.children) follow(h, h.userData.item);
+    for (const h of group.children) { follow(h, h.userData.item); for (const o of h.children) if (o.userData.dotK) o.scale.setScalar(orbit.dist * o.userData.dotK); }
     tags = layoutTags();
     for (const t of tags) { t.el.style.transform = `translate(${Math.round(t.x)}px, ${Math.round(t.y)}px)`; }
   }
