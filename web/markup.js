@@ -693,6 +693,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     const using = e.button === 0 ? toolFor(e) : null;
     if (!using) return;
     if (current) { e.stopImmediatePropagation(); e.preventDefault(); return; }   // a second finger mid-stroke: neither draws nor orbits
+    if (using !== 'erase' && tagAt(e)) { e.stopImmediatePropagation(); e.preventDefault(); return; }   // a press on a tag is a double-click's first half: no mark under it
     if (using === 'erase') {
       if (!markNear(e)) return;   // nothing to erase here: the view's
       e.stopImmediatePropagation(); e.preventDefault();
@@ -867,13 +868,18 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     rebuild();
   }, { capture: true });
 
-  // Double-click a tag (or the dot it hangs on) to edit its text in place. Only with no tool chosen: with
-  // one, a double-click is two marks.
-  canvas.addEventListener('dblclick', (e) => {
-    if (tool || noteInput) return;
+  /** The note or arrow tag under the pointer (its text box), topmost first, or null. */
+  function tagAt(e) {
     const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-    const hit = [...tags].reverse().find((t) => x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h)
-      || tags.find((t) => t.item.points.some((q) => { const s = toScreen(toWorld(t.item, q)); return Math.hypot(s.x - x, s.y - y) < 12; }));
+    return [...tags].reverse().find((t) => x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h) ?? null;
+  }
+  // Double-click a tag (or, with no tool chosen, the dot it hangs on) to edit its text in place. With a
+  // tool chosen the press on the tag made no mark (pointerdown yields there), so the double-click edits too.
+  canvas.addEventListener('dblclick', (e) => {
+    if (noteInput || tool === 'erase') return;
+    const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    const hit = tagAt(e)
+      || (!tool && tags.find((t) => t.item.points.some((q) => { const s = toScreen(toWorld(t.item, q)); return Math.hypot(s.x - x, s.y - y) < 12; })));
     if (!hit) return;
     e.preventDefault(); e.stopPropagation();
     startNote(toWorld(hit.item, hit.item.points[0]), e, hit.item);
