@@ -100,6 +100,18 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (up.length() < 1e-3) return null;
     return { normal: n.toArray().map((v) => +v.toFixed(4)), up: up.normalize().toArray().map((v) => +v.toFixed(4)) };
   }
+  // The pencil follows the part's surfaces, face to face. Off the part (past its edge, or over a reference
+  // plane or the ground behind it) it carries on in the plane of the face it last touched, so a stroke
+  // never jumps onto a plane — unless it started on one; then it draws on planes as any mark does.
+  let penRef = null, penOnRef = false;
+  function penAt(e) {
+    if (penOnRef) return pointAt(e);
+    raycaster.setFromCamera(ndc(e), getCamera());
+    const hit = raycaster.intersectObjects(getTargets(), false)[0];
+    if (hit?.face) { penRef = { o: hit.point.clone(), n: hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize() }; return hit.point.toArray(); }
+    if (!penRef) return pointAt(e);
+    return onPlane(e, penRef.o, penRef.n) ?? onPlane(e, penRef.o, getCamera().getWorldDirection(new THREE.Vector3()));   // that face edge-on: square to the eye
+  }
   // Where the pointer meets the plane through `origin` with normal `n` (null when that plane is edge-on).
   function onPlane(e, origin, n) {
     raycaster.setFromCamera(ndc(e), getCamera());
@@ -718,6 +730,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     last = { x: e.clientX, y: e.clientY, id: e.pointerId };
     if (using === 'pen') {
       current = { id: uid(), kind: 'pen', ...body, ...pen }; current.points = [toRest(current, p)];
+      penOnRef = !!hitPlane; penRef = null; if (!penOnRef) penAt(e);   // remember the face it starts on
       const sq = squareAxis();
       if (sq) current.plane = { o: current.points[0], n: sq.toArray() };   // square to a view: the stroke is flat
     }
@@ -797,7 +810,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     e.stopImmediatePropagation();
     if (current.kind === 'pen') {
       if (Math.hypot(e.clientX - last.x, e.clientY - last.y) < 3) return;
-      const p = current.plane ? flatAt(e, current) : pointAt(e); if (!p) return;
+      const p = current.plane ? flatAt(e, current) : penAt(e); if (!p) return;
       current.points.push(toRest(current, p)); last.x = e.clientX; last.y = e.clientY;   // keep last.id: it is how the stroke knows its pointer
     } else if (current.kind === 'image') {
       // the drag's reach from the centre is half the picture's width
