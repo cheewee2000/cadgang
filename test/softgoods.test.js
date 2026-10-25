@@ -32,6 +32,9 @@ test('a strap pinned at both ends sags onto a bar: one trimmed face, resting on 
     assert.equal(flats[0].gauge, 'cordura-500d');
     assert.match(flats[0].dxf, /\nSTITCH\n/, 'stitch line on its own layer');
     assert.match(flats[0].dxf, /\nCUT\n/, 'cut line with allowance');
+    assert.match(flats[0].dxf, /\nLINE\n8\nGRAIN\n/, 'grain line');
+    assert.match(flats[0].dxf, /\nTEXT\n8\nTEXT\n[\s\S]*\nstrap  cut 1  cordura-500d  420 x 80 mm  allowance 10/, 'label with the cut count, fabric and size');
+    assert.doesNotMatch(flats[0].dxf, /\nLINE\n8\nNOTCH\n/, 'no seams, no notches');
     assert.ok(g.timing.total < 15000, `relaxed in ${g.timing.total} ms`);
   } finally { scope.dispose(); }
 });
@@ -41,8 +44,8 @@ test('two panels sewn along their facing edges close the gap between them and ha
   try {
     const checked = [], flats = [], soft = softNamespace(checked, flats);
     const g = soft.garment('pair'), ny = fabric('nylon-210d');
-    const left = g.piece('left', rect(100, 100), ny).place([0, 0, 0], [1, 0, 0], [0, 0, 1]).pin([0, 100], [0, 0, 100]);
-    const right = g.piece('right', rect(100, 100), ny).place([120, 0, 0], [1, 0, 0], [0, 0, 1]).pin([100, 100], [200, 0, 100]);   // pins 200 apart: 20 mm of slack for two 100 wide panels
+    const left = g.piece('left', rect(100, 100), ny, { pattern: 'panel' }).place([0, 0, 0], [1, 0, 0], [0, 0, 1]).pin([0, 100], [0, 0, 100]);
+    const right = g.piece('right', rect(100, 100), ny, { pattern: 'panel' }).place([120, 0, 0], [1, 0, 0], [0, 0, 1]).pin([100, 100], [200, 0, 100]);   // pins 200 apart: 20 mm of slack for two 100 wide panels
     g.seam(left.edge(1), right.edge(3), { flip: true });   // left's right edge (u 100, v 0 -> 100) to right's left edge (u 0, v 100 -> 0)
     const shape = g.make();
     assert.equal(tessellate(shape, { tolerance: 0.1 }).faces.length, 2);
@@ -50,7 +53,10 @@ test('two panels sewn along their facing edges close the gap between them and ha
     assert.ok(bb.size[0] < 215, `the panels hang between the pins (span ${bb.size[0].toFixed(1)}; 220 at the start, 200 pin to pin)`);
     assert.ok(row(checked, 'seam left/right gap').ok, `the seam closed: ${JSON.stringify(row(checked, 'seam left/right gap'))}`);
     assert.ok(row(checked, 'seam left/right length match').ok);
-    assert.equal(flats.length, 2);
+    assert.equal(flats.length, 1, 'both panels share the pattern');
+    assert.equal(flats[0].qty, 2);
+    assert.match(flats[0].dxf, /panel  cut 2  nylon-210d/);
+    assert.equal((flats[0].dxf.match(/\nLINE\n8\nNOTCH\n/g) || []).length, 2, 'a notch at each end of the sewn edge');
   } finally { scope.dispose(); }
 });
 

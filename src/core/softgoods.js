@@ -80,7 +80,7 @@ function outlineDistance(poly, x, y) {
 }
 
 class Piece {
-  constructor(name, outline, fab, { grid = 10, allowance = 10 } = {}) {
+  constructor(name, outline, fab, { grid = 10, allowance = 10, pattern = null, grain = 0 } = {}) {
     if (!Array.isArray(outline) || outline.length < 3) throw new GraphError(`soft.piece('${name}'): the outline needs at least 3 [u, v] points`);
     let area = 0;
     for (let i = 0, j = outline.length - 1; i < outline.length; j = i++) area += outline[j][0] * outline[i][1] - outline[i][0] * outline[j][1];
@@ -90,6 +90,9 @@ class Piece {
     this.fabric = fab;
     this.grid = grid;
     this.allowance = allowance;
+    this.pattern = pattern ?? name;   // pieces sharing a pattern name are one DXF, cut N
+    this.grain = grain;               // grain line: degrees off the flat v axis
+    this.notches = [];                // [point index, neighbour index] at each seam end: a tick across the allowance, square to the seam
     this.pins = [];
     this.frame = { origin: [0, 0, 0], u: [1, 0, 0], v: [0, 1, 0] };
   }
@@ -135,7 +138,7 @@ class Piece {
     const n = this.outline.length;
     const pts = [];
     for (let k = ((i % n) + n) % n; ; k = (k + 1) % n) { pts.push(this.outline[k]); if (k === ((j % n) + n) % n) break; if (pts.length > n) break; }
-    return { piece: this, points: pts };
+    return { piece: this, points: pts, from: ((i % n) + n) % n, to: ((j % n) + n) % n };
   }
 
   /** Length of the whole outline in mm. */
@@ -194,7 +197,7 @@ function bodyField(body) {
 class Garment {
   constructor(name) { this.name = name; this.pieces = []; this.seams = []; }
 
-  /** A new piece: soft.garment('harness').piece('strap', [[0,0],[60,0],[60,500],[0,500]], soft.fabric('cordura-500d'), {grid: 10, allowance: 10}) */
+  /** A new piece: soft.garment('harness').piece('strap', [[0,0],[60,0],[60,500],[0,500]], soft.fabric('cordura-500d'), {grid: 10, allowance: 10, pattern: 'strap', grain: 0}); pieces naming the same pattern are one DXF, cut N */
   piece(name, outline, fab = fabric(), opts) {
     if (this.pieces.some((p) => p.name === name)) throw new GraphError(`soft: two pieces named '${name}'`);
     const p = new Piece(name, outline, fab, opts);
@@ -254,6 +257,7 @@ class Garment {
     // seams: paired bilinear attachments every half grid along the shorter edge; pins: an attachment to a fixed point
     const pairs = [];
     for (const s of this.seams) {
+      for (const e of [s.a, s.b]) { const n = e.piece.outline.length; e.piece.notches.push([e.from, (e.from + 1) % n], [e.to, (e.to + n - 1) % n]); }
       const la = polyLength(s.a.points), lb = polyLength(s.b.points), n = Math.max(2, Math.ceil(Math.min(la, lb) / (Math.min(s.a.piece.grid, s.b.piece.grid) / 2)) + 1);
       const ga = gridOf(s.a.piece), gb = gridOf(s.b.piece);
       if (!ga || !gb) throw new GraphError('soft.seam: an edge belongs to a piece of another garment');
@@ -435,8 +439,8 @@ class Garment {
     const faces = fitted.map((f) => f.face);
     const shape = setParts(brepCompound(faces), this.pieces.map((p) => ({ name: p.name, count: 1 })));
     for (const p of this.pieces) {
-      const seen = flats.find((f) => f.name === p.name);
-      if (seen) seen.qty += 1; else flats.push({ name: p.name, dxf: patternDXF(p), qty: 1, size: patternSize(p), gauge: p.fabric.name, hardware: {} });
+      const seen = flats.find((f) => f.name === p.pattern);
+      if (seen) { seen.qty += 1; seen.dxf = patternDXF(p, seen.qty); } else flats.push({ name: p.pattern, dxf: patternDXF(p, 1), qty: 1, size: patternSize(p), gauge: p.fabric.name, hardware: {} });
     }
     this.timing = { total: Date.now() - t0, sim: tSim - t0, fit: Date.now() - tSim, steps: stepsRun, nodes: count };
     return shape;
@@ -520,16 +524,34 @@ function fitFace(gr, x) {
   });
 }
 
-/** The cutting pattern: outline on STITCH, outline offset by the seam allowance on CUT. */
-function patternDXF(piece) {
+/**
+ * The cutting pattern: outline on STITCH, outline offset by the seam allowance on CUT, a tick across the allowance at
+ * each seam end on NOTCH, the grain line with arrow heads on GRAIN, and the label (name, cut N, fabric, size) on TEXT.
+ */
+function patternDXF(piece, qty = 1) {
   const rc = brepKernel();
-  const [p0, ...rest] = piece.outline;
-  let d = rc.draw(p0);
-  for (const p of rest) d = d.lineTo(p);
+  const pts = piece.outline, n = pts.length, a = piece.allowance;
+  let d = rc.draw(pts[0]);
+  for (const p of pts.slice(1)) d = d.lineTo(p);
   const outline = d.close();
-  const cut = piece.allowance > 0 ? outline.offset(piece.allowance) : outline;
-  const stitch = piece.outline.map((p, i) => Object.assign([p, piece.outline[(i + 1) % piece.outline.length]], { layer: 'STITCH' }));
-  return toDXF(cut.toSVGPaths(), stitch);
+  const cut = a > 0 ? outline.offset(a) : outline;
+  const lines = pts.map((p, i) => Object.assign([p, pts[(i + 1) % n]], { layer: 'STITCH' }));
+  for (const [i, j] of piece.notches) {   // the outline runs counter clockwise, so outward is to the right of travel
+    const dir = [pts[j][0] - pts[i][0], pts[j][1] - pts[i][1]], l = Math.hypot(...dir) || 1, s = j === (i + 1) % n ? 1 : -1;
+    const out = [s * dir[1] / l, -s * dir[0] / l];
+    lines.push(Object.assign([pts[i], [pts[i][0] + out[0] * Math.max(a, 3), pts[i][1] + out[1] * Math.max(a, 3)]], { layer: 'NOTCH' }));
+  }
+  const us = pts.map((p) => p[0]), vs = pts.map((p) => p[1]), c = [(Math.min(...us) + Math.max(...us)) / 2, (Math.min(...vs) + Math.max(...vs)) / 2];
+  const w = Math.max(...us) - Math.min(...us), h = Math.max(...vs) - Math.min(...vs), tall = h > w;
+  const g = (piece.grain + 90) * Math.PI / 180, half = 0.3 * Math.min(w, h) + 0.2 * Math.max(w, h), gd = [Math.cos(g), Math.sin(g)];
+  const g0 = [c[0] - gd[0] * half, c[1] - gd[1] * half], g1 = [c[0] + gd[0] * half, c[1] + gd[1] * half], k = Math.min(6, half / 4);
+  lines.push(Object.assign([g0, g1], { layer: 'GRAIN' }));
+  for (const [e, sg] of [[g0, 1], [g1, -1]]) for (const side of [1, -1]) lines.push(Object.assign([e, [e[0] + sg * k * (gd[0] + side * 0.5 * gd[1]), e[1] + sg * k * (gd[1] - side * 0.5 * gd[0])]], { layer: 'GRAIN' }));
+  const [W, H] = patternSize(piece);
+  const text = `${piece.pattern}  cut ${qty}  ${piece.fabric.name}  ${W.toFixed(0)} x ${H.toFixed(0)} mm  allowance ${a}`;
+  const th = Math.max(2.5, Math.min(8, Math.min(w, h) / 6, 0.8 * Math.max(w, h) / (0.8 * text.length)));   // sized to fit along the long side
+  const run = 0.8 * th * text.length, at = tall ? [c[0] + 0.1 * w + th, c[1] - run / 2] : [c[0] - run / 2, c[1] - 0.1 * h - th];   // centred beside the grain line
+  return toDXF(cut.toSVGPaths(), lines, [{ at, text, height: th, rotation: tall ? 90 : 0 }]);
 }
 function patternSize(piece) {
   const us = piece.outline.map((p) => p[0]), vs = piece.outline.map((p) => p[1]), a = 2 * piece.allowance;

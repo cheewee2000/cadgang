@@ -151,8 +151,9 @@ sm — sheet metal bent from one flat sheet, built to a shop's gauge table so th
   shop's own. sm.gauge('scs-304', 0.060) is SendCutSend 304 stainless at .060 in (radius, bend deduction, min flange,
   max bend length, 30 x 44 in flat). sm.part(name, gauge, {hardware, round: 3}) then, in mm, outside sizes:
     .base(U, V)  the base rectangle, u along x, v along y of its own frame
-    .flange('base.r', 25, {from, to, reverse})  a 90° flange that high off edge b (v 0), t (v V), l (u 0) or r (u U), folded to the
-      inside; flanges stack: 'base.r.t' is the tip of that flange, 'base.r.l' / '.r' its sides (a flange's b is its bend);
+    .flange('base.r', 25, {from, to, reverse, angle})  a flange that high off edge b (v 0), t (v V), l (u 0) or r (u U), folded to the
+      inside at 90° (angle: 45 leans it in as a chamfer; two chamfers meeting at a corner are mitred); flanges stack: 'base.r.t' is the
+      tip of that flange, 'base.r.l' / '.r' its sides (a flange's b is its bend);
       reverse: true folds it the other way (Z bends), its height from the parent's inside face, and it may not meet another at a corner
     .cut('base', sm.rect(u0, v0, u1, v1, r), sm.circle(u, v, r), sm.slot(u0, v0, u1, v1, r), sm.poly(pts))  holes, in that panel's coordinates
     .window('base', [u0, v0, u1, v1], depth)  an opening whose four edges fold in as mitred flaps
@@ -171,16 +172,20 @@ sm — sheet metal bent from one flat sheet, built to a shop's gauge table so th
 
 soft — softgoods the way CLO works a garment: pieces cut flat from fabric, sewn edge to edge, pinned to hardware and
   draped onto a body under gravity; each relaxed piece comes back as an exact B-spline face trimmed to its outline,
-  the compound named per piece, and each piece's cutting pattern joins the DXF export (outline on STITCH, outline plus
-  seam allowance on CUT). It settles to the rest shape; it is not an animation. mm throughout.
+  the compound named per piece, and each piece's cutting pattern joins the DXF export (stitch line on STITCH, outline plus
+  seam allowance on CUT, a tick across the allowance at each seam end on NOTCH, the grain line on GRAIN, and a label
+  'name  cut N  fabric  W x H mm  allowance a' on TEXT). THE PATTERN IS THE DELIVERABLE: the sewer cuts from the DXF,
+  so get names, quantities, allowances, notches and lengths right first; the drape is a rough picture of how the pieces
+  sit (it settles to the rest shape; it is not an animation). mm throughout.
   soft.fabric('cordura-500d' | 'nylon-210d' | 'spacer-mesh' | 'eva-10mm' | {weight g/m², thickness, stretch, shear, bend 0..1, friction, maxStretch %})
   soft.avatar({chest: 1000, waist: 860, hip: 980, torso: 480, shoulders: 400, neck: 390, head: 230, arm: 300})  a mannequin to
     drape on (torso, neck, head, arms at the sides): circumferences and lengths, standing up z, hip at z 0, front toward +y,
     centred on x; translate it to where the wearer stands against the frame. A strap over the shoulder passes between
     the neck and the shoulder ball, about x = ±100 for 400 mm shoulders
   const g = soft.garment('harness') then
-    g.piece(name, [[u, v], ...], fabric, {grid: 10, allowance: 10})  a closed outline in its own flat mm (u right, v up); grid
-      is the solver's node spacing (finer is slower; 10 for straps, 15 to 20 for panels), allowance the seam allowance in the pattern
+    g.piece(name, [[u, v], ...], fabric, {grid: 10, allowance: 10, pattern: name, grain: 0})  a closed outline in its own flat mm (u right, v up); grid
+      is the solver's node spacing (finer is slower; 10 for straps, 15 to 20 for panels), allowance the seam allowance in the pattern,
+      pattern a name shared by identical pieces (one DXF, cut N; a left and a right strap are one 'strap'), grain degrees off flat v
       .place(origin, u, v)  where the flat piece starts in 3D before it drapes: its (0, 0) at origin, u and v along those directions
       .along([[x, y, z], ...], {u, at})  or start it bent along a path: flat v runs along the path, flat u = at (default the
         middle) lies on it, u runs across along u. The right start for a strap: anchor, up the back, over the shoulder, down
@@ -674,7 +679,7 @@ Args:
     'cadgang_cells_export',
     {
       title: 'Export the cell stack',
-      description: `Write the cell stack's solid to <filename>.step (or .stl) in the project folder and return the path. format 'dxf' instead writes the flat pattern of every sheet metal part (sm.part(...).make()) and every softgoods piece (soft.garment(...).make()) the stack makes, one <filename>_<part>.dxf each: outline and holes on layer CUT, bend lines dashed on BEND, stitch lines on STITCH, mm.
+      description: `Write the cell stack's solid to <filename>.step (or .stl) in the project folder and return the path. format 'dxf' instead writes the flat pattern of every sheet metal part (sm.part(...).make()) and every softgoods piece (soft.garment(...).make()) the stack makes, one <filename>_<part>.dxf each: outline and holes on layer CUT, bend lines dashed on BEND, stitch lines on STITCH with seam notches on NOTCH, grain on GRAIN and the cut label on TEXT, mm.
 
 STEP is the default: cells are exact B-rep the whole way through, so the file reopens in Fusion, SolidWorks or OnShape as editable geometry rather than a faceted import. STL is for printing: the same solid tessellated (fine, scaled to the part).
 

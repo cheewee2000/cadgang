@@ -504,9 +504,9 @@ function frameOf(name, { origin = [0, 0, 0], u = [1, 0, 0], v = [0, 1, 0], n = [
   return { o: origin, u, v, n };
 }
 
-// ---------- DXF out: replicad's SVG paths (lines and true arcs) to R12 entities; extra lines on BEND, BEND_REVERSE or their own `layer` (softgoods' STITCH)
+// ---------- DXF out: replicad's SVG paths (lines and true arcs) to R12 entities; extra lines on BEND, BEND_REVERSE or their own `layer` (softgoods' STITCH, NOTCH, GRAIN); texts {at, text, height, rotation, layer} on TEXT
 
-export function toDXF(svgPaths, bendLines) {
+export function toDXF(svgPaths, bendLines, texts = []) {
   const ents = [];
   const line = (a, b, layer) => ents.push(`0\nLINE\n8\n${layer}\n10\n${a[0]}\n20\n${a[1]}\n30\n0\n11\n${b[0]}\n21\n${b[1]}\n31\n0`);
   for (const path of svgPaths.flat()) {
@@ -532,9 +532,10 @@ export function toDXF(svgPaths, bendLines) {
     }
   }
   for (const bl of bendLines) line(bl[0], bl[1], bl.layer ?? (bl.reverse ? 'BEND_REVERSE' : 'BEND'));
+  for (const t of texts) ents.push(`0\nTEXT\n8\n${t.layer ?? 'TEXT'}\n10\n${t.at[0]}\n20\n${t.at[1]}\n30\n0\n40\n${t.height ?? 5}\n50\n${t.rotation ?? 0}\n1\n${t.text}`);
   const tables = '0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLTYPE\n70\n2\n0\nLTYPE\n2\nCONTINUOUS\n70\n0\n3\nSolid line\n72\n65\n73\n0\n40\n0.0\n'
     + '0\nLTYPE\n2\nDASHED\n70\n0\n3\nDashed\n72\n65\n73\n2\n40\n9.0\n49\n6.0\n49\n-3.0\n0\nENDTAB\n'
-    + '0\nTABLE\n2\nLAYER\n70\n3\n0\nLAYER\n2\nCUT\n70\n0\n62\n7\n6\nCONTINUOUS\n0\nLAYER\n2\nBEND\n70\n0\n62\n1\n6\nDASHED\n0\nLAYER\n2\nBEND_REVERSE\n70\n0\n62\n5\n6\nDASHED\n0\nLAYER\n2\nSTITCH\n70\n0\n62\n3\n6\nCONTINUOUS\n0\nENDTAB\n0\nENDSEC\n';
+    + '0\nTABLE\n2\nLAYER\n70\n7\n0\nLAYER\n2\nCUT\n70\n0\n62\n7\n6\nCONTINUOUS\n0\nLAYER\n2\nBEND\n70\n0\n62\n1\n6\nDASHED\n0\nLAYER\n2\nBEND_REVERSE\n70\n0\n62\n5\n6\nDASHED\n0\nLAYER\n2\nSTITCH\n70\n0\n62\n3\n6\nCONTINUOUS\n0\nLAYER\n2\nNOTCH\n70\n0\n62\n6\n6\nCONTINUOUS\n0\nLAYER\n2\nGRAIN\n70\n0\n62\n4\n6\nCONTINUOUS\n0\nLAYER\n2\nTEXT\n70\n0\n62\n7\n6\nCONTINUOUS\n0\nENDTAB\n0\nENDSEC\n';
   return `0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n${tables}0\nSECTION\n2\nENTITIES\n${ents.join('\n')}\n0\nENDSEC\n0\nEOF\n`;
 }
 
