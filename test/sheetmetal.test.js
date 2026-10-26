@@ -100,6 +100,16 @@ test('PEM hardware: placed by a frame point, fused in, counted; the catalog dist
   } finally { scope.dispose(); }
 });
 
+test('pem: an SP nut is drawn from PEM\'s drawing, collar and shank, bored through with the sheet', () => {
+  const scope = beginBrepScope();
+  try {
+    const sm = sheetMetalNamespace([], []), r = (d) => Math.PI * (d / 2) ** 2, H = 0.25 * 25.4;
+    const v = ops.volume(sm.part('plate', g).base(80, 80).pem('base', 'SP-M5-0', [40, 40]).make());
+    const want = (80 * 80 - 4 * (9 - r(6) / 4)) * g.t - r(H) * g.t + (r(8.64) - r(5)) * 2 + (r(H) - r(5)) * 0.77;
+    assert.ok(Math.abs(v - want) < 2, `volume ${v.toFixed(1)}, want ${want.toFixed(1)}`);
+  } finally { scope.dispose(); }
+});
+
 test('countersinks: aluminium .187 takes M4, stainless and .125 do not', () => {
   const scope = beginBrepScope();
   try {
@@ -110,6 +120,36 @@ test('countersinks: aluminium .187 takes M4, stainless and .125 do not', () => {
     assert.throws(() => sm.part('thin plate', al(0.125)).base(90, 110).countersink('base', 'M4', [10, 10]).make(), /M4 is 1.93 mm deep/);
     assert.throws(() => sm.part('steel plate', g).base(90, 110).countersink('base', 'M4', [10, 10]).make(), /not countersunk/);
     assert.throws(() => sm.part('small', al(0.187)).base(70, 70).countersink('base', 'M4', [10, 10]).make(), /outside 1 x 4/);
-    assert.throws(() => sm.part('bent al', al(0.125)).base(90, 110).flange('base.b', 20), /cut flat only/);
+    assert.throws(() => sm.part('bent al', al(0.313)).base(90, 110).flange('base.b', 20), /cut flat only/);
+    const kick = sm.part('kick', al(0.080)).base(300, 120).flange('base.b', 30).pem('base.b', 'FH-M5-10', [150, 15], { face: 'out' });
+    assert.ok(ops.volume(kick.make()) > 0);
+    assert.deepEqual(kick.bom(), { 'FH-M5-10': 1 }, 'aluminium takes FH-M5-10 studs');
+    assert.ok(kick.rules().every((r) => r.ok), kick.rules().filter((r) => !r.ok).map((r) => r.label).join('; '));
   } finally { scope.dispose(); }
+});
+
+test('a 45° flange: the flat is the two outside sizes less the 45° deduction, the folded flange leans in at 45°, and chamfer corners mitre', () => {
+  const g = gauge('scs-304', 0.074), sm = sheetMetalNamespace(), sb = (g.r + g.t) * Math.tan(Math.PI / 8), ba = g.ba / 2;
+  const p = sm.part('chamfer', g).base(100, 60).flange('base.r', 20, { angle: 45 });
+  const f = p.flat();
+  assert.ok(Math.abs(f.size[0] - (100 + 20 - (2 * sb - ba))) < 1e-4, `flat ${f.size[0]} should be ${100 + 20 - (2 * sb - ba)}`);
+  const s = p.make({ origin: [0, 0, 0], u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, 1] });
+  const bb = ops.bbox(s), tip = 100 - (g.r + g.t) + Math.SQRT1_2 * (g.r + g.t);  // the flange's tip stands 20 - sb along a 45° line from the mold corner
+  assert.ok(bb.max[2] > 14 && bb.max[2] < 16, `a 20 mm 45° flange tops out at ${bb.max[2].toFixed(2)}, 20 sin 45° plus the sheet, between 14 and 16`);
+  assert.ok(bb.max[0] > 100 + 10 && bb.max[0] < 100 + 15, `and reaches ${bb.max[0].toFixed(2)} along x, between 110 and 115 (${tip.toFixed(1)} is its bend)`);
+  const tray = sm.part('chamfer_tray', g).base(100, 60).flange('base.b', 15, { angle: 45 }).flange('base.r', 15, { angle: 45 });
+  assert.ok(tray.rules(tray.flat()).every((r) => r.ok || /flange|box/.test(r.label)), 'a mitred chamfer corner passes the overlap checks');
+  tray.make({ origin: [0, 0, 0], u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, 1] });
+  assert.ok(tray.rules(tray.flat()).find((r) => /folded pieces/.test(r.label)).ok, 'its two chamfers do not pass through each other');
+});
+
+test('tabs: a second flange on the same edge, tagged, each held off the corners', () => {
+  const sm = sheetMetalNamespace([], []);
+  const p = sm.part('tabs', g).base(100, 80).flange('base.t', 15, { angle: 45 })
+    .flange('base.r', 12, { angle: 90, reverse: true, from: 10, to: 30 }).flange('base.r#2', 12, { angle: 90, reverse: true, from: 45, to: 65 });
+  assert.throws(() => sm.part('dup', g).base(10, 10).flange('base.r', 5).flange('base.r', 5), /already has a flange/);
+  const s = p.make({ origin: [0, 0, 0], u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, 1] }), bb = ops.bbox(s);
+  assert.ok(Math.abs(bb.max[0] - 100) < 1e-6, `reverse tabs fold in: the part ends at x = ${bb.max[0].toFixed(2)}, not past the base edge`);
+  assert.equal(p._layout().bends.filter((b) => b.id.startsWith('base.r')).length, 2, 'two bends on the right edge');
+  assert.ok(p.rules(p.flat()).every((r) => r.ok), p.rules(p.flat()).filter((r) => !r.ok).map((r) => r.label).join('; '));
 });

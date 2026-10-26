@@ -38,9 +38,15 @@ const SCS_304 = [
 // instant pricing; relief width at least t / 2; relief depth at least t + r + .02 in from the start of the bend; flanges that
 // meet at a corner at least .015 in apart; flanges on boxes up to 5 in, 3 in with hardware. Reliefs here are a full t wide (twice their
 // minimum) with round ends, as their guide prefers to square inside corners.
-// SendCutSend 5052 H32 aluminium thicknesses (sendcutsend.com/materials/5052-aluminum, read 2026-10-22). Flat parts only:
-// ponytail: their 5052 bend table is not read in yet, so a flange on it throws; add the rows from their spec sheet when one is bent
-const SCS_5052 = [0.040, 0.063, 0.080, 0.090, 0.100, 0.125, 0.187, 0.250, 0.313, 0.375, 0.500].map((t) => [t, NaN, NaN, NaN, NaN]);
+// SendCutSend 5052 H32 aluminium (sendcutsend.com/materials/5052-aluminum, each thickness's bending specs, read 2026-10-22), inches, as SCS_304;
+// .313 in and up are cut flat only (no bending listed). Powder coat and anodizing from .063 in. Their relief depths are t + r + .020 in, .032 at .080, so .032 for all.
+const SCS_5052 = [
+  [0.040, 0.024, 0.062, 0.286, 44], [0.063, 0.035, 0.096, 0.303, 44], [0.080, 0.038, 0.116, 0.313, 44], [0.090, 0.032, 0.142, 0.326, 44],
+  [0.100, 0.125, 0.191, 0.463, 44], [0.125, 0.125, 0.216, 0.476, 44], [0.187, 0.250, 0.356, 0.798, 44], [0.250, 0.250, 0.442, 1.371, 44],
+  ...[0.313, 0.375, 0.500].map((t) => [t, NaN, NaN, NaN, NaN]),
+];
+// PEM hardware SendCutSend presses into aluminium (their hardware catalog, read 2026-10-22), as PEM_304. ponytail: the M5 flush stud only, add rows when used
+const PEM_ALU = { 'FH-M5-10': ['stud', 5, 0.198, 0.283, 0.384, 0.393, [0.040, 0.268]] };
 // PEM hardware SendCutSend presses into 304 (their hardware catalog, sendcutsend.com/guidelines/hardware/catalog, read 2026-10-22), metric only.
 // inches: [kind, thread mm, H hole in sheet, K = N least hole centre to a cut edge or to the bend allowance area, M least centre to centre
 // for two of the same SKU, length (studs, standoffs) or height above the sheet (nuts), 304 sheet range]. SO4-M5 lists the same .281 hole as SO4-M4.
@@ -53,13 +59,15 @@ const PEM_304 = {
   'FH4-M4-8': ['stud', 4, 0.157, 0.283, 0.362, 0.315, [0.048, 0.250]], 'FH4-M4-10': ['stud', 4, 0.157, 0.283, 0.362, 0.393, [0.048, 0.250]],
   'FH4-M5-10': ['stud', 5, 0.197, 0.283, 0.382, 0.394, [0.048, 0.250]],
 };
+// PEM's own drawings (pemnet.com product finder, read 2026-10-22), mm: [E collar diameter, T collar height, A shank length, C shank diameter].
+const PEM_BODY = { 'SP-M5-0': [8.64, 2, 0.77, 6.33] };
 // SendCutSend countersinking (sendcutsend.com/services/countersinking, read 2026-10-22): aluminium and plastics .125 to .750 in only, parts
 // 1 x 4 to 14 x 46 in, depth at most 60% of the sheet, 90° for metric; draw only the minor hole. Metric sizes mm: [major, minor, depth].
 const CSK_METRIC = { M3: [6, 3.18, 1.35], M4: [8, 4.04, 1.93], M5: [10, 5.00, 2.44], M6: [12, 6.35, 2.77], M8: [16, 8.00, 3.94] };
 const CSK_ALU = { range: [0.125, 0.750], part: [[1, 4], [14, 46]], depth: 0.6, sizes: CSK_METRIC };
 const SHOPS = {
   'scs-304': { name: 'SendCutSend 304 stainless', table: SCS_304, flat: [30, 44], box: 5, boxHardware: 3, gap: 0.015, reliefExtra: 0.02, pem: PEM_304, hardwareFlat: [36, 46] },
-  'scs-5052': { name: 'SendCutSend 5052 H32 aluminium', table: SCS_5052, flat: [30, 44], gap: 0.015, countersink: CSK_ALU },
+  'scs-5052': { name: 'SendCutSend 5052 H32 aluminium', table: SCS_5052, flat: [30, 44], boxHardware: 3, gap: 0.015, reliefExtra: 0.032, countersink: CSK_ALU, pem: PEM_ALU, hardwareFlat: [36, 46] },
 };
 
 /** The gauge: thickness, radius, bend deduction and allowance, limits, all in mm. */
@@ -169,6 +177,9 @@ function place(d, map) {
 
 // ---------- the part
 
+/** A bend of `angle` degrees in gauge g: sb, the setback from the mold corner (where the outer faces would meet) to the start of the
+ * bend zone; ba, the bend allowance; bd, the deduction. 90° is the shop's table; other angles scale its allowance by the angle (one K factor). */
+const bendOf = (g, angle = 90) => { const sb = (g.r + g.t) * Math.tan((angle * Math.PI) / 360), ba = (g.ba * angle) / 90; return { sb, ba, bd: 2 * sb - ba }; };
 const EDGES = {  // mold point at param s, outward direction, length
   b: (P) => ({ p: (s) => [s, 0], o: [0, -1], len: P.U }), t: (P) => ({ p: (s) => [s, P.V], o: [0, 1], len: P.U }),
   l: (P) => ({ p: (s) => [0, s], o: [-1, 0], len: P.V }), r: (P) => ({ p: (s) => [P.U, s], o: [1, 0], len: P.V }),
@@ -177,9 +188,10 @@ const EDGES = {  // mold point at param s, outward direction, length
 const NEIGHBOUR = { b: [['l', 0], ['r', 0]], t: [['l', 1], ['r', 1]], l: [['b', 0], ['t', 0]], r: [['b', 1], ['t', 1]] };
 
 class Part {
-  /** hardware: PEM parts go in (SCS caps box flanges lower); round: radius on every free corner of the outline (Che-Wei, Oct 22: fillets wherever possible). */
-  constructor(g, name, { hardware = false, round = 3 } = {}) {
-    this.g = g; this.name = name; this.hardware = hardware; this.round = round;
+  /** hardware: PEM parts go in (SCS caps box flanges lower); round: radius on every free corner of the outline (Che-Wei, Oct 22: fillets
+   * wherever possible); gap: space between flange ends that meet at a corner, never under the shop's. */
+  constructor(g, name, { hardware = false, round = 3, gap = g.gap } = {}) {
+    this.g = g; this.name = name; this.hardware = hardware; this.round = round; this.gap = Math.max(gap, g.gap);
     this.panels = new Map(); this.windows = []; this.pems = []; this.sinks = [];
   }
 
@@ -193,16 +205,19 @@ class Part {
   /**
    * A flange `length` high (outside size, from the parent's outer face) off edge `at`, a path like 'base.r' or 'base.r.t'.
    * from / to: where along the edge it runs (default the whole edge). reverse: fold it away from the inside (a Z bend), its
-   * length then measured from the parent's inside face. Returns the part; the new panel is `${at}`.
+   * length then measured from the parent's inside face. angle: the bend in degrees (default 90; 45 leans the flange in at a
+   * chamfer), lengths still measured from the mold corner where the outer faces would meet. Returns the part; the new panel is `${at}`.
+   * Several flanges on one edge (tabs): tag each but the first, 'base.l#2', and hold them apart and off the corners with from / to.
    */
-  flange(at, length, { from = null, to = null, reverse = false } = {}) {
+  flange(at, length, { from = null, to = null, reverse = false, angle = 90 } = {}) {
     if (!Number.isFinite(this.g.r)) throw new GraphError(`sm part '${this.name}': ${this.g.name} has no bend table here, so it is cut flat only`);
-    const i = at.lastIndexOf('.'), pid = at.slice(0, i), edge = at.slice(i + 1), P = this.panels.get(pid);
+    const i = at.lastIndexOf('.'), pid = at.slice(0, i), tag = at.slice(i + 1), edge = tag[0], P = this.panels.get(pid);
     if (!P) throw new GraphError(`sm part '${this.name}': no panel '${pid}' for flange '${at}'`);
-    if (!EDGES[edge]) throw new GraphError(`sm part '${this.name}': edge '${edge}' is not one of b, t, l, r`);
+    if (!EDGES[edge] || !/^[bltr](#\w+)?$/.test(tag)) throw new GraphError(`sm part '${this.name}': edge '${tag}' is not one of b, t, l, r (a #tag after one makes a second flange on that edge)`);
     if (pid !== 'base' && edge === 'b') throw new GraphError(`sm part '${this.name}': '${at}' is the bend of '${pid}', not a free edge`);
     if (this.panels.has(at)) throw new GraphError(`sm part '${this.name}': '${at}' already has a flange`);
-    const k = { id: at, parent: pid, edge, L: length, from, to, reverse, cuts: [], kids: [] };  // null ends: to the corner, settled in _layout
+    if (!(angle > 0 && angle < 180)) throw new GraphError(`sm part '${this.name}': flange '${at}' bend angle ${angle}° must be between 0 and 180`);
+    const k = { id: at, parent: pid, edge, L: length, from, to, reverse, angle, cuts: [], kids: [] };  // null ends: to the corner, settled in _layout
     if (from != null && to != null && !(to > from)) throw new GraphError(`sm part '${this.name}': flange '${at}' runs from ${k.from} to ${k.to}`);
     P.kids.push(k); this.panels.set(at, k);
     return this;
@@ -262,33 +277,42 @@ class Part {
     if (!base) throw new GraphError(`sm part '${this.name}': call base(U, V) first`);
     const out = [], bends = [];
     const visit = (P, frame, map) => {
-      const cuts = [...P.cuts], kids = [], protect = P.rootBend ? [[[P.rootBend[0], rt], [P.rootBend[1], rt]]] : [];
+      const sbP = P.id === 'base' ? 0 : bendOf(g, P.angle ?? 90).sb;  // a flange's flat starts this far up its mold
+      const cuts = [...P.cuts, ...(P.mitre ?? [])], kids = [], protect = P.rootBend ? [[[P.rootBend[0], sbP], [P.rootBend[1], sbP]]] : [];
+      protect.push(...(P.mitreEdges ?? []));   // the mitre's root corner stays sharp (its apex is rounded like any free corner)
       for (const h of this.pems) if (h.panel === P.id) cuts.push(h.hole = circle(...h.at, (h.spec[2] * IN) / 2));
       for (const h of this.sinks) if (h.panel === P.id) cuts.push(circle(...h.at, CSK_METRIC[h.size][1] / 2));
       const ends = (k) => [k.from ?? 0, k.to ?? EDGES[k.edge](P).len], reach = (k, end) => end ? ends(k)[1] >= EDGES[k.edge](P).len - 1e-6 : ends(k)[0] <= 1e-6;
       const on = (edge, end) => P.kids.find((k) => k.edge === edge && reach(k, end));
       for (const k of P.kids) {
-        const E = EDGES[k.edge](P);
+        const E = EDGES[k.edge](P), { sb: sbK } = bendOf(g, k.angle ?? 90);
         let [f0, f1] = ends(k), [b0, b1] = [f0, f1];
+        k._mitre = [0, 0];  // per end: slope of the mitre line (u per v) where it meets a leaning neighbour
         for (const end of [0, 1]) {
           const s = ends(k)[end], [nEdge, nEnd] = NEIGHBOUR[k.edge][end];
           const atCorner = reach(k, end), closed = atCorner && on(nEdge, nEnd) && !(P.id !== 'base' && nEdge === 'b');
           if (closed && (k.reverse || on(nEdge, nEnd).reverse)) throw new GraphError(`sm part '${this.name}': reverse flange ${k.reverse ? k.id : on(nEdge, nEnd).id} meets another at a corner; stop it short with from / to`);
           const sg = end ? -1 : 1;
           if (closed) {  // flanges meet: flats stop t + gap short of the corner, bends r + t + relief, the corner square goes
-            if (end) { f1 = s - g.t - g.gap; b1 = s - cl; } else { f0 = s + g.t + g.gap; b0 = s + cl; }
+            // the neighbour leans too (a chamfer): the two flare out, so the line where they meet leaves the mold corner OUTWARD
+            // at m per unit up the flange. This flange's flat runs m·L past the corner and is mitred back to that line (half a
+            // thickness and the shop's gap short, so the skins don't cross): the two short edges meet all the way up.
+            const nb = on(nEdge, nEnd), m = Math.sin(((k.angle ?? 90) * Math.PI) / 180) / Math.tan(((nb.angle ?? 90) * Math.PI) / 180);
+            const past = m > 1e-9 ? m * k.L - this.gap - m * g.t / 2 : -(g.t + this.gap);   // how far the flat's end runs past the corner
+            if (end) { f1 = s + past; b1 = s - cl; } else { f0 = s - past; b0 = s + cl; }
+            if (m > 1e-9) k._mitre[end] = m;
             const c = E.p(s), inU = E.o[0] ? -E.o[0] : 0, inV = E.o[1] ? -E.o[1] : 0;
             const along = [E.o[1] !== 0 ? sg : 0, E.o[0] !== 0 ? sg : 0];  // edge direction, pointing in from the corner
             const a = add(c, add(mul([inU, inV], cl), mul(along, cl))), z = add(c, add(mul([inU, inV], -ext), mul(along, -ext)));  // past the corner, so only its inside corner shows round
             cuts.push(rect(Math.min(z[0], a[0]), Math.min(z[1], a[1]), Math.max(z[0], a[0]), Math.max(z[1], a[1])));
           } else if (!atCorner || (P.id !== 'base' && nEdge === 'b')) {  // ends mid edge (or next to this panel's own bend): a relief slot past it
-            const w = g.reliefWidth, at = E.p(s + (end ? w / 2 : -w / 2)), d = rt + g.reliefDepth;  // round ended, from past the edge to its depth
+            const w = g.reliefWidth, at = E.p(s + (end ? w / 2 : -w / 2)), d = sbK + g.reliefDepth;  // round ended, from past the edge to its depth
             cuts.push(slot(...add(at, mul(E.o, ext)), ...add(at, mul(E.o, -(d - w / 2))), w / 2));
           }
         }
         // the bend's own strip; its line stays sharp (a round there would eat into the bend)
-        const s0 = E.p(b0), s1 = add(E.p(b1), mul(E.o, -rt));
-        protect.push([add(E.p(b0), mul(E.o, -rt)), s1]);
+        const s0 = E.p(b0), s1 = add(E.p(b1), mul(E.o, -sbK));
+        protect.push([add(E.p(b0), mul(E.o, -sbK)), s1]);
         cuts.push(rect(Math.min(s0[0], s1[0]), Math.min(s0[1], s1[1]), Math.max(s0[0], s1[0]), Math.max(s0[1], s1[1])));
         kids.push({ k, E, f0, f1, b0, b1 });
       }
@@ -304,23 +328,35 @@ class Part {
         ].map((E, i) => ({ k: { id: `${P.id}.window${this.windows.indexOf(w)}.${'lrbt'[i]}`, L: depth, cuts: [], kids: [], window: true }, E, f0: 0, f1: E.len, b0: cl, b1: E.len - cl }));
       }).flat();
       for (const { E, b0, b1 } of wins) protect.push([add(E.p(b0), mul(E.o, -rt)), add(E.p(b1), mul(E.o, -rt))]);
-      const outline = P.id === 'base' ? rect(0, 0, P.U, P.V) : rect(0, rt, P.U, P.V);
+      const outline = rect(0, sbP, P.U, P.V);
       out.push({ P, frame, map, cuts, outline, protect });
       for (const { k, E, f0, f1, b0, b1 } of [...kids, ...wins]) {
         // the flange's frame: v up the parent's inside normal, its inside back over the parent, u from the right hand rule
         const o3 = v3.add(v3.mul(frame.u, E.o[0]), v3.mul(frame.v, E.o[1]));
         const ed = E.p(1), e0 = E.p(0), e2 = [ed[0] - e0[0], ed[1] - e0[1]], e3 = v3.add(v3.mul(frame.u, e2[0]), v3.mul(frame.v, e2[1]));
-        const kv = k.reverse ? v3.neg(frame.n) : frame.n, kn = v3.neg(o3), ku = v3.cross(kv, kn), fwd = v3.dot(ku, e3) > 0;
+        // v leans from the parent's inside normal toward the edge by (90° - angle); the mold corner (where the outer faces would meet) is the parent's mold edge
+        const th = ((k.angle ?? 90) * Math.PI) / 180, { bd: bdK } = bendOf(g, k.angle ?? 90), nn = k.reverse ? v3.neg(frame.n) : frame.n;
+        const kv = v3.add(v3.mul(o3, Math.cos(th)), v3.mul(nn, Math.sin(th))), kn = v3.add(v3.mul(o3, -Math.sin(th)), v3.mul(nn, Math.cos(th)));
+        const ku = v3.cross(kv, kn), fwd = v3.dot(ku, e3) > 0;
         const at = (s) => v3.add(frame.o, v3.add(v3.mul(frame.u, E.p(s)[0]), v3.mul(frame.v, E.p(s)[1])));
         const param = (u) => fwd ? f0 + u : f1 - u;
-        const kframe = { o: k.reverse ? v3.add(at(fwd ? f0 : f1), v3.mul(frame.n, g.t)) : at(fwd ? f0 : f1), u: ku, v: kv, n: kn };  // a reverse flange starts on the parent's inside face
-        const kmap = (pt) => map(add(E.p(param(pt[0])), mul(E.o, pt[1] - g.bd)));
+        const root = k.reverse ? v3.add(at(fwd ? f0 : f1), v3.mul(frame.n, g.t)) : at(fwd ? f0 : f1);  // a reverse flange starts on the parent's inside face
+        const kframe = { o: root, u: ku, v: kv, n: kn };
+        const kmap = (pt) => map(add(E.p(param(pt[0])), mul(E.o, pt[1] - bdK)));
         const K = this.panels.get(k.id) ?? k;
         K.U = f1 - f0; K.V = k.L; K.window = k.window; K.reverse = k.reverse; K.rootBend = fwd ? [b0 - f0, b1 - f0] : [f1 - b1, f1 - b0];
+        K.mitre = []; K.mitreEdges = [];
+        for (const end of [0, 1]) {  // a mitred end: everything beyond the corner by more than m per unit up the flange goes
+          const m = k._mitre?.[end]; if (!m) continue;
+          // a: the corner in the flat's u, less the gap and half thickness the flat's end was held back (the line stays that far off the meeting line)
+          const e = (end === 0) === fwd ? 0 : K.U, sg = e === 0 ? 1 : -1, a = e + sg * m * k.L, big = 10 * (k.L + K.U);
+          K.mitre.push(poly([[a, 0], [a - sg * m * big, big], [a - sg * 2 * big, big], [a - sg * 2 * big, 0]]));
+          K.mitreEdges.push([[a, 0], [a - sg * m * cl, cl]]);   // protect the root end only: the apex takes the usual round (Che-Wei, Oct 24)
+        }
         // the bend: section in the plane across the edge, swept along it
         const nrm = v3.dot(v3.cross(e3, o3), frame.n) > 0 ? e3 : v3.neg(e3);
         bends.push({ id: k.id, P, len: b1 - b0, plane: { origin: at(nrm === e3 ? b0 : b1), xDir: o3, normal: nrm },
-          zone: [E.p(b0), E.p(b1), E.o], map, L: k.L, reverse: !!k.reverse });
+          zone: [E.p(b0), E.p(b1), E.o], map, L: k.L, reverse: !!k.reverse, angle: k.angle ?? 90 });
         // a window flap's flat is mitred where it meets its neighbour, so the four lie flat in the opening without overlapping
         if (k.window) {
           // keep only points further along the edge from a corner than they are deep in the flat: a 45° cone off each corner goes
@@ -348,32 +384,33 @@ class Part {
     const pieces = panels.map((e) => ({ id: e.P.id, solid: brepExtrude(brepDrawingSketch(this._mold(e), { origin: e.frame.o, xDir: e.frame.u, normal: e.frame.n }), g.t, false) }));
     for (const b of bends) {
       if (b.len <= 1e-6) continue;
-      const m = Math.SQRT1_2;
-      // section across the edge (x out of it, y the parent's inside normal): a quarter ring, bulging the parent's outside face, or its inside for a reverse bend
-      let sec;
-      if (!b.reverse) {
-        const c = [-rt, rt];
-        sec = k.draw([-rt, 0]).threePointsArcTo([0, rt], [c[0] + rt * m, c[1] - rt * m]).lineTo([-g.t, rt])
-          .threePointsArcTo([-rt, g.t], [c[0] + g.r * m, c[1] - g.r * m]).close();
-      } else {
-        const c = [-rt, g.t - rt];
-        sec = k.draw([-rt, g.t]).threePointsArcTo([0, g.t - rt], [c[0] + rt * m, c[1] + rt * m]).lineTo([-g.t, g.t - rt])
-          .threePointsArcTo([-rt, 0], [c[0] + g.r * m, c[1] + g.r * m]).close();
-      }
+      // section across the edge (x out of it, y the parent's inside normal): a ring sector of the bend's angle, tangent to the parent's
+      // outside face sb short of the mold corner and to the flange's outside face sb past it; mirrored through the sheet's mid plane for a reverse bend
+      const th = (b.angle * Math.PI) / 180, c = [-bendOf(g, b.angle).sb, rt], on = (rho, a) => [c[0] + rho * Math.sin(a), c[1] - rho * Math.cos(a)];
+      const q = [on(rt, 0), on(rt, th / 2), on(rt, th), on(g.r, th), on(g.r, th / 2), on(g.r, 0)].map(([x, y]) => (b.reverse ? [x, g.t - y] : [x, y]));
+      const sec = k.draw(q[0]).threePointsArcTo(q[2], q[1]).lineTo(q[3]).threePointsArcTo(q[5], q[4]).close();
       pieces.push({ id: `${b.id} bend`, solid: brepExtrude(brepDrawingSketch(sec, b.plane), b.len, false) });
     }
     this._pieces = pieces;
     let s = pieces.length > 1 ? ops.union(...pieces.map((p) => p.solid)) : pieces[0].solid;
-    // hardware, fused in: a body stands out of its face; ponytail: drawn as plain cylinders, nut and standoff diameters estimated (the catalog gives the hole, not the body)
+    // hardware, fused in: a body stands out of its face, nuts and standoffs bored through (plain, no threads) with the sheet; a nut in PEM_BODY gets
+    // its collar and shank, the rest are plain cylinders (ponytail: diameters estimated, the shop's catalog gives the hole, not the body; add PEM's drawing to PEM_BODY)
     const frameOfPanel = Object.fromEntries(panels.map((e) => [e.P.id, e.frame]));
     const place3 = (h) => { const f = frameOfPanel[h.panel]; return { p: v3.add(f.o, v3.add(v3.mul(f.u, h.at[0]), v3.mul(f.v, h.at[1]))), n: f.n }; };
+    const bores = [];
     const hw = this.pems.map((h) => {
       const { p, n } = place3(h), [kind, thread, H, , , len] = h.spec, up = h.face === 'in' ? n : v3.neg(n);
       const faceAt = h.face === 'in' ? v3.add(p, v3.mul(n, g.t)) : p, farAt = h.face === 'in' ? p : v3.add(p, v3.mul(n, g.t));
       if (kind === 'stud') return along(ops.cylinder(Math.max(thread, H * IN) / 2 + 0.05, len * IN), up, farAt);  // head flush in the far face; a hair over the hole so it fuses
-      return along(ops.cylinder((H * IN) / 2 + (kind === 'nut' ? 1.5 : 1), len * IN + 0.05), up, v3.add(faceAt, v3.mul(up, -0.05)));
+      bores.push(along(ops.cylinder(thread / 2, g.t + len * IN + 1), up, v3.add(farAt, v3.mul(up, -0.5))));
+      const body = PEM_BODY[h.sku];
+      if (!body) return along(ops.cylinder((H * IN) / 2 + (kind === 'nut' ? 1.5 : 1), len * IN + 0.05), up, v3.add(faceAt, v3.mul(up, -0.05)));
+      const [E, T, A] = body;  // the shank fills the sheet's hole (C is a hair under it) for A in from the face; the sheet cold flows round the rest
+      return ops.union(along(ops.cylinder(E / 2, T + 0.05), up, v3.add(faceAt, v3.mul(up, -0.05))),
+        along(ops.cylinder((H * IN) / 2 + 0.05, A + 0.05), v3.neg(up), v3.add(faceAt, v3.mul(up, 0.05))));
     });
     if (hw.length) s = ops.union(s, ...hw);
+    if (bores.length) s = ops.subtract(s, ...bores);
     const cones = this.sinks.map((h) => {
       const { p, n } = place3(h), [major, minor] = CSK_METRIC[h.size], down = h.face === 'out' ? n : v3.neg(n), e = 0.05;
       const top = h.face === 'out' ? p : v3.add(p, v3.mul(n, g.t));
@@ -392,10 +429,10 @@ class Part {
     const parts = panels.map((e) => ({ id: e.P.id, d: place(this._mold(e), e.map) }));
     const bendLines = [];
     for (const b of bends) {
-      const [a, z, o] = b.zone, off = (x) => [add(a, mul(o, x)), add(z, mul(o, x))];
-      const [p0, p1] = off(-rt), [q0, q1] = off(-rt + g.ba);
+      const [a, z, o] = b.zone, off = (x) => [add(a, mul(o, x)), add(z, mul(o, x))], { sb, ba } = bendOf(g, b.angle);
+      const [p0, p1] = off(-sb), [q0, q1] = off(-sb + ba);
       if (b.len > 1e-6) parts.push({ id: `${b.id} bend`, d: region([poly([p0, p1, q1, q0])], b.map) });
-      bendLines.push(Object.assign(off(-rt + g.ba / 2).map(b.map), { reverse: b.reverse }));
+      bendLines.push(Object.assign(off(-sb + ba / 2).map(b.map), { reverse: b.reverse, angle: b.angle }));
     }
     let d = parts[0].d;
     for (const p of parts.slice(1)) d = d.fuse(p.d);
