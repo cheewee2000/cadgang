@@ -42,6 +42,7 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     torus(majorR, minorR) about z; cone(r1, r2, h, {center}) — r2 = 0 for a point, r1 ≠ r2 for a frustum;
     coil(r, pitch, height, sectionR, {section:'circle'|'square'|'triangle', lefthand}) — a spring
   booleans: union/subtract/intersect(base, ...tools); interference(a, b) -> shared volume (0 = no clash).
+    name(shape, 'caster wheel, rubber') names its solids in the STEP (and the viewer's MATERIALS look reads a material word in the name: steel, stainless, rubber, aluminum…).
     compound(...shapes) keeps parts as SEPARATE bodies — an assembly, nothing fused: a lid seated on its body, a cap on a
     bottle. Measures report bodies = N and STEP writes N solids (union would fuse anything that touches).
     A union of bodies that do not touch is a MULTI-BODY result (a gap under 0.01 mm is a gap): measures report
@@ -86,6 +87,7 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     centroid(shape) -> [x,y,z]; mass(shape, g/cm³) -> grams;
     distance(a, b) closest approach; length(shape, edgeQuery) total edge length
   importStep(file, {body}) — an exact solid from a STEP file in the project folder (path relative to it): body i in file
+    scoped(fn) — build inside fn (one part: a sheet metal make, a union of many pieces) and keep only what it returns; the kernel's scraps go at once. Big cells need it, the kernel has ~2 GB.
     order, or every body as one compound. Parsed once per file; then edit it like anything built here (pushPull, split, subtract).
   NOT available (kernel build lacks the binding): delete/replace face, non-uniform scale, surface tools, text.
 
