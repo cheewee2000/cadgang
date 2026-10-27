@@ -13,6 +13,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { weldVertices, positionsBBox } from './mesh.js';
 import { stepSolidStyles } from './stepstyle.js';
 
@@ -29,8 +30,13 @@ export function importCadFileInWorker(buffer, opts = {}, { timeoutMs = 600_000 }
     const w = new Worker(fileURLToPath(new URL('./stepworker.js', import.meta.url)), { workerData: { buffer: copy, opts }, transferList: [copy.buffer] });
     const mb = (bytes.byteLength / 1048576).toFixed(0);
     const timer = setTimeout(() => { w.terminate(); reject(new Error(`Gave up reading '${opts.name || 'file'}' (${mb} MB) after ${timeoutMs / 1000} s`)); }, timeoutMs);
+    const started = performance.now();
     const done = (fn) => (v) => { clearTimeout(timer); fn(v); };
-    w.once('message', done((msg) => msg.ok ? resolve(msg.m) : reject(new Error(outOfMemory(msg.error) ? tooBig(opts.name, mb) : msg.error))));
+    w.once('message', done((msg) => {
+      if (!msg.ok) return reject(new Error(outOfMemory(msg.error) ? tooBig(opts.name, mb) : msg.error));
+      msg.m.timings = { ...msg.m.timings, workerRoundTripMs: +(performance.now() - started).toFixed(2) };
+      resolve(msg.m);
+    }));
     w.once('error', done((e) => reject(new Error(outOfMemory(e?.message) ? tooBig(opts.name, mb) : String(e?.message || e)))));
     w.once('exit', (code) => { if (code !== 0) done(reject)(new Error(tooBig(opts.name, mb))); });
   });
@@ -100,9 +106,12 @@ export function parseNative(buf) {
  * Options: name (filename, picks the reader by extension), linearDeflection
  * (bounding-box ratio, smaller = finer), angularDeflection (radians).
  * Returns { name, positions, normals, indices, faces:[{first,count}], bbox,
- *           vertexCount, triangleCount, faceCount } with plain JSON arrays.
+ *           vertexCount, triangleCount, faceCount, timings }. Geometry stays in
+ * typed arrays; metadata is plain JavaScript.
  */
 export async function importCadFile(buffer, { name = 'import.step', linearDeflection = 0.001, angularDeflection = 0.5 } = {}) {
+  const started = performance.now();
+  const readStarted = performance.now();
   const result = hasNative() ? await readNative(buffer, name, linearDeflection, angularDeflection)
     : readerFor(await getOcct(), name)(new Uint8Array(buffer), {
       linearUnit: 'millimeter',
@@ -110,6 +119,7 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
       linearDeflection,
       angularDeflection,
     });
+  const readMs = performance.now() - readStarted;
   if (!result?.success || !result.meshes?.length) {
     // The importer swallows its own out-of-memory (a 465 MB PCB export: 10 M
     // entities, 14k solids) and reports plain failure; size tells the two apart.
@@ -119,6 +129,7 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
   }
 
   // Merge sub-meshes, re-offsetting vertex indices and face triangle ranges.
+  const mergeStarted = performance.now();
   let vTotal = 0, iTotal = 0;
   for (const m of result.meshes) {
     vTotal += m.attributes.position.array.length / 3;
@@ -154,30 +165,45 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
     iOff += idx.length;
   }
 
+  const mergeMs = performance.now() - mergeStarted;
+
   // Groups: the importer flattens nested assemblies, so read the product tree from the STEP text itself.
+  const metadataStarted = performance.now();
   if (!/\.(igs|iges|brep)$/i.test(name)) {
     const parents = stepParents(buffer);
     for (const b of bodies) { const p = parents.get(b.name); if (p?.length) b.path = p; }
     fillStyles(buffer, result, bodies, parents);
   }
 
+  const metadataMs = performance.now() - metadataStarted;
+
   // Weld duplicated vertices along B-rep face borders (triangle order is
   // preserved, so the face ranges stay valid).
   const bbox = positionsBBox(positions);
   const diag = bbox ? Math.hypot(bbox.max[0] - bbox.min[0], bbox.max[1] - bbox.min[1], bbox.max[2] - bbox.min[2]) : 1;
+  const weldStarted = performance.now();
   const welded = weldVertices(positions, indices, Math.max(diag * 1e-6, 1e-5), normals);
+  const weldMs = performance.now() - weldStarted;
 
   return {
     name,
-    positions: Array.from(welded.positions),
-    normals: welded.normals ? Array.from(welded.normals) : null,
-    indices: Array.from(welded.indices),
+    // Keep geometry typed end-to-end. The worker transfers these buffers and the
+    // HTTP packer views them directly, avoiding two complete copies of a large model.
+    positions: welded.positions,
+    normals: welded.normals,
+    indices: welded.indices,
     faces,
     bodies,
     bbox,
     vertexCount: welded.positions.length / 3,
     triangleCount: welded.indices.length / 3,
     faceCount: faces.length,
+    timings: {
+      readMs: +readMs.toFixed(2), mergeMs: +mergeMs.toFixed(2),
+      metadataMs: +metadataMs.toFixed(2), weldMs: +weldMs.toFixed(2),
+      totalMs: +(performance.now() - started).toFixed(2),
+      importer: hasNative() ? 'native' : 'wasm',
+    },
   };
 }
 

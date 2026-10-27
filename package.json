@@ -14,7 +14,8 @@
     "mcp": "node src/mcp/index.js",
     "build": "bash mac/build.sh",
     "release": "bash mac/release.sh",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "bench:import": "node bench/import.mjs"
   },
   "engines": {
     "node": ">=22.2"
