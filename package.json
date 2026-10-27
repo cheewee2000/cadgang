@@ -15,7 +15,8 @@
     "build": "bash mac/build.sh",
     "release": "bash mac/release.sh",
     "test": "node --test test/*.test.js",
-    "bench:import": "node bench/import.mjs"
+    "bench:import": "node bench/import.mjs",
+    "bench:kernel": "node bench/kernel.mjs"
   },
   "engines": {
     "node": ">=22.2"
