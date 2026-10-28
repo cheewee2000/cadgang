@@ -19,7 +19,7 @@ import { CellDocument } from '../core/cells.js';
 import { cellsRouter } from './cells.js';
 import { historyRouter } from './history.js';
 import { optionsRouter } from './options.js';
-import { initBrep, brepHeapBytes } from '../core/brep.js';
+import { initBrep, brepHeapBytes, brepOperationStats } from '../core/brep.js';
 import { setImportRoot } from '../core/ops.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -60,7 +60,10 @@ app.use('/api', (req, res, next) => {
 /** This machine's first LAN IPv4: an iPad on the same Wi-Fi reaches the viewer at http://<lan>:PORT/view?follow. */
 // Only the desktop app lets a LAN client open local paths (mayReadLocal), so only it offers the link.
 const lan = () => process.env.CADGANG_DESKTOP === '1' && Object.values(os.networkInterfaces()).flat().find((i) => i.family === 'IPv4' && !i.internal)?.address || null;
-app.get('/api/health', (req, res) => res.json({ ok: true, version: VERSION, clients: wss.clients.size, lan: lan(), port: PORT, cells: cells.filePath }));
+app.get('/api/health', (req, res) => res.json({
+  ok: true, version: VERSION, clients: wss.clients.size, lan: lan(), port: PORT, cells: cells.filePath,
+  brep: { heapBytes: brepHeapBytes(), operations: brepOperationStats() },
+}));
 /** The open files: one per page that announced its subject (a ?follow page never does), the focused
  *  one flagged. An iPad follower shows them as tabs and trails the flagged one (v0.14.12: before it
  *  only ever saw the window that last posted a snapshot). */

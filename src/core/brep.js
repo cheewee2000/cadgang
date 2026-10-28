@@ -24,6 +24,7 @@ import url from 'node:url';
 import v8 from 'node:v8';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
+import { performance } from 'node:perf_hooks';
 import { GraphError } from './errors.js';
 import { buildMeshDistance } from './mesh.js';
 
@@ -183,11 +184,43 @@ function toGraphError(op, thrown) {
   return new GraphError(meaning ? `${op} failed: ${meaning} (kernel: ${raw})` : `${op} failed: ${raw}`);
 }
 
+/**
+ * Aggregate timings for exact-kernel calls. The map stays bounded because op is
+ * a vocabulary label from this module/ops.js, never user input. These are
+ * inclusive timings: a high-level operation such as thread includes the
+ * lower-level sweeps and booleans it invokes, which remain visible separately.
+ */
+const operationStats = new Map();
+function recordOperation(op, ms, failed) {
+  const s = operationStats.get(op) ?? { count: 0, failures: 0, totalMs: 0, maxMs: 0 };
+  s.count++;
+  if (failed) s.failures++;
+  s.totalMs += ms;
+  s.maxMs = Math.max(s.maxMs, ms);
+  operationStats.set(op, s);
+}
+
+/** A snapshot safe to expose from /api/health and benchmark tools. */
+export function brepOperationStats() {
+  return Object.fromEntries([...operationStats].sort((a, b) => b[1].totalMs - a[1].totalMs).map(([op, s]) => [op, {
+    count: s.count, failures: s.failures,
+    totalMs: +s.totalMs.toFixed(2), maxMs: +s.maxMs.toFixed(2),
+    meanMs: +(s.totalMs / s.count).toFixed(2),
+  }]));
+}
+
+/** Tests and benchmark runs use a fresh observation window. */
+export function resetBrepOperationStats() { operationStats.clear(); }
+
 /** Run an OCCT call, translating its failure mode into a GraphError. */
 function attempt(op, fn) {
+  const started = performance.now();
   try {
-    return fn();
+    const value = fn();
+    recordOperation(op, performance.now() - started, false);
+    return value;
   } catch (e) {
+    recordOperation(op, performance.now() - started, true);
     throw toGraphError(op, e);
   }
 }

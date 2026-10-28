@@ -9,7 +9,9 @@ import { importCadFile } from './step.js';
 
 try {
   const m = await importCadFile(workerData.buffer, workerData.opts);
-  parentPort.postMessage({ ok: true, m });
+  const transfer = [m.positions.buffer, m.indices.buffer];
+  if (m.normals) transfer.push(m.normals.buffer);
+  parentPort.postMessage({ ok: true, m }, transfer);
 } catch (e) {
   parentPort.postMessage({ ok: false, error: String(e?.message || e) });
 }
