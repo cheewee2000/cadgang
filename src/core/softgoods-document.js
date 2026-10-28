@@ -25,12 +25,12 @@ function vec3(v, what) {
   if (!Array.isArray(v) || v.length !== 3 || !v.every(finite)) throw new GraphError(`${what} must be three finite numbers`);
   return v.map(Number);
 }
-const defaults = () => ({ version: 1, revision: 0, materials: {}, patterns: [], seams: [], arrangement: [], simulation: { status: 'not_run' } });
+const defaults = () => ({ version: 1, revision: 0, materials: {}, patterns: [], seams: [], attachments: [], arrangement: [], simulation: { status: 'not_run' } });
 
 export function validateSoftgoodsDocument(value) {
   const d = { ...defaults(), ...clone(value || {}) };
   if (d.version !== 1) throw new GraphError(`Softgoods document version ${d.version} is not supported`);
-  if (!Array.isArray(d.patterns) || !Array.isArray(d.seams) || !Array.isArray(d.arrangement)) throw new GraphError('patterns, seams and arrangement must be arrays');
+  if (!Array.isArray(d.patterns) || !Array.isArray(d.seams) || !Array.isArray(d.attachments) || !Array.isArray(d.arrangement)) throw new GraphError('patterns, seams, attachments and arrangement must be arrays');
   const patterns = new Map();
   for (const raw of d.patterns) {
     const id = identifier(raw.id, 'pattern');
@@ -68,6 +68,13 @@ export function validateSoftgoodsDocument(value) {
       if (!p || !p.segments.has(ref.segment)) throw new GraphError(`Seam '${id}' ${side} refers to missing segment '${ref?.pattern}.${ref?.segment}'`);
     }
     if (s.ease != null && (!finite(s.ease) || Number(s.ease) < 0)) throw new GraphError(`Seam '${id}' ease must be non-negative`);
+  }
+  const attachmentIds = new Set();
+  for (const a of d.attachments) {
+    const id = identifier(a.id, 'attachment'); if (attachmentIds.has(id)) throw new GraphError(`Two attachments are named '${id}'`); attachmentIds.add(id);
+    if (!patterns.has(a.pattern)) throw new GraphError(`Attachment '${id}' refers to missing pattern '${a.pattern}'`);
+    if (!Array.isArray(a.at) || a.at.length !== 2 || !a.at.every(finite)) throw new GraphError(`Attachment '${id}' at must be two finite pattern coordinates`);
+    vec3(a.to, `Attachment '${id}' target`);
   }
   const arranged = new Set();
   for (const a of d.arrangement) {

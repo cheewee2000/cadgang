@@ -99,7 +99,7 @@ The repo ships `.mcp.json` (and `.codex/config.toml`), so opening it in Claude C
 
 ## Softgoods workspace (foundation)
 
-Softgoods are prompt-authored through `cadgang_softgoods_get` / `cadgang_softgoods_set`, reviewed in 3D at `/softgoods`, then exported with `cadgang_softgoods_export` as one DXF per authoritative pattern plus JSON and printable HTML tech packs. The persistent `<project>/cadgang/softgoods.json` owns stable point, curve, segment and seam IDs, curved contours, per-edge allowances, notches, grain and arrangement. There is deliberately no manual 2D drafting UI. Simulation is marked **not connected** until a worker solver with cloth-to-cloth collision replaces the experimental PR #8 drape.
+Softgoods are prompt-authored through `cadgang_softgoods_get` / `cadgang_softgoods_set`, reviewed in 3D at `/softgoods`, then exported with `cadgang_softgoods_export` as one DXF per authoritative pattern plus JSON and printable HTML tech packs. The persistent `<project>/cadgang/softgoods.json` owns stable point, curve, segment and seam IDs, curved contours, per-edge allowances, notches, grain and arrangement. There is deliberately no manual 2D drafting UI. The 3D review includes an **experimental XPBD preview** generated from boundary-conforming triangle meshes, with grain-aware warp/weft/bias compliance, seam constraints and fixed attachments in a browser worker. It does not yet have body, panel or self-collision, so it is not a fit guarantee.
 
 ## REST
 

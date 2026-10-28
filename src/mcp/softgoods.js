@@ -28,11 +28,12 @@ export function registerSoftgoodsTools(server, { call, ok, fail }) {
   }, async () => { try { return ok(await call('/softgoods/document')); } catch (e) { return fail(e); } });
 
   server.registerTool('cadgang_softgoods_set', {
-    title: 'Set the prompt-authored softgoods design', description: `${GUIDE}\n\nReplace the complete design after translating the user's description into manufacturing patterns, seams and a 3D arrangement. Read the current design first when editing it.`,
+    title: 'Set the prompt-authored softgoods design', description: `${GUIDE}\n\nReplace the complete design after translating the user's description into manufacturing patterns, seams, attachments and a 3D arrangement. Read the current design first when editing it.`,
     inputSchema: {
       materials: z.record(z.object({ name: z.string().optional(), weightGsm: z.number().positive().optional(), thicknessMm: z.number().positive().optional(), notes: z.string().optional() })).optional(),
       patterns: z.array(pattern),
       seams: z.array(z.object({ id: z.string(), a: ref, b: ref, flip: z.boolean().optional(), ease: z.number().nonnegative().optional(), kind: z.string().optional(), correspondence: z.array(z.any()).optional() })),
+      attachments: z.array(z.object({ id: z.string(), pattern: z.string(), at: z.array(z.number()).length(2), to: z.array(z.number()).length(3), kind: z.string().optional() })).optional(),
       arrangement: z.array(z.object({ pattern: z.string(), position: z.array(z.number()).length(3), rotation: z.array(z.number()).length(3), layer: z.number().optional() })),
     }, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   }, async (body) => { try { return ok(await call('/softgoods/document', { method: 'PUT', body: { version: 1, revision: 0, simulation: { status: 'not_run' }, ...body } })); } catch (e) { return fail(e); } });

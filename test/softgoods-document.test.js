@@ -41,3 +41,11 @@ test('curved segments and per-edge allowances are first-class document data', ()
   }] };
   assert.equal(validateSoftgoodsDocument(d).patterns[0].allowances.round, 8);
 });
+
+test('attachments persist pattern coordinates and fixed 3D targets', () => {
+  const d = new SoftgoodsDocument(null); d.addRectangle({ id: 'strap' });
+  const x = d.toJSON(); x.attachments.push({ id: 'top_tack', pattern: 'strap', at: [100, 150], to: [0, 0, 500], kind: 'bar_tack' });
+  assert.equal(validateSoftgoodsDocument(x).attachments[0].to[2], 500);
+  x.attachments[0].pattern = 'gone';
+  assert.throws(() => validateSoftgoodsDocument(x), /missing pattern/);
+});
