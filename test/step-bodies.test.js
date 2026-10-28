@@ -8,13 +8,18 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { importCadFile } from '../src/core/step.js';
+import { importCadFile, importCadFileInWorker } from '../src/core/step.js';
 import { pack } from '../src/server/view.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'asm.step');
 
 test('a three-solid STEP imports as three bodies whose ranges tile the triangles', async () => {
   const m = await importCadFile(fs.readFileSync(fixture), { name: 'asm.step' });
+  assert.ok(m.positions instanceof Float32Array);
+  assert.ok(m.indices instanceof Uint32Array);
+  assert.ok(m.normals == null || m.normals instanceof Float32Array);
+  assert.ok(['wasm', 'native'].includes(m.timings.importer));
+  assert.ok(m.timings.totalMs >= 0);
   assert.equal(m.bodies.length, 3);
   assert.equal(m.bodies[0].first, 0);
   for (let i = 1; i < m.bodies.length; i++) assert.equal(m.bodies[i - 1].first + m.bodies[i - 1].count, m.bodies[i].first);
@@ -72,4 +77,13 @@ test("a product OpenCascade named after itself is no folder", async () => {
   // the fixture's three solids sit in products OCCT's writer called "Open CASCADE STEP translator 7.6 1.n"
   const m = await importCadFile(fs.readFileSync(fixture), { name: 'asm.step' });
   for (const b of m.bodies) assert.ok(!(b.path ?? []).some((g) => /^Open CASCADE/i.test(g)), JSON.stringify(b.path));
+});
+
+test('the import worker transfers typed geometry and reports round-trip timing', async () => {
+  const m = await importCadFileInWorker(fs.readFileSync(fixture), { name: 'asm.step' });
+  assert.ok(m.positions instanceof Float32Array);
+  assert.ok(m.indices instanceof Uint32Array);
+  assert.ok(m.normals == null || m.normals instanceof Float32Array);
+  assert.ok(m.timings.workerRoundTripMs >= m.timings.totalMs);
+  assert.doesNotThrow(() => pack(m));
 });

@@ -69,8 +69,13 @@ export function fileWatcher(broadcast) {
  * Bodies are triangle ranges, one per imported solid, so the viewer can show, hide and explode them one by one.
  */
 export function pack(m) {
-  const pos = Float32Array.from(m.positions), idx = Uint32Array.from(m.indices);
-  const nrm = Float32Array.from(m.normals?.length === m.positions.length ? m.normals : []);
+  // Import already returns these exact element types. Reuse them instead of
+  // copying the complete model immediately before packing it for the browser.
+  const pos = m.positions instanceof Float32Array ? m.positions : Float32Array.from(m.positions);
+  const idx = m.indices instanceof Uint32Array ? m.indices : Uint32Array.from(m.indices);
+  const nrm = m.normals?.length === m.positions.length
+    ? (m.normals instanceof Float32Array ? m.normals : Float32Array.from(m.normals))
+    : new Float32Array();
   const faces = new Uint32Array(m.faces.length * 2);
   m.faces.forEach((f, i) => { faces[2 * i] = f.first; faces[2 * i + 1] = f.count; });
   const bodyList = m.bodies?.length ? m.bodies : [{ first: 0, count: idx.length / 3, name: m.name || 'body' }];
@@ -405,7 +410,10 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       const t0 = Date.now();
       // Deflection is a bbox ratio: 0.001 is CAD-viewer quality; coarser for huge assemblies is the caller's call.
       const m = await importCadFile(src.buffer, { name: src.name, linearDeflection: parseFloat(req.query.deflection || '0.0008') });
-      res.set('Content-Type', 'application/octet-stream').set('X-Ms', String(Date.now() - t0)).send(pack(m));
+      res.set('Content-Type', 'application/octet-stream')
+        .set('X-Ms', String(Date.now() - t0))
+        .set('X-Cadgang-Timings', JSON.stringify(m.timings ?? {}))
+        .send(pack(m));
     } catch (e) { next(e); }
   });
 
