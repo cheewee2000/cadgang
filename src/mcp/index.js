@@ -15,6 +15,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { registerCellTools } from './cells.js';
+import { registerSoftgoodsTools } from './softgoods.js';
 
 const BASE = (process.env.CADGANG_URL || 'http://localhost:4477').replace(/\/$/, '');
 const VERSION = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../package.json'), 'utf8')).version;
@@ -381,6 +382,7 @@ server.registerTool(
 );
 
 registerCellTools(server, { call, ok, fail, base: BASE, headers: HEADERS });
+registerSoftgoodsTools(server, { call, ok, fail });
 // Claude Code starts this server in the project folder: make it cadgang's project (unless a document is already open elsewhere).
 fetch(`${BASE}/api/project`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: process.cwd(), ifUnset: true }) })
   .then((r) => (r.ok ? r.json() : null)).then((p) => p && console.error(p.kept ? `cadgang project folder stays ${p.dir} (a document is open there)` : `cadgang project folder: ${p.dir}`)).catch(() => {});

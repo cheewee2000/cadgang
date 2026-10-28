@@ -99,7 +99,7 @@ The repo ships `.mcp.json` (and `.codex/config.toml`), so opening it in Claude C
 
 ## Softgoods workspace (foundation)
 
-`/softgoods` is a linked 2D pattern and 3D arrangement workspace backed by `<project>/cadgang/softgoods.json`. Patterns own stable point and segment IDs, curved contours, per-edge seam allowances, notches and grain; seams refer to segment IDs so moving a corner does not retarget a seam. The first slice supports rectangular panels, corner dragging and visual edge-to-edge sewing. Simulation is deliberately marked **not connected** until a worker-based cloth solver with cloth-to-cloth collision replaces the experimental PR #8 drape.
+Softgoods are prompt-authored through `cadgang_softgoods_get` / `cadgang_softgoods_set`, reviewed in 3D at `/softgoods`, then exported with `cadgang_softgoods_export` as one DXF per authoritative pattern plus JSON and printable HTML tech packs. The persistent `<project>/cadgang/softgoods.json` owns stable point, curve, segment and seam IDs, curved contours, per-edge allowances, notches, grain and arrangement. There is deliberately no manual 2D drafting UI. Simulation is marked **not connected** until a worker solver with cloth-to-cloth collision replaces the experimental PR #8 drape.
 
 ## REST
 

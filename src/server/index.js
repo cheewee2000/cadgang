@@ -83,7 +83,7 @@ function tabs() {
 const broadcastTabs = () => broadcast({ type: 'tabs', tabs: tabs() });
 app.get('/api/view/tabs', (req, res) => res.json({ tabs: tabs() }));
 app.use('/api/view', viewRouter({ dataDir: DATA, broadcast }));
-app.use('/api/softgoods', softgoodsRouter(softgoods, { broadcast }));
+app.use('/api/softgoods', softgoodsRouter(softgoods, { exportDir: () => project.dir || process.cwd(), broadcast }));
 // The OCCT WASM heap only ever grows; near its 2 GB cap every operation fails with malloc errors and
 // nothing crashes, so the supervisor never restarts it. Leave on purpose between requests instead.
 let inflight = 0;

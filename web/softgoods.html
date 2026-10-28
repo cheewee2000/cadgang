@@ -1,18 +1,4 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>cadgang · softgoods</title>
-  <link rel="stylesheet" href="cwandt.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="softgoods.css">
-</head>
-<body>
-<header><div class="brand"><div class="logo">CW&amp;T&nbsp;·&nbsp;CADGANG</div><span class="proj-sep">/</span><span class="project-name">softgoods</span></div>
-<div class="toolbar"><a class="ghost linkbtn" href="/view">Viewer</a><a class="ghost linkbtn" href="/cells">Cells</a><span class="sep"></span><button id="newRect" class="ghost">NEW RECTANGLE</button><button id="sew" class="ghost">SEW</button><span id="status" class="status"></span></div></header>
-<main>
-  <aside id="patterns"><div class="panel-head">PATTERNS <span id="count"></span></div><div id="patternList"></div><div class="hint">The 2D pattern is the manufacturing source. Drag corners to reshape. Click SEW, then one edge on each pattern.</div></aside>
-  <section id="draft"><div class="pane-head">2D PATTERN</div><canvas id="patternCanvas"></canvas></section>
-  <section id="arrange"><div class="pane-head">3D ARRANGEMENT</div><canvas id="arrangeCanvas"></canvas><div id="experimental">SIMULATION NOT CONNECTED · PR #8 DRAPE REMAINS EXPERIMENTAL</div></section>
-</main>
-<footer><span id="summary"></span><span>Stable pattern, segment and seam IDs · mm</span></footer>
-<script type="module" src="softgoods.js"></script>
-</body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>cadgang · softgoods</title><link rel="stylesheet" href="cwandt.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="softgoods.css"></head><body>
+<header><div class="brand"><div class="logo">CW&amp;T&nbsp;·&nbsp;CADGANG</div><span class="proj-sep">/</span><span class="project-name">softgoods</span></div><div class="toolbar"><a class="ghost linkbtn" href="/view">Viewer</a><a class="ghost linkbtn" href="/cells">Cells</a><span class="sep"></span><button id="export" class="ghost">EXPORT PATTERNS + TECH PACK</button><span id="status" class="status"></span></div></header>
+<main><aside id="design"><div class="panel-head">PROMPT-AUTHORED DESIGN</div><div id="summary"></div><div id="patterns"></div><div id="seams"></div><div class="hint">Create or revise this design by prompting Claude Code with CADgang connected. The structured pattern document is the manufacturing source; this page is for 3D review.</div></aside><section id="review"><div class="pane-head">3D ARRANGEMENT REVIEW</div><canvas id="arrangeCanvas"></canvas><div id="experimental">CLOTH SIMULATION NOT CONNECTED · ARRANGEMENT PREVIEW ONLY</div></section></main>
+<footer><span id="revision"></span><span>Prompt → structured patterns → 3D review → DXF + tech pack</span></footer><script type="module" src="softgoods.js"></script></body></html>
