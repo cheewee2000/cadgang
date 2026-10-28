@@ -21,6 +21,8 @@ import { historyRouter } from './history.js';
 import { optionsRouter } from './options.js';
 import { initBrep, brepHeapBytes, brepOperationStats } from '../core/brep.js';
 import { setImportRoot } from '../core/ops.js';
+import { SoftgoodsDocument } from '../core/softgoods-document.js';
+import { softgoodsRouter } from './softgoods.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -31,6 +33,7 @@ const DATA = process.env.CADGANG_DATA || path.join(ROOT, 'data');
 // The cell stack (prompt -> code -> B-rep) is its own document: <project>/cadgang/cells.json once a project is set.
 const CELLS_PATH = process.env.CADGANG_CELLS || path.join(DATA, 'cells.json');
 const cells = new CellDocument(CELLS_PATH);
+const softgoods = new SoftgoodsDocument(path.join(path.dirname(CELLS_PATH), 'softgoods.json'));
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -80,6 +83,7 @@ function tabs() {
 const broadcastTabs = () => broadcast({ type: 'tabs', tabs: tabs() });
 app.get('/api/view/tabs', (req, res) => res.json({ tabs: tabs() }));
 app.use('/api/view', viewRouter({ dataDir: DATA, broadcast }));
+app.use('/api/softgoods', softgoodsRouter(softgoods, { broadcast }));
 // The OCCT WASM heap only ever grows; near its 2 GB cap every operation fails with malloc errors and
 // nothing crashes, so the supervisor never restarts it. Leave on purpose between requests instead.
 let inflight = 0;
@@ -102,6 +106,7 @@ function setProject(dir) {
   project.dir = dir;
   setImportRoot(dir);
   cells.openAt(path.join(dir, 'cadgang', 'cells.json'));
+  softgoods.filePath = path.join(dir, 'cadgang', 'softgoods.json'); softgoods.load();
 }
 if (project.dir) setProject(project.dir);
 app.get('/api/project', (req, res) => res.json({ dir: project.dir, cells: cells.filePath }));
@@ -160,6 +165,7 @@ process.on('uncaughtException', (e) => console.error('uncaught exception:', e?.s
 app.get(['/', '/view'], (req, res) => res.sendFile(path.join(ROOT, 'web', 'view.html')));
 // The cell stack is its own page; it shares the server and the kernel with the viewer, nothing else.
 app.get('/cells', (req, res) => res.sendFile(path.join(ROOT, 'web', 'cells.html')));
+app.get('/softgoods', (req, res) => res.sendFile(path.join(ROOT, 'web', 'softgoods.html')));
 // Static assets revalidate rather than sit in the cache for days, so a deploy takes effect
 // on the next load instead of whenever the proxy's default lifetime happens to expire.
 app.use(express.static(path.join(ROOT, 'web'), { setHeaders: (res) => res.set('Cache-Control', 'no-cache') }));
