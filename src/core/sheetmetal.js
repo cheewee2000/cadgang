@@ -310,6 +310,8 @@ class Part {
             cuts.push(slot(...add(at, mul(E.o, ext)), ...add(at, mul(E.o, -(d - w / 2))), w / 2));
           }
         }
+        // a flange run past its parent's edge (from < 0, to > len) bends only where the parent has material
+        b0 = Math.max(b0, 0); b1 = Math.min(b1, E.len);
         // the bend's own strip; its line stays sharp (a round there would eat into the bend)
         const s0 = E.p(b0), s1 = add(E.p(b1), mul(E.o, -sbK));
         protect.push([add(E.p(b0), mul(E.o, -sbK)), s1]);

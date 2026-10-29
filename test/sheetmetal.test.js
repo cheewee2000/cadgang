@@ -153,3 +153,13 @@ test('tabs: a second flange on the same edge, tagged, each held off the corners'
   assert.equal(p._layout().bends.filter((b) => b.id.startsWith('base.r')).length, 2, 'two bends on the right edge');
   assert.ok(p.rules(p.flat()).every((r) => r.ok), p.rules(p.flat()).filter((r) => !r.ok).map((r) => r.label).join('; '));
 });
+
+test('a flange run past its parent edge bends only along the parent (no bend-strip tail past it)', () => {
+  const scope = beginBrepScope();
+  try {
+    const sm = sheetMetalNamespace([], []);
+    const p = sm.part('point', g).base(100, 50).flange('base.b', 20, { angle: 45, from: -10, to: 110 });
+    const bend = p.flat().parts.find((x) => x.id === 'base.b bend').d.boundingBox;
+    assert.ok(bend.width < 100.01, `bend strip ${bend.width} mm long on a 100 mm edge`);
+  } finally { scope.dispose(); }
+});
