@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
+import crypto from 'node:crypto';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { viewRouter } from './view.js';
@@ -118,30 +119,46 @@ app.post('/api/project', (req, res, next) => {
   } catch (e) { next(e); }
 });
 /** A cell document's routes: the cells, their history and option sets. */
-function cellRoutes(doc, proj) {
+function cellRoutes(doc, proj, session = null) {
   const api = cellsRouter(doc, ROOT, { project: proj }), r = express.Router();
+  doc.onChange(() => broadcast({ type: 'cells_changed', revision: doc.revision, session }));
   r.use('/history', historyRouter(doc, { dirOf: () => path.join(path.dirname(doc.filePath || CELLS_PATH), 'history'), modelOf: api.modelOf, broadcast }));
   r.use('/options', optionsRouter(doc, { modelOf: api.modelOf, broadcast }));
   r.use(api);
   return r;
 }
-const appRoutes = cellRoutes(cells, project);
+const appRoutes = cellRoutes(cells, project, null);
 // Each Claude session's MCP server names its folder (X-Cadgang-Project): it gets that folder's own
 // document, exports and history, so two sessions never write into each other's project. The app's
 // pages send no header and work in the app's project.
-const sessions = new Map();   // folder → routes
+const sessions = new Map();   // folder → {key, dir, routes}
+const sessionKeys = new Map(); // opaque browser key → session entry
 // A session's build holds the one thread, and every tab's load waits behind it: the tabs say why.
 let working = 0;
 function busy(d, what) { working += d; if (d > 0 && working === 1) broadcast({ type: 'busy', what }); if (!working) broadcast({ type: 'busy', what: null }); }
 app.use('/api/cells', (req, res, next) => {
-  const h = req.get('x-cadgang-project');
-  const dir = h && path.resolve(h);
-  if (dir && !req.query.wait) { busy(+1, `Claude (${path.basename(dir)}) is building…`); res.once('close', () => busy(-1)); }
-  if (!dir || dir === project.dir || !fs.existsSync(dir)) { setImportRoot(project.dir || process.cwd()); return appRoutes(req, res, next); }
-  if (!sessions.has(dir)) sessions.set(dir, cellRoutes(new CellDocument(path.join(dir, 'cadgang', 'cells.json')), { dir }));
-  // ponytail: importStep reads one global root, set per request; two sessions evaluating in the same tick could cross. Pass the root down if that bites.
-  setImportRoot(dir);
-  sessions.get(dir)(req, res, next);
+  // MCP alone names a filesystem folder. The browser follows with an opaque
+  // key, so no local path appears in its URL or becomes a read primitive.
+  const header = req.get('x-cadgang-project');
+  let dir = header && path.resolve(header), entry = null;
+  if (header) {
+    if (!fs.existsSync(dir)) return res.status(404).json({ error: `Project folder no longer exists: ${dir}` });
+    if (dir !== project.dir) {
+      if (!sessions.has(dir)) {
+        entry = { key: crypto.randomBytes(12).toString('base64url'), dir };
+        entry.routes = cellRoutes(new CellDocument(path.join(dir, 'cadgang', 'cells.json')), { dir }, entry.key);
+        sessions.set(dir, entry); sessionKeys.set(entry.key, entry);
+      } else entry = sessions.get(dir);
+    }
+    broadcast({ type: 'cells_project_active', session: entry?.key ?? null, name: path.basename(dir) });
+  } else if (req.query.session) {
+    entry = sessionKeys.get(String(req.query.session));
+    if (!entry) return res.status(404).json({ error: 'That live authoring session is no longer available' });
+  }
+  if (header && dir && !req.query.wait) { busy(+1, `Claude (${path.basename(dir)}) is building…`); res.once('close', () => busy(-1)); }
+  if (!entry) { setImportRoot(project.dir || process.cwd()); return appRoutes(req, res, next); }
+  setImportRoot(entry.dir);
+  entry.routes(req, res, next);
 });
 // Load the kernel now so the first evaluate does not pay the WASM load.
 initBrep().catch((e) => console.error('B-rep kernel failed to load:', e.message));
@@ -171,7 +188,6 @@ app.get('/softgoods', (req, res) => res.sendFile(path.join(ROOT, 'web', 'softgoo
 app.use(express.static(path.join(ROOT, 'web'), { setHeaders: (res) => res.set('Cache-Control', 'no-cache') }));
 
 // Pages compare this with what they loaded and reload themselves when the server came back newer.
-cells.onChange(() => broadcast({ type: 'cells_changed', revision: cells.revision }));
 wss.on('connection', (ws) => {
   ws.send(JSON.stringify({ type: 'hello', version: VERSION, cellsRevision: cells.revision }));
   active ??= ws;

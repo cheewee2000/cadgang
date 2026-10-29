@@ -21,11 +21,14 @@ import { createMarkup } from './markup.js';
 
 const $ = (sel) => document.querySelector(sel);
 const API = '/api/cells';
+let followedSession = new URLSearchParams(location.search).get('session');
+const cellURL = (path) => { const u = new URL(API + path, location.href); if (followedSession) u.searchParams.set('session', followedSession); return u.pathname + u.search; };
+const sessionMatches = (key) => (key || null) === (followedSession || null);
 
 // ---------------------------------------------------------------- transport
 
 async function api(path, { method = 'GET', body } = {}) {
-  const res = await fetch(API + path, {
+  const res = await fetch(cellURL(path), {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -37,7 +40,8 @@ async function api(path, { method = 'GET', body } = {}) {
 
 /** A ?bin=1 mesh (see sendBinaryMesh on the server): typed arrays, no JSON number parsing. */
 async function apiMesh(path) {
-  const res = await fetch(API + path + (path.includes('?') ? '&' : '?') + 'bin=1' + (scrubbing ? '&draft=1' : ''));
+  const suffix = (path.includes('?') ? '&' : '?') + 'bin=1' + (scrubbing ? '&draft=1' : '');
+  const res = await fetch(cellURL(path + suffix));
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `HTTP ${res.status}`);
@@ -776,7 +780,7 @@ async function renderOptions() {
     card.className = 'opt' + (viewingOption === o.i ? ' viewing' : '');
     const m = o.measures;
     card.innerHTML = `
-      <img src="${API}/options/${o.i}.png?${set.id}" alt="" onerror="this.style.visibility='hidden'">
+      <img src="${cellURL(`/options/${o.i}.png?set=${encodeURIComponent(set.id)}`)}" alt="" onerror="this.style.visibility='hidden'">
       <div class="opt-label"></div>
       ${o.error ? `<div class="opt-err"></div>` : `<div class="opt-meas">${m ? `vol ${fmt(m.volume)} · ${m.bbox.size.map(fmt).join(' × ')}` : ''}</div>`}
       <button class="ghost" ${o.error ? 'disabled' : ''}>CHOOSE</button>`;
@@ -842,7 +846,7 @@ async function renderHistory() {
     const el = document.createElement('div');
     el.className = 'hver' + (viewingVersion === v.n ? ' viewing' : '');
     el.innerHTML = `
-      <img src="${API}/history/${v.n}.png?t=${encodeURIComponent(v.at)}" alt="" onerror="this.style.visibility='hidden'">
+      <img src="${cellURL(`/history/${v.n}.png?t=${encodeURIComponent(v.at)}`)}" alt="" onerror="this.style.visibility='hidden'">
       <div>
         <div class="v-meta"><span>#${v.n}</span><span class="v-kind">${v.kind}</span><span>${ago(v.at)}</span><span>${v.cells} cell${v.cells === 1 ? '' : 's'}</span></div>
         ${v.note ? `<div class="v-note"></div>` : ''}
@@ -1043,7 +1047,7 @@ window.addEventListener('keydown', (e) => {
 $('#stepBtn').onclick = async () => {
   say('Exporting STEP…');
   try {
-    const res = await fetch(`${API}/export/step`);
+    const res = await fetch(cellURL('/export/step'));
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.error || `HTTP ${res.status}`);
@@ -1071,7 +1075,15 @@ function connect() {
     // Non-structural on purpose: a real change of structure is caught by the
     // signature check inside, while a drawn line or a turned knob must not
     // remount every canvas on the page.
-    if (msg.type === 'cells_changed' && msg.revision !== doc.revision && !inFlight) refresh({ structural: false });
+    if (msg.type === 'cells_project_active' && msg.session !== undefined && msg.session !== followedSession) {
+      followedSession = msg.session;
+      const u = new URL(location.href); if (followedSession) u.searchParams.set('session', followedSession); else u.searchParams.delete('session'); window.history.replaceState(null, '', u);
+      document.querySelector('.project-name').textContent = msg.name || 'live';
+      say(`Following Claude in ${msg.name || 'the active project'}`);
+      structureSig = ''; framed = false;
+      refresh({ structural: true });
+    }
+    if (msg.type === 'cells_changed' && sessionMatches(msg.session) && msg.revision !== doc.revision && !inFlight) refresh({ structural: false });
     if (msg.type === 'history_changed') renderHistory();
     if (msg.type === 'options_changed') renderOptions();
     if (msg.type === 'snapshot_request') postSnapshot();
@@ -1085,6 +1097,7 @@ function connect() {
 // -------------------------------------------------------------------- boot
 
 applyTheme();
+if (followedSession) document.querySelector('.project-name').textContent = 'live';
 resize();
 fetch('/api/health')
   .then((r) => r.json())
