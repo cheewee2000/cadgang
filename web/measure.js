@@ -85,7 +85,7 @@ function solve(A, b) {   // Gaussian elimination with partial pivoting, n ≤ 4
   return M.map((row, i) => row[n] / row[i]);
 }
 
-export function createMeasure({ THREE, scene, renderer, getCamera, model, layer, getOrbit, say, onChange }) {
+export function createMeasure({ THREE, scene, renderer, getCamera, model, layer, getOrbit, say, onChange, keyOf = () => null, bodyOf = () => null }) {
   const RED = 0xd11d1d;
   const SNAP_PX = 12, CURVE_PX = 8;
   const lineMat = new THREE.LineBasicMaterial({ color: RED, depthTest: false });
@@ -103,8 +103,8 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     for (const m of model.children) {
       if (!m.visible) continue;
       m.updateMatrixWorld(true);
-      if (m.isLine) out.push({ pos: m.geometry.getAttribute('position').array, matrix: m.matrixWorld });
-      else if (m.userData.edges) { m.userData.edges.updateMatrixWorld(true); out.push({ pos: m.userData.edges.geometry.getAttribute('position').array, matrix: m.userData.edges.matrixWorld }); }
+      if (m.isLine) out.push({ pos: m.geometry.getAttribute('position').array, matrix: m.matrixWorld, mesh: m });
+      else if (m.userData.edges) { m.userData.edges.updateMatrixWorld(true); out.push({ pos: m.userData.edges.geometry.getAttribute('position').array, matrix: m.userData.edges.matrixWorld, mesh: m }); }
     }
     return out;
   }
@@ -117,24 +117,24 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     // nodes and segments, welded by position
     const nodes = new Map(); const segs = [];
     const node = (p) => { const k = key(p); let n = nodes.get(k); if (!n) { n = { p, segs: [] }; nodes.set(k, n); } return n; };
-    for (const { pos, matrix } of sources()) {
+    for (const { pos, matrix, mesh } of sources()) {
       for (let i = 0; i + 5 < pos.length; i += 6) {
         const a = new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]).applyMatrix4(matrix);
         const b = new THREE.Vector3(pos[i + 3], pos[i + 4], pos[i + 5]).applyMatrix4(matrix);
         if (a.distanceTo(b) < q) continue;
-        const s = { a: node(a), b: node(b), used: false }; s.a.segs.push(s); s.b.segs.push(s); segs.push(s);
+        const s = { a: node(a), b: node(b), used: false, mesh }; s.a.segs.push(s); s.b.segs.push(s); segs.push(s);
       }
     }
     // chains: walk from every open end first, then whatever loops remain
     const chains = [];
     const walk = (start, seg) => {
-      const pts = [start.p]; let n = start, s = seg;
+      const pts = [start.p]; pts.mesh = seg.mesh; let n = start, s = seg;
       while (s && !s.used) { s.used = true; n = s.a === n ? s.b : s.a; pts.push(n.p); s = n.segs.length === 2 ? n.segs.find((x) => x !== s) : null; }
       return pts;
     };
     for (const n of nodes.values()) if (n.segs.length !== 2) for (const s of n.segs) if (!s.used) chains.push(walk(n, s));
     for (const s of segs) if (!s.used) chains.push(walk(s.a, s));
-    for (const pts of chains) classify(pts, scale);
+    for (const pts of chains) { const n0 = features.length; classify(pts, scale); for (let i = n0; i < features.length; i++) features[i].mesh = pts.mesh; }   // a feature knows its body: dims anchor to it
     for (const f of features) {
       if (f.kind === 'line') { addSnap('end', f.a, f); addSnap('end', f.b, f); addSnap('mid', f.a.clone().lerp(f.b, 0.5), f); }
       else {
@@ -365,7 +365,8 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     if (face) faceMesh({ mesh: hit.object, ...face }, hl);
     return hit ?? null;
   }
-  const entity = (h, e) => (h.face && !h.snap && !h.f && !e.altKey ? { face: faceData(h.face), raw: h.face } : { p: h.p.clone() });
+  const meshOf = (h) => h.face?.mesh ?? h.f?.mesh ?? h.snap?.f?.mesh ?? null;
+  const entity = (h, e) => ({ mesh: meshOf(h), ...(h.face && !h.snap && !h.f && !e.altKey ? { face: faceData(h.face), raw: h.face } : { p: h.p.clone() }) });
 
   // ----------------------------------------------------------------- faces
   const faceCache = new Map();
@@ -451,10 +452,11 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     if (!h) return;
     if (!h.snap && h.f) {                                   // the edge itself: one-click dimension
       pending = null; clearSel();
+      const m = h.f.mesh;
       if (h.f.kind === 'arc') add(h.f.closed
         ? { kind: 'dia', c: h.f.c.toArray(), r: h.f.r, u: h.f.u.toArray(), v: h.f.v.toArray() }
-        : { kind: 'rad', c: h.f.c.toArray(), r: h.f.r, p: h.f.pts[Math.floor(h.f.pts.length / 2)].toArray() });
-      else add({ kind: 'len', a: h.f.a.toArray(), b: h.f.b.toArray() });
+        : { kind: 'rad', c: h.f.c.toArray(), r: h.f.r, p: h.f.pts[Math.floor(h.f.pts.length / 2)].toArray() }, m);
+      else add({ kind: 'len', a: h.f.a.toArray(), b: h.f.b.toArray() }, m);
       return;
     }
     const ent = entity(h, e);
@@ -463,27 +465,50 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
       if (ent.face) faceMesh(ent.raw, sel); else marker(ent.p, sel);
       if (ent.face) {
         const surf = surfaceOf(ent.face);                     // a curved face reads itself at once
-        if (surf?.kind === 'cyl') { add(surf.closed ? { kind: 'dia', c: surf.c.toArray(), r: surf.r, u: surf.u.toArray(), v: surf.v.toArray() } : { kind: 'rad', c: surf.c.toArray(), r: surf.r, p: surf.p.toArray() }); say(`${text(dims[dims.length - 1])} — pick a second face or a point for a distance`); }
-        else if (surf?.kind === 'sphere') { add({ kind: 'rad', sph: true, c: surf.c.toArray(), r: surf.r, p: surf.p.toArray() }); say(`${text(dims[dims.length - 1])} — pick a second face or a point for a distance`); }
+        if (surf?.kind === 'cyl') { add(surf.closed ? { kind: 'dia', c: surf.c.toArray(), r: surf.r, u: surf.u.toArray(), v: surf.v.toArray() } : { kind: 'rad', c: surf.c.toArray(), r: surf.r, p: surf.p.toArray() }, ent.mesh); say(`${text(dims[dims.length - 1])} — pick a second face or a point for a distance`); }
+        else if (surf?.kind === 'sphere') { add({ kind: 'rad', sph: true, c: surf.c.toArray(), r: surf.r, p: surf.p.toArray() }, ent.mesh); say(`${text(dims[dims.length - 1])} — pick a second face or a point for a distance`); }
         else say(`${ent.face.n ? `planar face, area ${fmt(ent.face.area)}` : 'curved face'} — pick a second face or a point`);
       } else say('point set — pick a second point or a face');
       return;
     }
     const r = between(pending, ent, !!h.snap, e.shiftKey);
-    add({ kind: 'dist', a: r.a.toArray(), b: r.b.toArray() });
+    const swap = pending.face && !ent.face;   // between() puts the point first and its foot on the face second
+    add({ kind: 'dist', a: r.a.toArray(), b: r.b.toArray() }, swap ? ent.mesh : pending.mesh, swap ? pending.mesh : ent.mesh);
     pending = null; clearSel();
   }
   function clearSel() { for (const o of [...sel.children]) { sel.remove(o); o.geometry?.dispose(); } }
-  function add(d) { dims.push(d); render(); onChange?.(); say(text(d)); }
+  // A dimension is anchored to the bodies it was read from: its coordinates are kept in each body's own
+  // frame (d.on names the body per end) and put back into the world as the body stands now, so it rides the
+  // explode, a joint or the triad. A missing body, or an old file without d.on, reads the coordinates as world.
+  const ANCHORED = { len: ['a', 'b'], dist: ['a', 'b'], dia: ['c', 'u', 'v'], rad: ['c', 'p'] };
+  function add(d, mA, mB = mA) {
+    for (const [i, f] of ANCHORED[d.kind].entries()) {
+      const m = i === 1 && d.kind !== 'dia' && d.kind !== 'rad' ? mB : mA, key = m && keyOf(m);
+      if (!key) continue;
+      const inv = m.matrixWorld.clone().invert(), v = new THREE.Vector3(...d[f]);
+      d[f] = (f === 'u' || f === 'v' ? v.transformDirection(inv) : v.applyMatrix4(inv)).toArray();
+      (d.on ??= {})[f] = key;
+    }
+    dims.push(d); render(); onChange?.(); say(text(d));
+  }
+  /** The dimension's coordinates in the world, as its bodies stand now. */
+  function W(d) {
+    const out = {};
+    for (const f of ANCHORED[d.kind] ?? []) {
+      const v = new THREE.Vector3(...d[f]), m = d.on?.[f] && bodyOf(d.on[f]);
+      if (m) m.updateMatrixWorld(true);   // applyExplode has just set the position; the matrix is only refreshed at the next frame
+      out[f] = m ? (f === 'u' || f === 'v' ? v.transformDirection(m.matrixWorld) : v.applyMatrix4(m.matrixWorld)) : v;
+    }
+    return out;
+  }
 
   // ----------------------------------------------------------------- dims
   const fmt = (v) => v.toFixed(3);
   const deltas = (a, b) => `(Δx ${fmt(Math.abs(a.x - b.x))}  Δy ${fmt(Math.abs(a.y - b.y))}  Δz ${fmt(Math.abs(a.z - b.z))})`;
   function text(d) {
-    const V = (arr) => new THREE.Vector3(...arr);
     if (d.kind === 'dia') return `⌀${fmt(d.r * 2)}`;
     if (d.kind === 'rad') return `${d.sph ? 'SR' : 'R'}${fmt(d.r)}`;
-    return fmt(V(d.a).distanceTo(V(d.b)));
+    const { a, b } = W(d); return fmt(a.distanceTo(b));
   }
   function label(t, pos, d) {
     const el = document.createElement('div');
@@ -496,21 +521,20 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
     for (const o of [...dimGroup.children]) { dimGroup.remove(o); o.geometry?.dispose(); }
     for (const l of labels) l.remove();
     labels = [];
-    const V = (arr) => new THREE.Vector3(...arr);
     for (const d of dims) {
       if (d.kind === 'dist' || d.kind === 'len') {
-        const a = V(d.a), b = V(d.b);
+        const { a, b } = W(d);
         polyline([a, b], dimGroup); marker(a, dimGroup); marker(b, dimGroup);
         label(text(d), a.clone().lerp(b, 0.5), d);
       } else if (d.kind === 'dia') {
-        const c = V(d.c), u = V(d.u), v = V(d.v);
+        const { c, u, v } = W(d);
         const ring = []; for (let k = 0; k <= 72; k++) { const t = k / 72 * Math.PI * 2; ring.push(c.clone().addScaledVector(u, Math.cos(t) * d.r).addScaledVector(v, Math.sin(t) * d.r)); }
         polyline(ring, dimGroup);
         const a = c.clone().addScaledVector(u, -d.r), b = c.clone().addScaledVector(u, d.r);
         polyline([a, b], dimGroup); marker(a, dimGroup); marker(b, dimGroup);
         label(text(d), c.clone().addScaledVector(u, d.r * 0.5), d);
       } else if (d.kind === 'rad') {
-        const c = V(d.c), p = V(d.p);
+        const { c, p } = W(d);
         polyline([c, p], dimGroup); marker(c, dimGroup); marker(p, dimGroup);
         label(text(d), c.clone().lerp(p, 0.5), d);
       }
@@ -531,7 +555,7 @@ export function createMeasure({ THREE, scene, renderer, getCamera, model, layer,
   return {
     get on() { return on; },
     setOn(v) { on = v; pending = null; clearHl(); clearSel(); canvas.style.cursor = v ? 'crosshair' : ''; if (v) dirty = true; },
-    invalidate() { dirty = true; faceCache.clear(); },
+    invalidate() { dirty = true; faceCache.clear(); if (dims.some((d) => d.on)) render(); },   // the bodies moved: anchored dims move with them
     hover: onHover, click: onClick, projectLabels,
     snapAt: (e) => snapAt(e)?.p.clone() ?? null, showSnap: (e) => !!showSnap(e), showFace: (e) => !!showFace(e), clearSnap: () => { if (!on) clearHl(); },
     pointSnapAt,

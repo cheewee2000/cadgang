@@ -2606,6 +2606,7 @@ $('#orthoBtn').addEventListener('click', () => setOrtho(!ui.ortho));
 const measure = createMeasure({
   THREE, scene, renderer, model, layer: $('#measureLayer'),
   getCamera: () => camera, getOrbit: () => orbit, say, onChange: () => commit(),
+  keyOf: (m) => partKey(m), bodyOf: (key) => bodyOfKey(key),   // dims anchor to bodies by key and ride their explode
 });
 // Measure and the markup tools are one at a time: picking one puts the other down.
 function setMeasure(on) {
