@@ -46,7 +46,9 @@ const SCS_5052 = [
   ...[0.313, 0.375, 0.500].map((t) => [t, NaN, NaN, NaN, NaN]),
 ];
 // PEM hardware SendCutSend presses into aluminium (their hardware catalog, read 2026-10-22), as PEM_304. ponytail: the M5 flush stud only, add rows when used
-const PEM_ALU = { 'FH-M5-10': ['stud', 5, 0.198, 0.283, 0.384, 0.393, [0.040, 0.268]] };
+const PEM_ALU = { 'FH-M5-10': ['stud', 5, 0.198, 0.283, 0.384, 0.393, [0.040, 0.268]],
+  'CLA-M4-1': ['nut', 4, 0.234, 0.280, 0.5, 0.118, [0.040, 0.500]] };   // aluminium nut pressed in house (PEM catalog via Zygology, read 2026-10-29: hole 5.94, edge 7.10, sheet from 1.0 mm, T 3.0); ponytail: spacing and top of range guessed
+
 // PEM hardware SendCutSend presses into 304 (their hardware catalog, sendcutsend.com/guidelines/hardware/catalog, read 2026-10-22), metric only.
 // inches: [kind, thread mm, H hole in sheet, K = N least hole centre to a cut edge or to the bend allowance area, M least centre to centre
 // for two of the same SKU, length (studs, standoffs) or height above the sheet (nuts), 304 sheet range]. SO4-M5 lists the same .281 hole as SO4-M4.
@@ -60,14 +62,14 @@ const PEM_304 = {
   'FH4-M5-10': ['stud', 5, 0.197, 0.283, 0.382, 0.394, [0.048, 0.250]],
 };
 // PEM's own drawings (pemnet.com product finder, read 2026-10-22), mm: [E collar diameter, T collar height, A shank length, C shank diameter].
-const PEM_BODY = { 'SP-M5-0': [8.64, 2, 0.77, 6.33] };
+const PEM_BODY = { 'SP-M5-0': [8.64, 2, 0.77, 6.33], 'CLA-M4-1': [7.80, 3.00, 0.77, 5.92] };   // CLA shank length as SP (same 1.0 mm sheet)
 // SendCutSend countersinking (sendcutsend.com/services/countersinking, read 2026-10-22): aluminium and plastics .125 to .750 in only, parts
 // 1 x 4 to 14 x 46 in, depth at most 60% of the sheet, 90° for metric; draw only the minor hole. Metric sizes mm: [major, minor, depth].
 const CSK_METRIC = { M3: [6, 3.18, 1.35], M4: [8, 4.04, 1.93], M5: [10, 5.00, 2.44], M6: [12, 6.35, 2.77], M8: [16, 8.00, 3.94] };
 const CSK_ALU = { range: [0.125, 0.750], part: [[1, 4], [14, 46]], depth: 0.6, sizes: CSK_METRIC };
 const SHOPS = {
   'scs-304': { name: 'SendCutSend 304 stainless', table: SCS_304, flat: [30, 44], box: 5, boxHardware: 3, gap: 0.015, reliefExtra: 0.02, pem: PEM_304, hardwareFlat: [36, 46] },
-  'scs-5052': { name: 'SendCutSend 5052 H32 aluminium', table: SCS_5052, flat: [30, 44], boxHardware: 3, gap: 0.015, reliefExtra: 0.032, countersink: CSK_ALU, pem: PEM_ALU, hardwareFlat: [36, 46] },
+  'scs-5052': { name: 'SendCutSend 5052 H32 aluminium', table: SCS_5052, flat: [30, 44], box: 5, boxHardware: 3, gap: 0.015, reliefExtra: 0.032, countersink: CSK_ALU, pem: PEM_ALU, hardwareFlat: [36, 46] },
 };
 
 /** The gauge: thickness, radius, bend deduction and allowance, limits, all in mm. */
