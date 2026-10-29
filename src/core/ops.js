@@ -50,7 +50,7 @@ import {
   tightBounds,
   requireSolid,
   importStepSolids,
-} from './brep.js';
+ beginBrepScope } from './brep.js';
 
 // ------------------------------------------------------------------ import
 
@@ -219,6 +219,9 @@ export function compound(...shapes) {
   return setParts(brepCompound(list.map((s, i) => borrow(s, `shape${i + 1}`))), parts);
 }
 
+/** Name a shape's solids: the STEP writes them as `name`, `name 2`, …; the viewer reads a material word in it ("caster wheel, rubber"). */
+export const name = (shape, label) => setParts(shape, [{ name: String(label), count: brepBodies(shape) }]);
+
 // ---------------------------------------------------------------- modifiers
 
 /**
@@ -308,6 +311,14 @@ function shellByOffset(s, query, thickness, original) {
     result = track(result.cut(plug));
   }
   return result;
+}
+
+/** Build in a nested scope: fn's shape (or array of shapes) survives, every intermediate it made is freed at once. A sheet
+ *  metal part leaves hundreds of MB of scraps behind; a cell with many parts runs out of kernel memory without this. */
+export function scoped(fn) {
+  const sc = beginBrepScope(); let out;
+  try { out = fn(); } finally { sc.dispose(out); }
+  return out;
 }
 
 export function translate(shape, [x, y, z]) {

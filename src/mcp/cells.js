@@ -42,6 +42,7 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     torus(majorR, minorR) about z; cone(r1, r2, h, {center}) — r2 = 0 for a point, r1 ≠ r2 for a frustum;
     coil(r, pitch, height, sectionR, {section:'circle'|'square'|'triangle', lefthand}) — a spring
   booleans: union/subtract/intersect(base, ...tools); interference(a, b) -> shared volume (0 = no clash).
+    name(shape, 'caster wheel, rubber') names its solids in the STEP (and the viewer's MATERIALS look reads a material word in the name: steel, stainless, rubber, aluminum…).
     compound(...shapes) keeps parts as SEPARATE bodies — an assembly, nothing fused: a lid seated on its body, a cap on a
     bottle. Measures report bodies = N and STEP writes N solids (union would fuse anything that touches).
     A union of bodies that do not touch is a MULTI-BODY result (a gap under 0.01 mm is a gap): measures report
@@ -86,8 +87,9 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     centroid(shape) -> [x,y,z]; mass(shape, g/cm³) -> grams;
     distance(a, b) closest approach; length(shape, edgeQuery) total edge length
   importStep(file, {body}) — an exact solid from a STEP file in the project folder (path relative to it): body i in file
+    scoped(fn) — build inside fn (one part: a sheet metal make, a union of many pieces) and keep only what it returns; the kernel's scraps go at once. Big cells need it, the kernel has ~2 GB.
     order, or every body as one compound. Parsed once per file; then edit it like anything built here (pushPull, split, subtract).
-  NOT available (kernel build lacks the binding): delete/replace face, non-uniform scale, surface tools, sheet metal, text.
+  NOT available (kernel build lacks the binding): delete/replace face, non-uniform scale, surface tools, text.
 
 q — q.faces(shape) / q.edges(shape), then chain filters. A revolved line reads as cylindrical/conical and a shelled
   cylinder's inner wall as cylindrical, whatever OCCT calls the surface underneath.
@@ -151,8 +153,9 @@ sm — sheet metal bent from one flat sheet, built to a shop's gauge table so th
   shop's own. sm.gauge('scs-304', 0.060) is SendCutSend 304 stainless at .060 in (radius, bend deduction, min flange,
   max bend length, 30 x 44 in flat). sm.part(name, gauge, {hardware, round: 3}) then, in mm, outside sizes:
     .base(U, V)  the base rectangle, u along x, v along y of its own frame
-    .flange('base.r', 25, {from, to, reverse})  a 90° flange that high off edge b (v 0), t (v V), l (u 0) or r (u U), folded to the
-      inside; flanges stack: 'base.r.t' is the tip of that flange, 'base.r.l' / '.r' its sides (a flange's b is its bend);
+    .flange('base.r', 25, {from, to, reverse, angle})  a flange that high off edge b (v 0), t (v V), l (u 0) or r (u U), folded to the
+      inside at 90° (angle: 45 leans it in as a chamfer; two chamfers meeting at a corner are mitred); flanges stack: 'base.r.t' is the
+      tip of that flange, 'base.r.l' / '.r' its sides (a flange's b is its bend);
       reverse: true folds it the other way (Z bends), its height from the parent's inside face, and it may not meet another at a corner
     .cut('base', sm.rect(u0, v0, u1, v1, r), sm.circle(u, v, r), sm.slot(u0, v0, u1, v1, r), sm.poly(pts))  holes, in that panel's coordinates
     .window('base', [u0, v0, u1, v1], depth)  an opening whose four edges fold in as mitred flaps
@@ -168,6 +171,39 @@ sm — sheet metal bent from one flat sheet, built to a shop's gauge table so th
   Where two flanges meet at a corner they close to the shop's gap (.015 in) with a round relief; a flange that stops
   mid edge gets a round ended relief slot; free outline corners are rounded by 'round'. A part made twice under one
   name counts as qty 2 in the export; the export lists each part's hardware by SKU. 90° bends only.
+
+soft — softgoods the way CLO works a garment: pieces cut flat from fabric, sewn edge to edge, pinned to hardware and
+  draped onto a body under gravity; each relaxed piece comes back as an exact B-spline face trimmed to its outline,
+  the compound named per piece, and each piece's cutting pattern joins the DXF export (stitch line on STITCH, outline plus
+  seam allowance on CUT, a tick across the allowance at each seam end on NOTCH, the grain line on GRAIN, and a label
+  'name  cut N  fabric  W x H mm  allowance a' on TEXT). THE PATTERN IS THE DELIVERABLE: the sewer cuts from the DXF,
+  so get names, quantities, allowances, notches and lengths right first; the drape is a rough picture of how the pieces
+  sit (it settles to the rest shape; it is not an animation). mm throughout.
+  soft.fabric('cordura-500d' | 'nylon-210d' | 'spacer-mesh' | 'eva-10mm' | {weight g/m², thickness, stretch, shear, bend 0..1, friction, maxStretch %})
+  soft.avatar({chest: 1000, waist: 860, hip: 980, torso: 480, shoulders: 400, neck: 390, head: 230, arm: 300})  a mannequin to
+    drape on (torso, neck, head, arms at the sides): circumferences and lengths, standing up z, hip at z 0, front toward +y,
+    centred on x; translate it to where the wearer stands against the frame. A strap over the shoulder passes between
+    the neck and the shoulder ball, about x = ±100 for 400 mm shoulders
+  const g = soft.garment('harness') then
+    g.piece(name, [[u, v], ...], fabric, {grid: 10, allowance: 10, pattern: name, grain: 0})  a closed outline in its own flat mm (u right, v up); grid
+      is the solver's node spacing (finer is slower; 10 for straps, 15 to 20 for panels), allowance the seam allowance in the pattern,
+      pattern a name shared by identical pieces (one DXF, cut N; a left and a right strap are one 'strap'), grain degrees off flat v
+      .place(origin, u, v)  where the flat piece starts in 3D before it drapes: its (0, 0) at origin, u and v along those directions
+      .along([[x, y, z], ...], {u, at})  or start it bent along a path: flat v runs along the path, flat u = at (default the
+        middle) lies on it, u runs across along u. The right start for a strap: anchor, up the back, over the shoulder, down
+      .pin([u, v], [x, y, z])  tack a pattern point to a world point (a bar tack, a rivet, a strap end on its frame anchor);
+        pins hold the piece inextensible from there, so a strap between two pins hangs as it would
+      .edge(i, j = i + 1)  the outline from point i to point j, for seams
+    g.seam(a.edge(1), b.edge(3), {flip: false, ease: 0.03})  sew two edges start to start (flip runs the second backwards);
+      their lengths must match within ease, recorded like assert.*
+    g.make({body, gravity: [0, 0, -1], g: 9810, steps, dt, iterations, clearance: 0.5})  -> the garment as faces; body is the
+      shape it must not pass through (the frame unioned with the avatar, or null to hang free). Records, like assert.* but
+      without failing the cell: each seam's length match and the gap it left, each piece's worst stretch against its fabric's
+      maxStretch (the solver itself leaves 1 to 4%, so read anything under 5% as flat), how far it settled, and the closest
+      the cloth's surface comes to the body (ok when not inside it; the solver aims for the clearance asked and lands within a few tenths). g.timing then has {total ms, steps, nodes}.
+  Pieces are faces, not solids: bbox, distance, area and STEP/STL export work; volume, mass and booleans do not. Start pieces
+  near where they end up (a shoulder strap laid over the shoulder, not on the floor) — the drape is a relaxation, so a
+  piece started far away or inside the body ends up somewhere strange. No self collision, darts or pleats yet.
 
 ASSERTION CELLS — add a cell with kind: 'assert' and its program states claims instead of building geometry.
   export default ({ assert, input }) => { assert.minWall(input, 1.5); assert.watertight(input); };
@@ -647,14 +683,14 @@ Args:
     'cadgang_cells_export',
     {
       title: 'Export the cell stack',
-      description: `Write the cell stack's solid to <filename>.step (or .stl) in the project folder and return the path. format 'dxf' instead writes the flat pattern of every sheet metal part the stack makes (sm.part(...).make()), one <filename>_<part>.dxf each: outline and holes on layer CUT, bend lines dashed on BEND, mm.
+      description: `Write the cell stack's solid to <filename>.step (or .stl) in the project folder and return the path. format 'dxf' instead writes the flat pattern of every sheet metal part (sm.part(...).make()) and every softgoods piece (soft.garment(...).make()) the stack makes, one <filename>_<part>.dxf each: outline and holes on layer CUT, bend lines dashed on BEND, stitch lines on STITCH with seam notches on NOTCH, grain on GRAIN and the cut label on TEXT, mm.
 
 STEP is the default: cells are exact B-rep the whole way through, so the file reopens in Fusion, SolidWorks or OnShape as editable geometry rather than a faceted import. STL is for printing: the same solid tessellated (fine, scaled to the part).
 
 Args:
   - filename: base name, no extension. Name the part: 'wink_battery_lid', not 'part', 'export' or 'model'
   - cell: cell to export (defaults to the output/last cell)
-  - format: 'step' (default) | 'stl' | 'dxf' (sheet metal flats)`,
+  - format: 'step' (default) | 'stl' | 'dxf' (sheet metal flats and softgoods patterns)`,
       inputSchema: {
         filename: z.string().regex(/^[\w.-]+$/, 'Use letters, digits, dot, dash, underscore only'),
         cell: z.string().optional(),

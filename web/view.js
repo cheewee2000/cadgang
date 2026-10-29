@@ -2017,6 +2017,10 @@ function renderJoints() {
   el.classList.toggle('folded', panelFolded);
   head.append(foldBtn(panelFolded, () => { jointFolds.panel = !panelFolded; saveJointFolds(); renderJoints(); }),
     Object.assign(document.createElement('span'), { className: 'joints-title', textContent: joints.length ? `Joints (${joints.length})` : 'Joints', title: JOINT_HINTS }));   // how to make and move joints: on hover, not always in the way
+  // Hide all / Show all: every joint's tick at once (its axis, links and limit handles in the view), saved with the joints
+  const hideAll = (hide) => { for (const j of joints) j.hide = hide; drawJointLinks(); saveJoints(); commit(); renderJoints(); };
+  if (joints.length) head.append(Object.assign(document.createElement('button'), { className: 'ghost', textContent: 'Hide all', title: 'Hide every joint’s axis and limit handles in the view', onclick: () => hideAll(true) }),
+    Object.assign(document.createElement('button'), { className: 'ghost', textContent: 'Show all', title: 'Show every joint’s axis and limit handles in the view', onclick: () => hideAll(false) }));
   if (joints.length) head.append(Object.assign(document.createElement('button'), { className: 'ghost', textContent: 'Check', title: 'Drive every joint through its range, find what its parts run into, and set its limits just short of the first crash each way', onclick: checkJoints }));
   const rows = joints.map((j) => {
     const row = jointRow(j), folded = !!jointFolds[j.id];

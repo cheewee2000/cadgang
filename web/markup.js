@@ -100,6 +100,18 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (up.length() < 1e-3) return null;
     return { normal: n.toArray().map((v) => +v.toFixed(4)), up: up.normalize().toArray().map((v) => +v.toFixed(4)) };
   }
+  // The pencil follows the part's surfaces, face to face. Off the part (past its edge, or over a reference
+  // plane or the ground behind it) it carries on in the plane of the face it last touched, so a stroke
+  // never jumps onto a plane — unless it started on one; then it draws on planes as any mark does.
+  let penRef = null, penOnRef = false;
+  function penAt(e) {
+    if (penOnRef) return pointAt(e);
+    raycaster.setFromCamera(ndc(e), getCamera());
+    const hit = raycaster.intersectObjects(getTargets(), false)[0];
+    if (hit?.face) { penRef = { o: hit.point.clone(), n: hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize() }; return hit.point.toArray(); }
+    if (!penRef) return pointAt(e);
+    return onPlane(e, penRef.o, penRef.n) ?? onPlane(e, penRef.o, getCamera().getWorldDirection(new THREE.Vector3()));   // that face edge-on: square to the eye
+  }
   // Where the pointer meets the plane through `origin` with normal `n` (null when that plane is edge-on).
   function onPlane(e, origin, n) {
     raycaster.setFromCamera(ndc(e), getCamera());
@@ -146,9 +158,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
       if (dir.length() > scale * 0.3) {
         objs.push(fatLine(pts, lineMat));
       }
-      const dot = new THREE.Mesh(new THREE.SphereGeometry(scale * 0.3, 12, 8), solidMat);   // a leader ends in a dot
-      dot.position.copy(pts[1]);
-      objs.push(dot);
+      objs.push(dotAt(pts[1], 0.012 * 0.3, solidMat));   // a leader ends in a dot
     } else if (item.kind === 'path' && pts.length > 1) {
       objs.push(fatLine(pts, lineMat));
     } else if (item.kind === 'text' && item.text) {
@@ -156,15 +166,21 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     } else if (item.kind === 'image' && item.src) {
       objs.push(picture(item, pts[0]));
     } else if (item.kind === 'note') {
-      const dot = new THREE.Mesh(new THREE.SphereGeometry(scale * 0.25, 12, 8), solidMat);
-      dot.position.copy(pts[0]);
-      objs.push(dot);
+      objs.push(dotAt(pts[0], 0.012 * 0.25, solidMat));
     }
     const holder = new THREE.Group();   // moved by the part's explode offset each frame
     holder.userData.item = item; follow(holder, item);
     for (const o of objs.filter(Boolean)) { o.renderOrder = Math.max(o.renderOrder, 5); o.userData.item = item; holder.add(o); }
     group.add(holder);
     return objs;
+  }
+
+  // A dot that stays the same size on screen: a unit sphere, scaled to k × the camera distance every frame
+  // (projectLabels), so a zoom after the mark was built does not leave it the old size.
+  function dotAt(p, k, mat) {
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), mat);
+    dot.position.copy(p); dot.userData.dotK = k; dot.scale.setScalar(orbit.dist * k);
+    return dot;
   }
 
   // TEXT: words laid on the face that was clicked, centred on the click, at the size they were made
@@ -636,7 +652,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   function projectLabels() {
     const r = canvas.getBoundingClientRect();
     for (const m of mats.values()) m.line.resolution.set(r.width, r.height);
-    for (const h of group.children) follow(h, h.userData.item);
+    for (const h of group.children) { follow(h, h.userData.item); for (const o of h.children) if (o.userData.dotK) o.scale.setScalar(orbit.dist * o.userData.dotK); }
     tags = layoutTags();
     for (const t of tags) { t.el.style.transform = `translate(${Math.round(t.x)}px, ${Math.round(t.y)}px)`; }
   }
@@ -681,6 +697,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     const using = e.button === 0 ? toolFor(e) : null;
     if (!using) return;
     if (current) { e.stopImmediatePropagation(); e.preventDefault(); return; }   // a second finger mid-stroke: neither draws nor orbits
+    if (using !== 'erase' && tagAt(e)) { e.stopImmediatePropagation(); e.preventDefault(); return; }   // a press on a tag is a double-click's first half: no mark under it
     if (using === 'erase') {
       if (!markNear(e)) return;   // nothing to erase here: the view's
       e.stopImmediatePropagation(); e.preventDefault();
@@ -718,6 +735,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     last = { x: e.clientX, y: e.clientY, id: e.pointerId };
     if (using === 'pen') {
       current = { id: uid(), kind: 'pen', ...body, ...pen }; current.points = [toRest(current, p)];
+      penOnRef = !!hitPlane; penRef = null; if (!penOnRef) penAt(e);   // remember the face it starts on
       const sq = squareAxis();
       if (sq) current.plane = { o: current.points[0], n: sq.toArray() };   // square to a view: the stroke is flat
     }
@@ -797,7 +815,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     e.stopImmediatePropagation();
     if (current.kind === 'pen') {
       if (Math.hypot(e.clientX - last.x, e.clientY - last.y) < 3) return;
-      const p = current.plane ? flatAt(e, current) : pointAt(e); if (!p) return;
+      const p = current.plane ? flatAt(e, current) : penAt(e); if (!p) return;
       current.points.push(toRest(current, p)); last.x = e.clientX; last.y = e.clientY;   // keep last.id: it is how the stroke knows its pointer
     } else if (current.kind === 'image') {
       // the drag's reach from the centre is half the picture's width
@@ -854,13 +872,18 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     rebuild();
   }, { capture: true });
 
-  // Double-click a tag (or the dot it hangs on) to edit its text in place. Only with no tool chosen: with
-  // one, a double-click is two marks.
-  canvas.addEventListener('dblclick', (e) => {
-    if (tool || noteInput) return;
+  /** The note or arrow tag under the pointer (its text box), topmost first, or null. */
+  function tagAt(e) {
     const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-    const hit = [...tags].reverse().find((t) => x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h)
-      || tags.find((t) => t.item.points.some((q) => { const s = toScreen(toWorld(t.item, q)); return Math.hypot(s.x - x, s.y - y) < 12; }));
+    return [...tags].reverse().find((t) => x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h) ?? null;
+  }
+  // Double-click a tag (or, with no tool chosen, the dot it hangs on) to edit its text in place. With a
+  // tool chosen the press on the tag made no mark (pointerdown yields there), so the double-click edits too.
+  canvas.addEventListener('dblclick', (e) => {
+    if (noteInput || tool === 'erase') return;
+    const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    const hit = tagAt(e)
+      || (!tool && tags.find((t) => t.item.points.some((q) => { const s = toScreen(toWorld(t.item, q)); return Math.hypot(s.x - x, s.y - y) < 12; })));
     if (!hit) return;
     e.preventDefault(); e.stopPropagation();
     startNote(toWorld(hit.item, hit.item.points[0]), e, hit.item);

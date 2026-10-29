@@ -251,7 +251,7 @@ header button.ghost, header button.ghost.on { border-color: transparent; }   /* 
 .viewcube-fit { pointer-events: auto; width: 34px; height: 34px; padding: 5px; border-radius: 50%; background: var(--paper); border: var(--bw-hair) solid var(--rule); color: var(--ink); display: flex; align-items: center; justify-content: center; margin-bottom: 4px; }
 .bodies-grip { position: absolute; z-index: 3; top: 0; right: -6px; bottom: 0; width: 12px;   /* straddles the edge: grabbable on the border line, over the list scrollbar */ cursor: ew-resize; touch-action: none; }
 .bodies-grip:hover, .bodies-grip:active { background: var(--rule); }
-.hud-tl:has(.bodies.min) > .bodies-grip, .hud-tl:has(.bodies[hidden]) > .bodies-grip { display: none; }
+.hud-tl:has(.bodies[hidden]) > .bodies-grip { display: none; }   /* the grip stays on a folded list: its head is still the column's width */
 .bodies label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .bodies label > .body-name, .bodies label > .plane-name, .bodies label.group-row > span:not(.fold-gap):not(.mat-tag) { flex: 0 1 auto; min-width: 2.5em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }   /* one line: a long name ends in …, its tip has it whole */
 .bodies label { align-items: center; }

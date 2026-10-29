@@ -329,10 +329,11 @@ export function beginBrepScope() {
   activeScope = shapes;
   let disposed = false;
   return {
-    dispose() {
+    dispose(keep = []) {   // keep: shapes (or one) that move to the enclosing scope instead of being freed — a part's result, its scraps gone
       if (disposed) return;
       disposed = true;
       activeScope = outer;
+      for (const k of [keep].flat()) if (k && shapes.delete(k) && outer) outer.add(k);
       for (const s of shapes) {
         try { s.delete(); } catch { /* already freed by a consuming op */ }
       }
