@@ -82,6 +82,10 @@ Press **Drawing** with a file open. The viewer registers what is on screen and c
 
 The template is documented in [`templates/drawing/README.md`](templates/drawing/README.md); the reference set is `templates/drawing/Ultra Bench T Drawing v4.pdf` (drawn from a STEP with [stepdraw](https://github.com/cheewee2000/stepdraw) and the spec next to it), which shows every element the template uses: balloons, parts list, sections, schedules.
 
+## Live Claude authoring
+
+Open the **Cells** page while Claude Code builds. The page automatically follows the project folder of the Claude session currently using the CADgang MCP tools, then refreshes after every committed cell change. Claude is instructed to build one reviewable feature or part per cell and evaluate/render it before continuing, so the model appears progressively instead of only after export. The project name in the Cells header shows which session document is on screen.
+
 ## Claude Code (MCP)
 
 The repo ships `.mcp.json` (and `.codex/config.toml`), so opening it in Claude Code registers the `cadgang` MCP server. Manually: `claude mcp add cadgang -- node /path/to/cadgang/src/mcp/index.js`. The app or `npm start` must be running; set `CADGANG_URL` if it is not on port 4477.

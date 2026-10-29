@@ -181,6 +181,8 @@ ASSERTION CELLS — add a cell with kind: 'assert' and its program states claims
 
 The program runs in an isolated realm: no filesystem, network, timers, or process, and a wall-clock budget. Standard JS (Math, Array, loops, functions) is available, so arrays of holes, patterns and derived dimensions are ordinary code. console.log(...) works: each line lands in the cell's \`logs\` in cadgang_cells_evaluate — the way to inspect a plane object, a bbox, or a count while authoring.
 
+LIVE AUTHORING — the user watches the Cells page while you work. Build in visible, meaningful steps: one cell for each feature or part the user may want to review or steer (base form, shell, openings, bosses, pattern, fillets, checks). Add/evaluate/render each step before continuing. Never build a whole model in private code or one giant cell and reveal it only at the end. If a step will take time, add its cell first so its prompt appears before compiling it. The page automatically follows this session's project and refreshes after every committed cell change.
+
 THE AUTHORING LOOP — you cannot see the model, so introspection replaces looking:
   1. cadgang_cells_add with the prompt and a first draft of the code
   2. cadgang_cells_topology — read the real faces and edges of what you built
