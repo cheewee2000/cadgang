@@ -14,7 +14,9 @@ function boundaryOf(pattern, curveStep) {
   for (const id of pattern.contours[0]) {
     const s = pattern.segments.find((q) => q.id === id); if (!s) throw new GraphError(`Pattern '${pattern.id}' is missing segment '${id}'`);
     const lengthGuess = sampleSegment(pattern, s, 32).reduce((n, p, i, q) => i ? n + Math.hypot(p[0] - q[i - 1][0], p[1] - q[i - 1][1]) : 0, 0);
-    const q = sampleSegment(pattern, s, Math.max(1, Math.ceil(lengthGuess / curveStep))), start = vertices.length;
+    const n = Math.max(1, Math.ceil(lengthGuess / curveStep)); let q = sampleSegment(pattern, s, n); const start = vertices.length;
+    // sampleSegment leaves a line as its two ends; the mesh wants it at curveStep like the curves so seams pin the whole edge.
+    if (s.type === 'line') q = Array.from({ length: n + 1 }, (_, i) => [q[0][0] + (q[1][0] - q[0][0]) * i / n, q[0][1] + (q[1][1] - q[0][1]) * i / n]);
     for (let i = 0; i < q.length - 1; i++) { const last = vertices.at(-1); if (!last || Math.hypot(last[0] - q[i][0], last[1] - q[i][1]) > 1e-8) vertices.push(q[i]); }
     ranges.push({ id, start, count: vertices.length - start });
   }
@@ -55,11 +57,30 @@ function refine(vertices, triangles, target, maxPasses = 6) {
   return triangles;
 }
 
+/** Where p sits along the polyline (piece index + fraction), or null when it is not on it. */
+function paramOn(poly, p) {
+  for (let k = 1; k < poly.length; k++) {
+    const a = poly[k - 1], b = poly[k], dx = b[0] - a[0], dy = b[1] - a[1], t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1);
+    if (t >= -1e-9 && t <= 1 + 1e-9 && Math.hypot(a[0] + dx * t - p[0], a[1] + dy * t - p[1]) < 1e-6) return k - 1 + t;
+  }
+  return null;
+}
+/** Refinement splits boundary edges too: rebuild each segment's chain from every vertex that now lies on it, in order. */
+function chainsOf(vertices, segmentVertices) {
+  const out = {};
+  for (const [id, chain] of Object.entries(segmentVertices)) {
+    const poly = chain.map((i) => vertices[i]), hits = [];
+    for (let v = 0; v < vertices.length; v++) { const t = paramOn(poly, vertices[v]); if (t != null) hits.push([t, v]); }
+    out[id] = hits.sort((a, b) => a[0] - b[0]).map((h) => h[1]);
+  }
+  return out;
+}
+
 export function meshPattern(pattern, { target = 25, curveStep = target } = {}) {
   if (!(target > 0 && curveStep > 0)) throw new GraphError('Simulation mesh spacing must be positive');
-  const { vertices, segmentVertices } = boundaryOf(pattern, curveStep), boundaryCount = vertices.length;
+  const { vertices, segmentVertices: coarse } = boundaryOf(pattern, curveStep);
   if (vertices.length < 3) throw new GraphError(`Pattern '${pattern.id}' has no usable boundary`);
-  const triangles = refine(vertices, earClip(vertices), target);
+  const triangles = refine(vertices, earClip(vertices), target), segmentVertices = chainsOf(vertices, coarse), boundaryCount = new Set(Object.values(segmentVertices).flat()).size;
   const edges = new Map();
   for (let i = 0; i < triangles.length; i += 3) for (const [a, b] of [[triangles[i], triangles[i + 1]], [triangles[i + 1], triangles[i + 2]], [triangles[i + 2], triangles[i]]]) { const k = a < b ? `${a}/${b}` : `${b}/${a}`; edges.set(k, [a, b]); }
   return { id: pattern.id, uv: vertices.flat(), triangles, edges: [...edges.values()].flat(), boundaryCount, segmentVertices };

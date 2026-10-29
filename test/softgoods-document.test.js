@@ -49,3 +49,18 @@ test('attachments persist pattern coordinates and fixed 3D targets', () => {
   x.attachments[0].pattern = 'gone';
   assert.throws(() => validateSoftgoodsDocument(x), /missing pattern/);
 });
+
+test('replacing the design keeps counting revisions so pages notice each change', () => {
+  const d = new SoftgoodsDocument(null); d.addRectangle({ id: 'a' });
+  const r1 = d.replace({ ...d.toJSON(), revision: 0 }).revision, r2 = d.replace({ ...d.toJSON(), revision: 0 }).revision;
+  assert.ok(r1 > 1); assert.equal(r2, r1 + 1);
+});
+
+test('a softgoods.json that no longer validates is ignored rather than stopping the server', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cadgang-soft-bad-')), file = path.join(dir, 'softgoods.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, patterns: [{ id: 'a', points: [], segments: [], contours: [['x', 'y', 'z']] }] }));
+  const errors = []; const orig = console.error; console.error = (m) => errors.push(m);
+  try { assert.equal(new SoftgoodsDocument(file).toJSON().patterns.length, 0); } finally { console.error = orig; }
+  assert.match(errors.join(' '), /ignoring .*softgoods.json/);
+  fs.rmSync(dir, { recursive: true });
+});

@@ -92,11 +92,17 @@ export class SoftgoodsDocument {
   load() {
     if (!this.filePath) { this.data = defaults(); return; }
     try { this.data = validateSoftgoodsDocument(JSON.parse(fs.readFileSync(this.filePath, 'utf8'))); }
-    catch (e) { if (e.code !== 'ENOENT' && !(e instanceof SyntaxError)) throw e; this.data = defaults(); }
+    catch (e) {
+      if (e.code !== 'ENOENT' && !(e instanceof SyntaxError) && !(e instanceof GraphError)) throw e;
+      // A hand-edited file that no longer validates must not stop the server or a project switch: start empty and say so.
+      if (e.code !== 'ENOENT') console.error(`softgoods: ignoring ${this.filePath}: ${e.message}`);
+      this.data = defaults();
+    }
   }
   onChange(fn) { this._listeners.add(fn); return () => this._listeners.delete(fn); }
   toJSON() { return clone(this.data); }
-  replace(value) { this.data = validateSoftgoodsDocument(value); this.touch(); return this.toJSON(); }
+  // The revision is the server's, not the caller's: a replacement keeps counting so pages notice every change.
+  replace(value) { this.data = validateSoftgoodsDocument({ ...value, revision: this.data.revision }); this.touch(); return this.toJSON(); }
   touch() {
     this.data.revision = (this.data.revision || 0) + 1;
     if (this.filePath) { fs.mkdirSync(path.dirname(this.filePath), { recursive: true }); const tmp = `${this.filePath}.tmp`; fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2)); fs.renameSync(tmp, this.filePath); }

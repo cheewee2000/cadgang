@@ -36,7 +36,7 @@ export function registerSoftgoodsTools(server, { call, ok, fail }) {
       attachments: z.array(z.object({ id: z.string(), pattern: z.string(), at: z.array(z.number()).length(2), to: z.array(z.number()).length(3), kind: z.string().optional() })).optional(),
       arrangement: z.array(z.object({ pattern: z.string(), position: z.array(z.number()).length(3), rotation: z.array(z.number()).length(3), layer: z.number().optional() })),
     }, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-  }, async (body) => { try { return ok(await call('/softgoods/document', { method: 'PUT', body: { version: 1, revision: 0, simulation: { status: 'not_run' }, ...body } })); } catch (e) { return fail(e); } });
+  }, async (body) => { try { return ok(await call('/softgoods/document', { method: 'PUT', body: { version: 1, simulation: { status: 'not_run' }, ...body } })); } catch (e) { return fail(e); } });
 
   server.registerTool('cadgang_softgoods_export', {
     title: 'Export softgoods patterns and tech pack', description: 'Write one DXF per authoritative pattern plus JSON and printable HTML tech packs. The current export includes exact stitch geometry and per-edge allowance schedules; curved allowance offset joins are explicitly noted as not generated yet.',
