@@ -368,6 +368,31 @@ function borrow(shape, slot) {
 export const borrowBrepShape = borrow;
 export const brepAttempt = attempt;
 
+const BOP = { union: 'BRepAlgoAPI_Fuse_1', subtract: 'BRepAlgoAPI_Cut_1' };
+
+/**
+ * One boolean with every tool at once. replicad's fuse()/cut() take one tool and
+ * simplify the result each time, so N tools cost N operations on an ever-bigger
+ * part: a sheet-metal part with 250 nuts spent 16 s fusing them in one by one.
+ * OCCT takes the whole list in one go. Fuse and cut mean the same either way;
+ * common of several tools would not (base ∩ (t1 ∪ t2), not base ∩ t1 ∩ t2).
+ */
+export function brepBoolean(op, base, tools) {
+  const args = new OC.TopTools_ListOfShape_1(), list = new OC.TopTools_ListOfShape_1();
+  const bop = new OC[BOP[op]](), progress = new OC.Message_ProgressRange_1();
+  try {
+    args.Append_1(base.wrapped);
+    for (const t of tools) list.Append_1(t.wrapped);
+    bop.SetArguments(args);
+    bop.SetTools(list);
+    bop.Build(progress);
+    bop.SimplifyResult(true, true, 1e-3);   // as replicad does after each of its booleans
+    return track(kernel().cast(bop.Shape()));
+  } finally {
+    for (const o of [bop, progress, args, list]) o.delete();
+  }
+}
+
 /** True for the {kind:'sketch'} values sketch blocks emit. */
 export const isSketch = (v) => v?.kind === 'sketch';
 
