@@ -13,15 +13,11 @@ import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 import crypto from 'node:crypto';
+import { fork } from 'node:child_process';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { viewRouter } from './view.js';
 import { CellDocument } from '../core/cells.js';
-import { cellsRouter } from './cells.js';
-import { historyRouter } from './history.js';
-import { optionsRouter } from './options.js';
-import { initBrep, brepHeapBytes, brepOperationStats } from '../core/brep.js';
-import { setImportRoot } from '../core/ops.js';
 import { SoftgoodsDocument } from '../core/softgoods-document.js';
 import { softgoodsRouter } from './softgoods.js';
 
@@ -33,11 +29,14 @@ const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf
 const DATA = process.env.CADGANG_DATA || path.join(ROOT, 'data');
 // The cell stack (prompt -> code -> B-rep) is its own document: <project>/cadgang/cells.json once a project is set.
 const CELLS_PATH = process.env.CADGANG_CELLS || path.join(DATA, 'cells.json');
+// The app's cell document, read here for its path and revision only: its kernel (below) owns the edits.
 const cells = new CellDocument(CELLS_PATH);
+const appRevision = () => { cells.openAt(cells.filePath); return cells.revision; };
 const softgoods = new SoftgoodsDocument(path.join(path.dirname(CELLS_PATH), 'softgoods.json'));
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+const json = express.json({ limit: '10mb' });
+app.use((req, res, next) => (req.path.startsWith('/api/cells') ? next() : json(req, res, next)));   // a cells body streams through to its kernel
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -66,7 +65,7 @@ app.use('/api', (req, res, next) => {
 const lan = () => process.env.CADGANG_DESKTOP === '1' && Object.values(os.networkInterfaces()).flat().find((i) => i.family === 'IPv4' && !i.internal)?.address || null;
 app.get('/api/health', (req, res) => res.json({
   ok: true, version: VERSION, clients: wss.clients.size, lan: lan(), port: PORT, cells: cells.filePath,
-  brep: { heapBytes: brepHeapBytes(), operations: brepOperationStats() },
+  brep: kernelStats(),
 }));
 /** The open files: one per page that announced its subject (a ?follow page never does), the focused
  *  one flagged. An iPad follower shows them as tabs and trails the flagged one (v0.14.12: before it
@@ -85,18 +84,53 @@ const broadcastTabs = () => broadcast({ type: 'tabs', tabs: tabs() });
 app.get('/api/view/tabs', (req, res) => res.json({ tabs: tabs() }));
 app.use('/api/view', viewRouter({ dataDir: DATA, broadcast }));
 app.use('/api/softgoods', softgoodsRouter(softgoods, { exportDir: () => project.dir || process.cwd(), broadcast }));
-// The OCCT WASM heap only ever grows; near its 2 GB cap every operation fails with malloc errors and
-// nothing crashes, so the supervisor never restarts it. Leave on purpose between requests instead.
-let inflight = 0;
-app.use('/api/cells', (req, res, next) => { inflight++; res.once('close', () => { inflight--; }); next(); });
-const HEAP_LIMIT = parseInt(process.env.CADGANG_HEAP_LIMIT || String(1.5 * 2 ** 30), 10);
-setInterval(() => {
-  const heap = brepHeapBytes();
-  if (heap > HEAP_LIMIT && inflight === 0) {
-    console.error(`cadgang: kernel heap ${(heap / 2 ** 20).toFixed(0)} MB over the ${(HEAP_LIMIT / 2 ** 20).toFixed(0)} MB limit — restarting for a fresh kernel`);
-    process.exit(75);
-  }
-}, 5000).unref();
+// The kernels: one process per cell document (kernel.js), so a build in one project blocks neither
+// this server nor another project's build, and a kernel whose heap fills is replaced on its own —
+// the app, its pages and its sessions stay up. The OCCT WASM heap only ever grows, so it exits 75
+// between requests once over the limit and the next request forks a fresh one.
+const kernels = new Map();   // cells.json path → { cells, child, port, ready, stats, used, inflight }
+const KERNELS = parseInt(process.env.CADGANG_KERNELS || '4', 10);
+function kernelFor(cellsPath) {
+  let k = kernels.get(cellsPath);
+  if (k) { k.used = Date.now(); return k; }
+  // ponytail: past the cap the longest-idle kernel goes, and its cache with it; a byte budget if that ever shows
+  const idle = [...kernels.values()].filter((x) => !x.inflight).sort((a, b) => a.used - b.used);
+  while (kernels.size >= KERNELS && idle.length) { const x = idle.shift(); kernels.delete(x.cells); x.child.kill(); }
+  const child = fork(path.join(__dirname, 'kernel.js'), [], { env: { ...process.env, CADGANG_CELLS: cellsPath }, stdio: 'inherit' });
+  k = { cells: cellsPath, child, port: null, stats: null, used: Date.now(), inflight: 0 };
+  k.ready = new Promise((resolve, reject) => {
+    child.on('message', (m) => {
+      if (m.type === 'listening') { k.port = m.port; resolve(k); }
+      else if (m.type === 'stats') k.stats = m;
+      else if (m.type === 'broadcast') broadcast(m.msg);
+    });
+    child.on('exit', (code) => {
+      if (kernels.get(cellsPath) === k) kernels.delete(cellsPath);
+      if (code === 75) console.error(`cadgang: kernel for ${cellsPath} left; the next request gets a fresh one`);
+      reject(new Error(`The kernel for this project stopped (exit ${code ?? 'by signal'}) — try again`));
+    });
+  });
+  k.ready.catch(() => {});   // reported to the request that finds it, not as a stray rejection
+  kernels.set(cellsPath, k);
+  return k;
+}
+/** For /api/health: the biggest heap, its operations, and every kernel. */
+function kernelStats() {
+  const all = [...kernels.values()].map((k) => ({ cells: k.cells, heapBytes: k.stats?.heapBytes ?? null, operations: k.stats?.operations ?? null }));
+  const top = all.reduce((a, b) => (b.heapBytes > (a?.heapBytes ?? -1) ? b : a), null);
+  return { heapBytes: top?.heapBytes ?? null, operations: top?.operations ?? null, kernels: all };
+}
+/** Hand a request to a kernel and stream its answer back. */
+function proxy(k, req, res, extra) {
+  const headers = { ...req.headers, ...extra };
+  delete headers.host;
+  const p = http.request({ host: '127.0.0.1', port: k.port, method: req.method, path: req.originalUrl, headers }, (r) => {
+    res.writeHead(r.statusCode, r.headers);
+    r.pipe(res);
+  });
+  p.on('error', (e) => { if (!res.headersSent) res.status(502).json({ error: `The kernel for this project stopped: ${e.message}` }); else res.destroy(e); });
+  req.pipe(p);
+}
 // The project folder: where cell exports land and where the cell document lives (<project>/cadgang/cells.json).
 // The MCP server sets it to Claude Code's cwd when it starts. Until one is set, CELLS_PATH applies.
 const project = { dir: process.env.CADGANG_PROJECT || null };
@@ -105,7 +139,6 @@ function setProject(dir) {
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw Object.assign(new Error(`Not a folder: ${dir}`), { status: 400 });
   if (project.dir === dir) return;
   project.dir = dir;
-  setImportRoot(dir);
   cells.openAt(path.join(dir, 'cadgang', 'cells.json'));
   softgoods.filePath = path.join(dir, 'cadgang', 'softgoods.json'); softgoods.load();
 }
@@ -114,24 +147,14 @@ app.get('/api/project', (req, res) => res.json({ dir: project.dir, cells: cells.
 app.post('/api/project', (req, res, next) => {
   try {
     // ifUnset (the MCP server on connect): never swap a document someone is working in for a folder that merely came up.
-    if (req.body?.ifUnset && cells.cells.length) return res.json({ dir: project.dir, cells: cells.filePath, kept: true });
+    if (req.body?.ifUnset && (appRevision(), cells.cells.length)) return res.json({ dir: project.dir, cells: cells.filePath, kept: true });
     setProject(String(req.body?.dir || '')); res.json({ dir: project.dir, cells: cells.filePath });
   } catch (e) { next(e); }
 });
-/** A cell document's routes: the cells, their history and option sets. */
-function cellRoutes(doc, proj, session = null) {
-  const api = cellsRouter(doc, ROOT, { project: proj }), r = express.Router();
-  doc.onChange(() => broadcast({ type: 'cells_changed', revision: doc.revision, session }));
-  r.use('/history', historyRouter(doc, { dirOf: () => path.join(path.dirname(doc.filePath || CELLS_PATH), 'history'), modelOf: api.modelOf, broadcast }));
-  r.use('/options', optionsRouter(doc, { modelOf: api.modelOf, broadcast }));
-  r.use(api);
-  return r;
-}
-const appRoutes = cellRoutes(cells, project, null);
 // Each Claude session's MCP server names its folder (X-Cadgang-Project): it gets that folder's own
 // document, exports and history, so two sessions never write into each other's project. The app's
 // pages send no header and work in the app's project.
-const sessions = new Map();   // folder → {key, dir, routes}
+const sessions = new Map();   // folder → {key, dir}
 const sessionKeys = new Map(); // opaque browser key → session entry
 // The server restarts itself when the kernel heap fills (above), and the Cells page that follows a
 // session by key must survive that: keys are a hash of the folder, and key → folder is kept on disk so a
@@ -143,12 +166,11 @@ function sessionFor(dir) {
   let entry = sessions.get(dir);
   if (entry) return entry;
   entry = { key: sessionKey(dir), dir };
-  entry.routes = cellRoutes(new CellDocument(path.join(dir, 'cadgang', 'cells.json')), { dir }, entry.key);
   sessions.set(dir, entry); sessionKeys.set(entry.key, entry);
   if (knownSessions[entry.key] !== dir) { knownSessions[entry.key] = dir; try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(SESSIONS_PATH, JSON.stringify(knownSessions)); } catch {} }
   return entry;
 }
-// A session's build holds the one thread, and every tab's load waits behind it: the tabs say why.
+// A session's build holds its kernel, and the tabs on that project wait behind it: they say why.
 let working = 0;
 function busy(d, what) { working += d; if (d > 0 && working === 1) broadcast({ type: 'busy', what }); if (!working) broadcast({ type: 'busy', what: null }); }
 app.use('/api/cells', (req, res, next) => {
@@ -166,12 +188,12 @@ app.use('/api/cells', (req, res, next) => {
     if (!entry && known !== project.dir) return res.status(404).json({ error: 'That live authoring session is no longer available' });
   }
   if (header && dir && !req.query.wait) { busy(+1, `Claude (${path.basename(dir)}) is building…`); res.once('close', () => busy(-1)); }
-  if (!entry) { setImportRoot(project.dir || process.cwd()); return appRoutes(req, res, next); }
-  setImportRoot(entry.dir);
-  entry.routes(req, res, next);
+  const k = kernelFor(entry ? path.join(entry.dir, 'cadgang', 'cells.json') : cells.filePath);
+  k.inflight++; res.once('close', () => { k.inflight--; });
+  k.ready.then(() => proxy(k, req, res, { 'x-cadgang-dir': entry?.dir ?? project.dir ?? '', 'x-cadgang-session': entry?.key ?? '' }), (e) => res.status(502).json({ error: e.message }));
 });
-// Load the kernel now so the first evaluate does not pay the WASM load.
-initBrep().catch((e) => console.error('B-rep kernel failed to load:', e.message));
+// Fork the app's kernel now so the first evaluate does not pay the WASM load.
+kernelFor(cells.filePath);
 // Everything that goes wrong on the API answers in its own shape, never as HTML.
 app.use('/api', (err, req, res, next) => {
   if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) return res.status(400).json({ error: `Request body is not valid JSON: ${err.message}` });
@@ -199,7 +221,7 @@ app.use(express.static(path.join(ROOT, 'web'), { setHeaders: (res) => res.set('C
 
 // Pages compare this with what they loaded and reload themselves when the server came back newer.
 wss.on('connection', (ws) => {
-  ws.send(JSON.stringify({ type: 'hello', version: VERSION, cellsRevision: cells.revision }));
+  ws.send(JSON.stringify({ type: 'hello', version: VERSION, cellsRevision: appRevision() }));
   active ??= ws;
   ws.on('message', (m) => {
     try {
