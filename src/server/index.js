@@ -133,6 +133,21 @@ const appRoutes = cellRoutes(cells, project, null);
 // pages send no header and work in the app's project.
 const sessions = new Map();   // folder → {key, dir, routes}
 const sessionKeys = new Map(); // opaque browser key → session entry
+// The server restarts itself when the kernel heap fills (above), and the Cells page that follows a
+// session by key must survive that: keys are a hash of the folder, and key → folder is kept on disk so a
+// page's next request after a restart finds its session again instead of a 404 until Claude's next call.
+const SESSIONS_PATH = path.join(DATA, 'sessions.json');
+const sessionKey = (dir) => crypto.createHash('sha256').update(dir).digest('base64url').slice(0, 16);
+let knownSessions = {}; try { knownSessions = JSON.parse(fs.readFileSync(SESSIONS_PATH, 'utf8')); } catch {}
+function sessionFor(dir) {
+  let entry = sessions.get(dir);
+  if (entry) return entry;
+  entry = { key: sessionKey(dir), dir };
+  entry.routes = cellRoutes(new CellDocument(path.join(dir, 'cadgang', 'cells.json')), { dir }, entry.key);
+  sessions.set(dir, entry); sessionKeys.set(entry.key, entry);
+  if (knownSessions[entry.key] !== dir) { knownSessions[entry.key] = dir; try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(SESSIONS_PATH, JSON.stringify(knownSessions)); } catch {} }
+  return entry;
+}
 // A session's build holds the one thread, and every tab's load waits behind it: the tabs say why.
 let working = 0;
 function busy(d, what) { working += d; if (d > 0 && working === 1) broadcast({ type: 'busy', what }); if (!working) broadcast({ type: 'busy', what: null }); }
@@ -143,17 +158,12 @@ app.use('/api/cells', (req, res, next) => {
   let dir = header && path.resolve(header), entry = null;
   if (header) {
     if (!fs.existsSync(dir)) return res.status(404).json({ error: `Project folder no longer exists: ${dir}` });
-    if (dir !== project.dir) {
-      if (!sessions.has(dir)) {
-        entry = { key: crypto.randomBytes(12).toString('base64url'), dir };
-        entry.routes = cellRoutes(new CellDocument(path.join(dir, 'cadgang', 'cells.json')), { dir }, entry.key);
-        sessions.set(dir, entry); sessionKeys.set(entry.key, entry);
-      } else entry = sessions.get(dir);
-    }
+    if (dir !== project.dir) entry = sessionFor(dir);
     broadcast({ type: 'cells_project_active', session: entry?.key ?? null, name: path.basename(dir) });
   } else if (req.query.session) {
-    entry = sessionKeys.get(String(req.query.session));
-    if (!entry) return res.status(404).json({ error: 'That live authoring session is no longer available' });
+    const key = String(req.query.session), known = knownSessions[key];
+    entry = sessionKeys.get(key) ?? (known && known !== project.dir && fs.existsSync(known) ? sessionFor(known) : null);
+    if (!entry && known !== project.dir) return res.status(404).json({ error: 'That live authoring session is no longer available' });
   }
   if (header && dir && !req.query.wait) { busy(+1, `Claude (${path.basename(dir)}) is building…`); res.once('close', () => busy(-1)); }
   if (!entry) { setImportRoot(project.dir || process.cwd()); return appRoutes(req, res, next); }
