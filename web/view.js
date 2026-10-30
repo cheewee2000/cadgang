@@ -1991,7 +1991,7 @@ function setMode(mode) {
   ui.mode = mode;
   document.documentElement.dataset.mode = mode;
   for (const b of document.querySelectorAll('[data-mode]')) b.classList.toggle('on', b.dataset.mode === mode);
-  renderJoints();
+  if (!joints.length) renderJoints();   // the rows do not depend on the mode; an empty panel shows its hints in joint mode only
   endPickAxis(); endPickJoint();
   applyExplode();
   say(mode === 'joint' ? 'joint mode: drag a jointed part to move it · ⌘-drag sets its offset · New joint (J) joins two parts' : 'explode mode: drag a part to slide it out · right-click a part for its explode axis');
@@ -2119,8 +2119,11 @@ function jointRow(j) {
     i.addEventListener('change', () => { take(); syncJointRow(j); });   // done: the slider takes the new range. Not a whole redraw: the blur that fires this is the press on × or Flip, and a redraw swapped that button out before its click landed
     return mk('label', {}, label, i);
   };
-  const keys = bodyKeys(), sel = mk('select', { className: 'ghost' }, mk('option', { value: '', textContent: 'ground' }),
-    ...[...keys.values()].filter((k) => k !== j.body).map((k) => mk('option', { value: k, textContent: labelOfKey(k), selected: k === j.parent })));
+  // The carrier list fills when the menu opens: every row listing every body up front was 100k option nodes on a
+  // 300-part assembly, each label found by a scan of the bodies, and a mode switch took seconds.
+  const sel = mk('select', { className: 'ghost' }, mk('option', { value: '', textContent: 'ground' }), ...(j.parent ? [mk('option', { value: j.parent, textContent: labelOfKey(j.parent), selected: true })] : []));
+  const fill = () => { sel.replaceChildren(mk('option', { value: '', textContent: 'ground' }), ...[...bodyKeys()].filter(([, k]) => k !== j.body).map(([m, k]) => mk('option', { value: k, textContent: nameOf(m), selected: k === j.parent }))); sel.removeEventListener('pointerdown', fill); sel.removeEventListener('focus', fill); };
+  sel.addEventListener('pointerdown', fill); sel.addEventListener('focus', fill);
   sel.addEventListener('change', () => { for (const x of jointsOf(j.body)) x.parent = sel.value || null; applyExplode(); saveJoints(); });   // the stack moves together
   const flip = () => {   // Fusion's flip: the snapped part turned over on the joint's face, about the plane's x through the origin
     const o = new THREE.Vector3(...j.origin), [u] = planeAxes(j.axis);
