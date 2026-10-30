@@ -120,7 +120,19 @@ export function initBrep() {
     failureProto = new OC.Standard_Failure_1().$$;
     return rc;
   })();
-  return initPromise;
+  // A big heap gets its garbage collected BEFORE the next job rather than after
+  // it: the OCCT heap never shrinks, so a rebuild that starts on top of the last
+  // one's leftovers is what pushes it over the restart limit.
+  return scopesSinceCollect && brepHeapBytes() > BREP_ROOM_BYTES ? initPromise.then(settle) : initPromise;
+}
+
+/** Above this many bytes the kernel makes room before building: see initBrep() and the cell cache. */
+export const BREP_ROOM_BYTES = parseInt(process.env.CADGANG_BREP_ROOM || String(512 * 2 ** 20), 10);
+
+async function settle(rc) {
+  collectNow();
+  await new Promise((r) => setImmediate(() => setImmediate(() => setImmediate(r))));   // after collectNow's three passes and the finalizers they queue
+  return rc;
 }
 
 /**
