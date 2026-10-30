@@ -20,6 +20,7 @@ import path from 'node:path';
 import { GraphError } from './errors.js';
 import {
   borrowBrepShape as borrow,
+  brepBoolean,
   brepAttempt as attempt,
   trackBrepShape as track,
   brepKernel as kernelOf,
@@ -189,15 +190,14 @@ export function cone(r1, r2, h, { center = '' } = {}) {
 
 // ------------------------------------------------------------------ booleans
 
-const BOOLEAN_METHOD = { union: 'fuse', subtract: 'cut', intersect: 'intersect' };
-
 function boolean(op, base, tools) {
-  const method = BOOLEAN_METHOD[op];
   const list = (Array.isArray(tools) ? tools : [tools]).filter(Boolean);
   if (!list.length) throw new GraphError(`${op}() needs at least one shape to combine`);
   return attempt(op, () => {
-    let acc = borrow(base, 'base');
-    for (const tool of list) acc = track(acc[method](borrow(tool, 'tool')));
+    const b = borrow(base, 'base'), t = list.map((tool) => borrow(tool, 'tool'));
+    if (op !== 'intersect') return brepBoolean(op, b, t);   // every tool in one operation; see brepBoolean
+    let acc = b;
+    for (const tool of t) acc = track(acc.intersect(tool));
     return acc;
   });
 }
