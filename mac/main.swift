@@ -315,6 +315,10 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         check.target = updater
         appMenu.addItem(check)
         appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide CADgang", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h").keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit CADgang", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         app.submenu = appMenu
 
