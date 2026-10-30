@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import * as THREE from 'three';
 const R = new URL('..', import.meta.url).pathname;
 const { importCadFile } = await import(`${R}/src/core/step.js`);
-const { explodeOffsets } = await import(`${R}/web/explode.js`);
+const { explodeOffsets } = await import(process.env.EXPLODE ? `${R}/${process.env.EXPLODE}` : `${R}/web/explode.js`);   // EXPLODE=test/.dbg/explode-old.js: another solver, for a before/after
 const file = process.argv[2];
 const m = await importCadFile(fs.readFileSync(file), { name: file.split('/').pop(), linearDeflection: parseFloat(process.env.DEFL || "0.002") });
 const pos = m.positions, idx = m.indices;
@@ -19,12 +19,14 @@ const box = new THREE.Box3(); for (const b of bodies) { b.geometry.computeBoundi
 const centre = box.getCenter(new THREE.Vector3());
 const t0 = Date.now(); explodeOffsets(bodies, centre); const ms = Date.now() - t0;
 console.log(`${file.split('/').pop()}: ${bodies.length} bodies, ${idx.length / 3} tris, solved in ${ms} ms, size ${box.getSize(new THREE.Vector3()).toArray().map((v) => v.toFixed(0))}`);
-const place = (k) => { const done = new Set(); const p = (b) => { if (done.has(b)) return b.position; done.add(b); b.position.copy(b.userData.offset).multiplyScalar(k * 2); if (b.userData.parent) b.position.add(p(b.userData.parent)); return b.position; }; for (const b of bodies) p(b); for (const b of bodies) b.updateMatrixWorld(true); };
-for (const b of bodies) { const o = b.userData.offset, d = o.length() ? o.clone().normalize().toArray().map((v) => v.toFixed(2)) : '-'; console.log(`  ${b.userData.name.padEnd(22).slice(0, 22)} at ${b.geometry.boundingBox.getCenter(new THREE.Vector3()).toArray().map((v) => v.toFixed(0)).join(",").padEnd(14)} len ${o.length().toFixed(1).padStart(7)} dir ${String(d).padEnd(18)} ${b.userData.parent ? 'rides ' + b.userData.parent.userData.name : ''}`); }
+// staged like the viewer: a part travels in its own window of the slider
+const S = 1 + Math.max(0, ...bodies.map((b) => b.userData.stage ?? 0)), frac = (b, k) => (S < 2 ? k : Math.min(1, Math.max(0, k * S - (b.userData.stage ?? 0))));
+const place = (k) => { const done = new Set(); const p = (b) => { if (done.has(b)) return b.position; done.add(b); b.position.copy(b.userData.offset).multiplyScalar(frac(b, k) * 2); if (b.userData.parent) b.position.add(p(b.userData.parent)); return b.position; }; for (const b of bodies) p(b); for (const b of bodies) b.updateMatrixWorld(true); };
+for (const b of bodies) { const o = b.userData.offset, d = o.length() ? o.clone().normalize().toArray().map((v) => v.toFixed(2)) : '-'; console.log(`  ${b.userData.name.padEnd(22).slice(0, 22)} at ${b.geometry.boundingBox.getCenter(new THREE.Vector3()).toArray().map((v) => v.toFixed(0)).join(",").padEnd(14)} len ${o.length().toFixed(1).padStart(7)} dir ${String(d).padEnd(18)} ${b.userData.parent ? 'rides ' + b.userData.parent.userData.name : ''} s${b.userData.stage ?? 0}`); }
 // collisions: sample vertices of A inside B (ray parity along +X)
 const ray = new THREE.Raycaster();
 const inside = (p, B) => { ray.set(p, new THREE.Vector3(1, 0, 0)); return ray.intersectObject(B, false).length % 2 === 1; };
-for (const k of [0, 0.5, 1]) {   // k=0 is the model as drawn: overlaps there are the model's, not the solver's
+for (const k of [0, 0.25, 0.5, 0.75, 1]) {   // k=0 is the model as drawn: overlaps there are the model's, not the solver's
   place(k); const bad = [];
   for (const A of bodies) for (const B of bodies) {
     if (A === B) continue;

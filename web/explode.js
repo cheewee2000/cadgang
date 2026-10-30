@@ -292,78 +292,100 @@ export function explodeOffsets(bodies, centre, hints = new Map()) {
     }
     P.offset.setLength(need);
   }
-  // no collisions, judged pair by pair on relative motion (a part riding on its pocket's body moves with
-  // it): seen from body Q, body P travels along P.abs - Q.abs; if that path runs into Q within the travel,
-  // P takes the clearest of its candidates whose whole travel is clear of everyone. None clear, it keeps
-  // the direction the rules gave it.
-  const absOf = (P, seen = new Set()) => { if (!P.parent || seen.has(P)) return P.offset.clone(); seen.add(P); return P.offset.clone().add(absOf(plan[bodies.indexOf(P.parent)], seen)); };
-  for (const P of plan) P.abs = absOf(P);
-  const parentAbs = (P) => (P.parent ? plan[bodies.indexOf(P.parent)].abs : new THREE.Vector3());
+  // The order the parts come off, and each part's way out judged in that order. A part is taken apart against only
+  // what is still in the assembly: what came off before it is gone, and what rides a part that came off went with it,
+  // as a sub-assembly (the board out of the shell with its components on it; then each component off the board, judged
+  // against the board and the components still on it). Each round takes every part whose own travel is clear of the
+  // rest of its assembly at rest; the parts of a round move together, so one blocked by another of its round that is
+  // not blocked back waits a round (two in each other's way go together: a cover and the board it hides). A round with
+  // nothing clear re-aims what is left onto the clearest of its candidates against what remains; failing that, the
+  // roomiest way, stopping short of the hit.
   // does Q ride on P (through any chain)? its position is then P's plus its own, and that own travel is Q's to clear
   const ridesOn = (Q, P) => { const seen = new Set(); for (let x = Q; x && x.parent && !seen.has(x); x = plan[bodies.indexOf(x.parent)]) { seen.add(x); if (x.parent === P.m) return true; } return false; };
-  // clearance of P moving by `abs`: the smallest gap left to any other body along the relative path (Infinity: none in the way)
-  const clearance = (P, abs) => {
-    let worst = Infinity;
-    for (const Q of plan) {
+  const off = new Set();   // taken off already
+  // the assembly P is in: its nearest ancestor that came off (P sits on it still), or null for the main one
+  const space = (P) => { const seen = new Set(); for (let x = P.parent && plan[bodies.indexOf(P.parent)]; x && !seen.has(x); x = x.parent && plan[bodies.indexOf(x.parent)]) { seen.add(x); if (off.has(x)) return x; } return null; };
+  // clearance of P moving by `v` from rest among `among`, of which those in `moving` travel at the same time (relative
+  // motion) and the rest stand still. The smallest gap left along the path (negative: they meet before the end of the
+  // travel) and what closes it.
+  const clearance = (P, v, among, moving) => {
+    let worst = Infinity, by = null;
+    for (const Q of among) {
       if (P.joint && Q.m === hints.get(P.m)?.parent) continue;   // along its joint axis a part is free of what it is jointed to: that is the joint
-      if (Q === P || ridesOn(Q, P)) continue;   // the parent too: a part leaving its pocket is judged on the relative path, which is its own offset
-      const v = abs.clone().sub(Q.abs); if (v.length() < 0.1 * abs.length()) continue;   // same way, a tenth of the drift: not a collision
-      if (info[P.i].c.distanceTo(info[Q.i].c) > info[P.i].r + info[Q.i].r + 2 * v.length()) continue;
-      const h = hitFrom(P.i, v, [Q.m], Q.m === P.housing ? P.lip : undefined); if (!h) continue;
-      worst = Math.min(worst, h.gap - 2 * v.length());   // negative: they meet before full explode
+      if (Q === P || ridesOn(Q, P)) continue;
+      const rel = moving.has(Q) ? v.clone().sub(Q.offset) : v.clone(); if (rel.length() < 0.1 * v.length()) continue;   // same way, a tenth of the drift: not a collision
+      if (info[P.i].c.distanceTo(info[Q.i].c) > info[P.i].r + info[Q.i].r + 2 * rel.length()) continue;
+      const h = hitFrom(P.i, rel, [Q.m], Q.m === P.housing ? P.lip : undefined); if (!h) continue;
+      const g = h.gap - 2 * rel.length(); if (g < worst) { worst = g; by = Q; }
     }
-    return worst;
+    return { worst, by };
   };
-  for (const P of plan) {
-    if (!P.dir) continue;
-    const c0 = clearance(P, P.abs);
-    if (c0 >= 0) continue;
-    let best = null, far = null;
+  const take = (P, d, len) => { P.dir = d; P.offset = d.clone().multiplyScalar(len); };
+  // P's clearest candidate against `among` at rest: taken when it is clear. With `settle`, nothing clear takes the
+  // roomiest way and stops where it would hit (a knob in its slot), or its joint's way (a snap-fit, a thread).
+  // How far P must travel along d to be out of `among` altogether: its near face past the far edge of everything else.
+  const reach = (P, d, among) => { let top = -Infinity; for (const Q of among) if (Q !== P && !ridesOn(Q, P)) top = Math.max(top, span(Q.i, d)[1]); return Math.max(0, top - span(P.i, d)[0]); };
+  // With `out`, a candidate counts only when it takes P clear out of its assembly (the knob out of its slot, not along
+  // it): judged over that whole reach, while the offset stays the rule's length.
+  const reaim = (P, among, settle, out = false) => {
+    let best = null, far = null; const none = new Set();
     const want = P.fallback ? new THREE.Vector3() : P.dir.clone().normalize();   // plain radial is no rule: no pull
-    for (const d of P.cands) for (const ride of P.parent ? [true, false] : [false]) {   // riding, or alone if the ride is what collides
-      const len = P.len(d), abs = d.clone().multiplyScalar(len); if (ride) abs.add(parentAbs(P));
+    for (const d of P.cands) {
+      const len = P.len(d), v = d.clone().multiplyScalar(out ? Math.max(len, reach(P, d, among) / 2) : len);
       // clearest; ties toward what the rules wanted (a lens along its thread), then the shorter trip (a part boxed in
-      // under a wall slid 27 mm along its board toward the radial), then the radial, then the ride. Capped: Infinity
-      // plus a tie-break is Infinity, and the first axis in the list won (a button above the board went sideways).
-      const clear = Math.min(clearance(P, abs), 1e6), score = clear + 1e-3 * d.dot(want) - 1e-6 * len + 1e-8 * d.dot(P.radial) + (ride ? 1e-10 : 0);
+      // under a wall slid 27 mm along its board toward the radial), then the radial. Capped: Infinity plus a tie-break
+      // is Infinity, and the first axis in the list won (a button above the board went sideways).
+      const clear = Math.min(clearance(P, v, among, none).worst, 1e6), score = clear + 1e-3 * d.dot(want) - 1e-6 * len + 1e-8 * d.dot(P.radial);
       // gap: how far it could go before hitting. ponytail: the radial term is a knife edge kept as it was (a screw under
-      // a sweeping sub-board stays out along its axis by it); a proper fix sequences the sweep
-      const c = { d, score, ride, len, gap: clear + 1e-3 * d.dot(P.radial) + 2 * len };
+      // a sweeping sub-board stays out along its axis by it)
+      const c = { d, score, len, gap: clear + 1e-3 * d.dot(P.radial) + 2 * len };
       if (!best || score > best.score) best = c;
       if (!far || c.gap > far.gap) far = c;
     }
-    const take = (c, len) => { P.dir = c.d; if (!c.ride) P.parent = null; P.offset = c.d.clone().multiplyScalar(len); P.abs = P.offset.clone().add(parentAbs(P)); };
-    if (best && best.score >= 0) take(best, best.len);
-    // nothing is clear (a knob in its slot, a part boxed in): go the roomiest way and stop where it would hit,
-    // rather than the least-bad full travel through a wall
-    else if (P.joint) take({ d: P.dir, ride: true }, P.len(P.dir));   // its joint says it can go this way: trust that over a wall a snap-fit or a thread stands in
-    else if (far && far.gap > 0) take(far, Math.min(far.len, far.gap / 2));
-  }
-  // Stages. What stands in a part's way at rest comes off before it: a part's travel (twice its offset, along it)
-  // against every body that neither carries it nor rides on it. Two parts in each other's way go together (a
-  // cover and the board it hides can leave opposite ways at once); a longer loop is cut where it closes.
-  const waits = plan.map(() => new Set());
-  for (const P of plan) {
-    const len = P.offset.length(); if (!P.dir || !len) continue;
-    const d = P.offset.clone().normalize(), travel = 2 * len;
-    for (const Q of plan) {
-      if (Q === P || ridesOn(Q, P) || ridesOn(P, Q)) continue;
-      if (info[P.i].c.distanceTo(info[Q.i].c) > info[P.i].r + info[Q.i].r + travel) continue;
-      const h = hitFrom(P.i, d, [Q.m], Q.m === P.housing ? P.lip : undefined);
-      if (h && h.gap < travel) waits[P.i].add(Q.i);
-    }
-  }
-  for (const [i, w] of waits.entries()) for (const j of [...w]) if (waits[j].has(i)) { w.delete(j); waits[j].delete(i); }
-  const stage = new Array(plan.length).fill(-1), busy = new Set();
-  const depth = (i) => {
-    if (stage[i] >= 0) return stage[i];
-    busy.add(i);
-    let s = 0;
-    for (const j of waits[i]) if (!busy.has(j)) s = Math.max(s, depth(j) + 1);
-    busy.delete(i);
-    return (stage[i] = s);
+    if (best && best.score >= 0) { if (!best.d.equals(P.dir)) take(P, best.d, best.len); return true; }
+    if (!settle) return false;
+    if (P.joint) take(P, P.dir, P.len(P.dir));
+    else if (far && far.gap > 0) take(P, far.d, Math.min(far.len, far.gap / 2));
+    return true;
   };
-  for (const P of plan) P.stage = Math.min(depth(P.i), 5);
+  for (const P of plan) P.stage = 0;
+  const left = new Set(plan.filter((P) => P.dir && P.offset.length()));
+  // what is still in P's assembly: everything not yet off (the parts that never move too), plus the part it sits on
+  const amongOf = (P) => { const A = space(P), out = plan.filter((Q) => !off.has(Q) && space(Q) === A); if (A) out.push(A); return out; };
+  for (let s = 0; left.size; s++) {
+    const none = new Set();
+    // A part comes off when its rule's direction takes it clear out of its assembly; one whose way is blocked waits
+    // for what blocks it to come off first (a standoff waits for the board under it: it does not slip out sideways).
+    // A plain radial is no rule: that part goes when its own travel is clear, and is never re-aimed out.
+    const out = (P) => clearance(P, P.dir.clone().multiplyScalar(Math.max(P.offset.length(), reach(P, P.dir, amongOf(P)) / 2)), amongOf(P), none).worst >= 0;
+    // a direction between the axes (away from two touches at once) is a guess: of its candidates, the clearest way out
+    let ready = [...left].filter((P) => (P.fallback ? clearance(P, P.offset, amongOf(P), none).worst >= 0 : Math.max(...P.dir.toArray().map(Math.abs)) < 0.95 ? reaim(P, amongOf(P), false, true) : out(P)));
+    // nothing can come off: whatever can leave along another candidate does; else what is clear for its own travel
+    // (a knob free to move in its slot); else the clearest candidate for its own travel; else the roomiest, stopping short
+    if (!ready.length) ready = [...left].filter((P) => !P.fallback && reaim(P, amongOf(P), false, true));
+    if (!ready.length) ready = [...left].filter((P) => clearance(P, P.offset, amongOf(P), none).worst >= 0);
+    if (!ready.length) ready = [...left].filter((P) => reaim(P, amongOf(P), false));
+    if (!ready.length) ready = [...left].filter((P) => reaim(P, amongOf(P), true));
+    // moving together: one blocked by another of the round waits, unless they block each other
+    const set = new Set(ready), blocked = new Map(ready.map((P) => [P, clearance(P, P.offset, ready.filter((Q) => space(Q) === space(P)), set)]));
+    const now = ready.filter((P) => { const b = blocked.get(P); return b.worst >= 0 || !b.by || blocked.get(b.by)?.by === P; });
+    if (globalThis.process?.env?.EXPLODE_TRACE) for (const P of left) { const b = clearance(P, P.offset, amongOf(P), none); console.error(`[round ${s}] ${P.m.userData.name?.slice(0, 24).padEnd(24)} in ${space(P)?.m.userData.name?.slice(0, 12) ?? 'main'} dir ${P.dir.toArray().map((v) => v.toFixed(2))} len ${P.offset.length().toFixed(1)} ${set.has(P) ? (now.includes(P) ? 'GOES' : 'waits (round-mate ' + blocked.get(P).by?.m.userData.name?.slice(0, 20) + ')') : 'blocked by ' + b.by?.m.userData.name?.slice(0, 24) + ' at ' + b.worst.toFixed(1)}`); }
+    for (const P of now.length ? now : ready) { P.stage = Math.min(s, 5); left.delete(P); off.add(P); }
+  }
+  // A part that comes off with others riding on it takes them clear out of the assembly: far enough that each rider's
+  // own travel, away from it, still ends outside what it left (the board out of the shell's back by more than its
+  // components lift off it). Riders through any chain; the travel only ever grows.
+  for (const A of plan) {
+    if (!A.dir || !A.offset.length()) continue;
+    const riders = plan.filter((R) => ridesOn(R, A)); if (!riders.length) continue;
+    const d = A.offset.clone().normalize(), others = plan.filter((Q) => Q !== A && !riders.includes(Q));
+    let top = -Infinity, low = span(A.i, d)[0], back = 0;
+    for (const Q of others) top = Math.max(top, span(Q.i, d)[1]);
+    for (const R of riders) { low = Math.min(low, span(R.i, d)[0]); back = Math.max(back, -2 * R.offset.dot(d)); }
+    if (top === -Infinity) continue;
+    const need = (top - low + back) / 2;
+    if (need > A.offset.length()) A.offset.setLength(need);
+  }
   for (const P of plan) { P.m.userData.offset = P.offset; P.m.userData.parent = P.parent; P.m.userData.stage = P.stage; }
   for (const m of made) delete m.geometry.boundsTree;   // the viewer's own trees stay
 }
