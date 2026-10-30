@@ -24,7 +24,7 @@ import path from 'node:path';
 import { GraphError } from './errors.js';
 import { compileCell, normalizeParams } from './sandbox.js';
 import { cellApi, checkCellResult } from './cellapi.js';
-import { trackBrepShape, nameParts, partsOf, setParts } from './brep.js';
+import { trackBrepShape, nameParts, partsOf, setParts, brepHeapBytes, BREP_ROOM_BYTES } from './brep.js';
 
 const CELL_ID = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 const PROMPT_LIMIT = 20000;
@@ -644,21 +644,36 @@ function cellKey(cell, inputKeys) {
   ])).digest('base64');
 }
 
-function cacheResult(key, value, logs, checks, flats = []) {
-  if (resultCache.size >= RESULT_CACHE_LIMIT) {
-    const [oldest, gone] = resultCache.entries().next().value;
-    resultCache.delete(oldest);
-    try { gone.shape.delete(); } catch { /* already freed */ }
-  }
-  resultCache.set(key, { shape: setParts(value.clone(), partsOf(value)), logs, checks, flats });
+const versionsOf = new Map();   // cell id -> the keys of its cached versions
+
+function cacheResult(key, value, logs, checks, flats = [], id = null) {
+  if (resultCache.size >= RESULT_CACHE_LIMIT) forget(resultCache.keys().next().value);
+  resultCache.set(key, { shape: setParts(value.clone(), partsOf(value)), logs, checks, flats, id });
+  if (id) (versionsOf.get(id) ?? versionsOf.set(id, new Set()).get(id)).add(key);
+}
+
+function forget(key) {
+  const gone = resultCache.get(key);
+  if (!gone) return;
+  resultCache.delete(key);
+  versionsOf.get(gone.id)?.delete(key);
+  try { gone.shape.delete(); } catch { /* already freed */ }
+}
+
+/**
+ * A small model keeps its older versions, so reverting an edit is instant. A
+ * big one drops them before it rebuilds: the OCCT heap never shrinks, and a
+ * 35 s part kept alive twice is what tips the server over its restart limit —
+ * which costs the cold rebuild the cache was meant to save.
+ */
+function makeRoom(id) {
+  if (brepHeapBytes() <= BREP_ROOM_BYTES) return;
+  for (const key of [...versionsOf.get(id) ?? []]) forget(key);
 }
 
 /** Drop every cached shape (tests, and anything that changes what a cell means). */
 export function clearCellCache() {
-  for (const { shape } of resultCache.values()) {
-    try { shape.delete(); } catch { /* already freed */ }
-  }
-  resultCache.clear();
+  for (const key of [...resultCache.keys()]) forget(key);
 }
 
 /**
@@ -737,6 +752,7 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
       continue;
     }
     try {
+      if (!asserting) makeRoom(cell.id);
       const compiled = compiledFor(cell);
       const value = compiled.run(cellApi({
         params: cell.params, input, inputs, selections: cell.selections, sketch: cell.sketch,
@@ -757,7 +773,7 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
         previous = results.get(cell.id);
         previousKey = key;
         lastGood = cell.id;
-        cacheResult(key, previous, entry.logs, entry.checks, entry.flats);
+        cacheResult(key, previous, entry.logs, entry.checks, entry.flats, cell.id);
       }
     } catch (err) {
       // A lost pick is not a bug in the code — it is a question only the human
