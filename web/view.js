@@ -157,6 +157,7 @@ scene.add(model, edges);
 let grid = null;
 let bbox = null;
 let joints = [];   // see JOINTS: the bodies that move on an axis
+let states = [];   // see STATES: saved positions of every part, recalled by name
 let sources = [];   // what each open file loaded as: [{name, cad, buffer}] (CAD tessellated), for Share to web and project files
 let lights = [];   // a glTF's lamps (KHR_lights_punctual), file frame: {pos, dir, color, cos: [outer, inner]}, for the Metal render
 
@@ -168,6 +169,7 @@ function clearModel() {
   bbox = null;
   sources = []; lights = [];
   joints = []; renderJoints();
+  states = []; renderStates();
   selected.clear(); paintSelection();
   rot.identity();
   setRender(false);
@@ -2174,8 +2176,59 @@ function loadJoints() {
     const next = (d.joints ?? []).map(normalizeJoint);
     if (JSON.stringify(next) !== JSON.stringify(joints)) { setJoints(next); commit(); }
     jointsSaved = JSON.stringify(joints);   // this is what the server holds: nothing to write back
+    if (JSON.stringify(d.states ?? []) !== JSON.stringify(states)) { states = d.states ?? []; commit(); }
+    renderStates();
   }).catch(() => {});
 }
+// STATES: where every part sits — the mode, the explode slider, each joint's values and each part's drag or
+// triad move — saved under a name and put back with Go. They live with the file's joints and in a project.
+const poseState = () => ({
+  mode: ui.mode, explode: +$('#explode').value,
+  joints: Object.fromEntries(joints.map((j) => [j.id, [j.value, j.value2, j.value3].map((v) => (v == null ? null : +(+v).toFixed(4)))])),
+  parts: Object.fromEntries(model.children.filter((m) => m.userData.exTo || m.userData.place).map((m) => [partKey(m), { exTo: m.userData.exTo?.toArray().map((v) => +v.toFixed(4)) ?? null, place: placeArr(m) }])),
+});
+function recallState(s) {
+  if (s.mode && s.mode !== ui.mode) setMode(s.mode);
+  $('#explode').value = s.explode ?? 0;
+  for (const j of joints) { const v = s.joints?.[j.id]; if (v) { j.value = v[0] ?? j.value; if (v[1] != null) j.value2 = v[1]; if (v[2] != null) j.value3 = v[2]; } }
+  for (const m of model.children) { const p = s.parts?.[partKey(m)]; m.userData.exTo = p?.exTo ? new THREE.Vector3(...p.exTo) : undefined; m.userData.place = placeOf(p?.place); }
+  applyExplode(); renderJoints(); saveJoints(); commit();
+  say(`state: ${s.name}`);
+}
+let statesTimer = null;
+function saveStates() {
+  clearTimeout(statesTimer);
+  statesTimer = setTimeout(() => { if (subject) api('/joints', { method: 'PUT', body: { subject, states, from: clientId } }).catch(() => {}); }, 400);
+}
+const STATE_FOLD = 'cadgang.statesFold';
+function renderStates() {
+  const el = $('#states');
+  el.hidden = !model.children.length;
+  const folded = localStorage.getItem(STATE_FOLD) === '1';
+  el.classList.toggle('folded', folded);
+  const btn = (textContent, title, onclick) => Object.assign(document.createElement('button'), { className: 'ghost', textContent, title, onclick });
+  const head = Object.assign(document.createElement('div'), { className: 'joints-head' });
+  head.append(foldBtn(folded, () => { try { localStorage.setItem(STATE_FOLD, folded ? '0' : '1'); } catch {} renderStates(); }),
+    Object.assign(document.createElement('span'), { className: 'joints-title', textContent: states.length ? `States (${states.length})` : 'States' }),
+    btn('Save', 'Save where every part sits now as a new state', () => {
+      states.push({ id: Math.random().toString(36).slice(2, 8), name: `State ${states.length + 1}`, ...poseState() });
+      saveStates(); commit(); renderStates();
+      const last = el.querySelector('.state:last-child input'); if (last) { last.focus(); last.select(); }
+    }));
+  const rows = states.map((s) => {
+    const row = Object.assign(document.createElement('div'), { className: 'state' });
+    const name = Object.assign(document.createElement('input'), { value: s.name, title: 'Its name: type to rename' });
+    const rename = () => { const v = name.value.trim(); if (v && v !== s.name) { s.name = v; saveStates(); commit(); } else name.value = s.name; };
+    name.addEventListener('change', rename);
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') name.blur(); e.stopPropagation(); });   // typing a name is not a hotkey
+    row.append(btn('Go', `Put every part where it was in "${s.name}"`, () => recallState(s)), name,
+      btn('Set', `Make "${s.name}" where every part sits now`, () => { Object.assign(s, poseState()); saveStates(); commit(); say(`state set: ${s.name}`); }),
+      btn('×', `Delete "${s.name}"`, () => { states = states.filter((x) => x !== s); saveStates(); commit(); renderStates(); }));
+    return row;
+  });
+  el.replaceChildren(head, ...rows);
+}
+
 // What Claude needs to make a joint without guessing: each body's key and box, and its round faces (axis, centre, radius).
 function postBodies() {
   if (!subject || !model.children.length) return;
@@ -3481,7 +3534,7 @@ function snap() {
   return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value, rot: rotArr(),
     bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), finishes: model.children.map((m) => m.userData.finish ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3), null, m.userData.exTo?.toArray().map((v) => +v.toFixed(4)) ?? null, placeArr(m)]),
-    markup: markup.items, dims: measure.dims, joints, names: namesOf(), planes: planes.state });
+    markup: markup.items, dims: measure.dims, joints, states, names: namesOf(), planes: planes.state });
 }
 function commit() {
   const s = snap();
@@ -3514,6 +3567,7 @@ function apply(s) {
   model.children.forEach((m, i) => { const [axis, pull, , exTo, place] = st.parts?.[i] ?? []; m.userData.axis = axis || undefined; m.userData.pull = pull ?? undefined; m.userData.exTo = exTo ? new THREE.Vector3(...exTo) : undefined; m.userData.place = placeOf(place); });
   if (st.names !== undefined && JSON.stringify(st.names) !== JSON.stringify(namesOf())) applyNames(st.names);   // a state from an older file has no names or joints: leave them be
   if (st.joints !== undefined) setJoints(st.joints);
+  if (st.states !== undefined && JSON.stringify(st.states) !== JSON.stringify(states)) { states = st.states; renderStates(); saveStates(); }
   $('#explode').value = st.explode; applyExplode();
   model.children.forEach((m, i) => {
     setBodyVisible(m, st.bodies[i] ?? true); setBodyGhost(m, !!st.ghosts?.[i]);
