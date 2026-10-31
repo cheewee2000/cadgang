@@ -58,4 +58,11 @@ test('joints are stored per file; the page posting bodies does not clear them, a
   const got = await fetch(`${base}/joints?${q}`).then((r) => r.json());
   assert.deepEqual(got.joints, [joint]);
   assert.deepEqual((await put({ joints: [] })).joints, []);   // clearing is a joint write
+  // saved states live beside the joints: a states write keeps the joints, a joints write keeps the states
+  const state = { id: 's1', name: 'open', mode: 'joint', explode: 0, joints: { j1: [90, null, null] }, parts: {} };
+  await put({ joints: [joint] });
+  assert.deepEqual((await put({ states: [state] })).joints, [joint]);
+  const both = await put({ joints: [] });
+  assert.deepEqual(both.states, [state]);
+  assert.deepEqual((await fetch(`${base}/joints?${q}`).then((r) => r.json())).states, [state]);
 });

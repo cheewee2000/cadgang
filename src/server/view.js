@@ -91,7 +91,7 @@ export function pack(m) {
  * Markups, the screen, and files pushed from MCP.
  *   GET/PUT /api/view/markup?subject=…  the markups of one opened file (default: the file on screen)
  *   POST    /api/view/snapshot          the page posts {png, camera, subject} — the live view
- *   GET/PUT /api/view/joints?subject=…  the joints of one file (+ the bodies the page reports)
+ *   GET/PUT /api/view/joints?subject=…  the joints of one file (+ the bodies the page reports, + its saved states)
  *   PUT     /api/view/project?path=/abs/x.cadgang  desktop only: write a saved project
  *   GET     /api/view/screen?fresh=1    latest snapshot (+its markups); fresh=1 asks open pages to post
  *                                       a new one first and waits up to ?wait= seconds (default 3)
@@ -138,14 +138,14 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   // Joints of one file, and the bodies they can be made on (the page posts those: name key, box, cylinders).
   // Claude reads both and writes joints; the page loads what changed unless it made the change itself (`from`).
   const jointsPath = (subject) => path.join(dataDir, 'joints', `${slug(subject)}.json`);
-  const readJoints = (subject) => { try { const d = JSON.parse(fsSync.readFileSync(jointsPath(subject), 'utf8')); return { joints: d.joints ?? [], bodies: d.bodies ?? [] }; } catch { return { joints: [], bodies: [] }; } };
+  const readJoints = (subject) => { try { const d = JSON.parse(fsSync.readFileSync(jointsPath(subject), 'utf8')); return { joints: d.joints ?? [], bodies: d.bodies ?? [], states: d.states ?? [] }; } catch { return { joints: [], bodies: [], states: [] }; } };
   r.get('/joints', (req, res) => { const subject = subjectOf(req); res.json({ subject, ...readJoints(subject) }); });
   r.put('/joints', (req, res, next) => {
     try {
       const subject = subjectOf(req);
       if (!subject) throw Object.assign(new Error('No file is open to attach joints to'), { status: 400 });
       const cur = readJoints(subject), has = Array.isArray(req.body?.joints);
-      const next_ = { joints: has ? req.body.joints : cur.joints, bodies: Array.isArray(req.body?.bodies) ? req.body.bodies : cur.bodies };
+      const next_ = { joints: has ? req.body.joints : cur.joints, bodies: Array.isArray(req.body?.bodies) ? req.body.bodies : cur.bodies, states: Array.isArray(req.body?.states) ? req.body.states : cur.states };
       fsSync.mkdirSync(path.dirname(jointsPath(subject)), { recursive: true });
       fsSync.writeFileSync(jointsPath(subject), JSON.stringify(next_));
       if (has) broadcast({ type: 'joints_changed', subject, from: String(req.body.from || '') });
