@@ -64,6 +64,8 @@ Data is the `--dump` output of stage 1: per assembly `<id>.json` (parts with the
 - Start with a PointNet-style encoder per part and an MLP on the pair, before anything fancier. JoinABLe is the reference for the harder B-rep graph version; its data cannot be used, its design can.
 - Split by assembly id, not by pair. Report type accuracy and axis angular error per type, and compare against the rule solver's own axis from the same dump (`solve[].dir` of the smaller part).
 
+**Code:** `compute/joints/` (see its README): `main.py index | train | eval | export`, with checkpoint/resume and SIGTERM handling, and `selftest.sh` on a synthetic dump. Not yet run on the real dumps.
+
 **Deliverable:** training script under `compute/joints/`, a report, and if the axis error beats the rule solver on CYLINDRICAL/SLIDER/REVOLUTE, an export path: weights small enough to ship (ONNX, < 10 MB) and a note on how to call it from `src/server/` so the viewer gets a joint suggestion for a selected pair (the J key) and `explodeOffsets` gets it as a hint. Wiring into the app is the Mac session's job.
 
 ## Stage 3: part classifier
@@ -71,6 +73,8 @@ Data is the `--dump` output of stage 1: per assembly `<id>.json` (parts with the
 Labels come from body names in Che-Wei's own corpus (2,573 files on the Mac, names like `M3x8 SHCS`, `Hex Nut`, `Washer`, `PCB`), which does not leave the Mac. The Mac session exports `compute/results/parts-labelled.jsonl` (one line per body: label, point cloud of 1024 points, bbox) on request; ask for it. Until then, AutoMate parts can pre-train an encoder unsupervised, and FASTENED-mate counts per part are a weak "fastener" label.
 
 Classes: screw, nut, washer, standoff, pcb, bearing, other. Target: label the unnamed bodies on import (the corpus had many) so the Bodies panel shows a guess and the solver knows a fastener is a fastener. Same PointNet encoder as stage 2.
+
+**Code:** `compute/parts/` (see its README): `validate.py` checks the labelled JSONL before any training, and `main.py cache | train | eval | export` trains and reports. `main.py pretrain` is the optional unsupervised AutoMate encoder pretraining. The FASTENED weak label is deliberately not implemented. Shared pieces are in `compute/cadnn/`; the tests are `python3 -m unittest discover -s compute/tests -v`.
 
 ## Reporting back
 
