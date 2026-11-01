@@ -1,0 +1,9 @@
+# Stages 2 and 3 (compute/joints, compute/parts). Install torch for the cluster's GPU first, e.g. ROCm:
+#   pip install torch --index-url https://download.pytorch.org/whl/rocm6.2
+# or CUDA:  pip install torch --index-url https://download.pytorch.org/whl/cu124
+numpy>=1.24
+torch>=2.0
+# optional
+scipy        # faster contact masks in stage 2 (a numpy fallback gives the same answer)
+onnx         # checks exported models
+onnxruntime  # runs exported models once to compare with torch
