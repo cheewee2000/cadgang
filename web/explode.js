@@ -371,7 +371,7 @@ export function explodeOffsets(bodies, centre, hints = new Map()) {
     const set = new Set(ready), blocked = new Map(ready.map((P) => [P, clearance(P, P.offset, ready.filter((Q) => space(Q) === space(P)), set)]));
     const now = ready.filter((P) => { const b = blocked.get(P); return b.worst >= 0 || !b.by || blocked.get(b.by)?.by === P; });
     if (globalThis.process?.env?.EXPLODE_TRACE) for (const P of left) { const b = clearance(P, P.offset, amongOf(P), none); console.error(`[round ${s}] ${P.m.userData.name?.slice(0, 24).padEnd(24)} in ${space(P)?.m.userData.name?.slice(0, 12) ?? 'main'} dir ${P.dir.toArray().map((v) => v.toFixed(2))} len ${P.offset.length().toFixed(1)} ${set.has(P) ? (now.includes(P) ? 'GOES' : 'waits (round-mate ' + blocked.get(P).by?.m.userData.name?.slice(0, 20) + ')') : 'blocked by ' + b.by?.m.userData.name?.slice(0, 24) + ' at ' + b.worst.toFixed(1)}`); }
-    for (const P of now.length ? now : ready) { P.stage = Math.min(s, 5); left.delete(P); off.add(P); }
+    for (const P of now.length ? now : ready) { P.stage = Math.min(s, 5); P.round = s; left.delete(P); off.add(P); }
   }
   // A part that comes off with others riding on it takes them clear out of the assembly: far enough that each rider's
   // own travel, away from it, still ends outside what it left (the board out of the shell's back by more than its
@@ -386,6 +386,32 @@ export function explodeOffsets(bodies, centre, hints = new Map()) {
     if (top === -Infinity) continue;
     const need = (top - low + back) / 2;
     if (need > A.offset.length()) A.offset.setLength(need);
+  }
+  // A stack: a part that came off in a later round runs along the way an earlier part left, and would end inside it
+  // (parts off earlier count as gone in the rounds). Walking from the last round back, each earlier part in the later
+  // one's path goes on until it ends a thickness of the later part beyond it. Positions at full explode, through the chain of rides.
+  const world = (P) => { const v = new THREE.Vector3(); for (let x = P, n = 0; x && n <= plan.length; x = x.parent && planOf.get(x.parent), n++) v.addScaledVector(x.offset, 2); return v; };
+  const stacks = (P) => P.dir && P.offset.length() && !P.fallback && P.round !== undefined;
+  for (const P of plan.filter(stacks).sort((a, b) => b.round - a.round)) {
+    const wp = world(P), d = wp.clone().normalize(), a = axisOf(d);
+    for (const Q of plan) {
+      if (!stacks(Q) || Q.settled || Q.round >= P.round || ridesOn(P, Q) || ridesOn(Q, P)) continue;
+      const wq = world(Q), along = Q.offset.clone().normalize().dot(d);
+      if (along < 0.95 || wq.clone().normalize().dot(d) < 0.95) continue;
+      // across the way: their boxes at full explode overlap on the other two axes
+      const cp = info[P.i].c.clone().add(wp), cq = info[Q.i].c.clone().add(wq), hp = info[P.i].half, hq = info[Q.i].half;
+      if ([0, 1, 2].some((k) => k !== a && Math.abs(cp.getComponent(k) - cq.getComponent(k)) >= hp.getComponent(k) + hq.getComponent(k) - 1e-3 * info[P.i].r)) continue;
+      if (span(Q.i, d)[1] + wq.dot(d) <= span(P.i, d)[0]) continue;   // parked behind where P starts: not in its way
+      const need = span(P.i, d)[1] + wp.dot(d) + 2 * extOf(hp, d) - (span(Q.i, d)[0] + wq.dot(d));
+      if (need <= 0) continue;
+      const grown = Q.offset.clone().setLength(Q.offset.length() + need / 2 / along);
+      // and only if that longer way is no worse: pushed on through something else, it would trade one collision for another
+      const still = plan.filter((X) => X !== Q && !(X.round < Q.round)), was = clearance(Q, Q.offset, still, new Set()).worst, now = clearance(Q, grown, still, new Set()).worst;
+      if (now < 0 && now < was - 1e-6) continue;
+      // and so must what rides it: pushed on, its riders go with it (screws on a gear through the plate below)
+      if (plan.some((R) => ridesOn(R, Q) && clearance(R, R.offset.clone().add(grown), still, new Set()).worst < Math.min(0, clearance(R, R.offset.clone().add(Q.offset), still, new Set()).worst - 1e-6))) continue;
+      Q.offset.copy(grown);
+    }
   }
   for (const P of plan) { P.m.userData.offset = P.offset; P.m.userData.parent = P.parent; P.m.userData.stage = P.stage; }
   for (const m of made) delete m.geometry.boundsTree;   // the viewer's own trees stay
