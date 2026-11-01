@@ -1,0 +1,82 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cadgang-automate-oracle
+  namespace: cadgang-compute
+  labels:
+    app: cadgang-automate-oracle
+spec:
+  backoffLimit: 2
+  podReplacementPolicy: Failed
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+      - action: Ignore
+        onExitCodes:
+          operator: In
+          values: [143]
+  template:
+    metadata:
+      labels:
+        app: cadgang-automate-oracle
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: oracle
+          image: node:22-bookworm
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git curl unzip python3 python3-pip
+              rm -rf /var/lib/apt/lists/*
+              if [ ! -d "$WORK/repo/.git" ]; then
+                git clone --branch compute/automate-oracle --single-branch https://github.com/cheewee2000/cadgang.git "$WORK/repo"
+              else
+                git -C "$WORK/repo" fetch origin compute/automate-oracle
+                git -C "$WORK/repo" checkout -f origin/compute/automate-oracle
+              fi
+              cd "$WORK/repo"
+              npm ci
+              python3 -m pip install --break-system-packages --no-cache-dir pandas pyarrow
+              bash compute/automate/selftest.sh
+              export AUTOMATE="$WORK/automate"
+              bash compute/automate/fetch.sh
+              python3 compute/automate/pick.py
+              mkdir -p "$WORK/results" "$WORK/automate/dump"
+              JOBS="${JOBS:-64}" node compute/automate/explode.automate.mjs --list "$AUTOMATE/selected.txt" --out "$WORK/results/automate-base.jsonl" --dump "$WORK/automate/dump"
+              HINTS=1 JOBS="${JOBS:-64}" node compute/automate/explode.automate.mjs --list "$AUTOMATE/selected.txt" --out "$WORK/results/automate-hints.jsonl"
+              python3 compute/automate/report.py --base "$WORK/results/automate-base.jsonl" --hints "$WORK/results/automate-hints.jsonl" --dump "$WORK/automate/dump" --out "$WORK/results/automate-report.md"
+          env:
+            - name: WORK
+              value: /mnt/shared/cadgang
+            - name: JOBS
+              value: "64"
+          resources:
+            requests:
+              cpu: "32"
+              memory: 64Gi
+              amd.com/gpu: "8"
+            limits:
+              cpu: "64"
+              memory: 192Gi
+              amd.com/gpu: "8"
+          volumeMounts:
+            - name: shared
+              mountPath: /mnt/shared
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: shared
+          hostPath:
+            path: /mnt/shared
+            type: Directory
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi
