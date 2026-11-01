@@ -11,3 +11,4 @@ dist/
 mac/Sparkle/
 bin/
 .playwright-cli/
+__pycache__/
