@@ -3,7 +3,9 @@
 // binary that src/core/step.js reads back into the same shape ReadStepFile returns.
 //   cadgang-occt <step|iges|brep> <file> <linearDeflection bbox ratio> <angularDeflection>
 // Per mesh: u32 nameLen, name, u8 hasColor [f32 r g b], u32 nVerts, f32 pos[3n], u8 hasNormals
-// [f32 nrm[3n]], u32 nTris, u32 idx[3t], u32 nFaces, (u32 first, i32 last)[nFaces]. Ends with u32 0xFFFFFFFF.
+// [f32 nrm[3n]], u32 nTris, u32 idx[3t], u32 nFaces, (u32 first, i32 last)[nFaces]. Meshes end with u32 0xFFFFFFFF.
+// Then the node tree js-interface.cpp returns as result.root (part names, which mesh sits in which part), depth first
+// from the root: u32 nameLen, name, u32 nMeshes, u32 meshIndex[nMeshes], u32 nChildren, then each child the same way.
 #include "importer-step.hpp"
 #include "importer-iges.hpp"
 #include "importer-brep.hpp"
@@ -17,10 +19,17 @@
 
 template <typename T> static void put (std::vector<char>& b, T v) { b.insert (b.end (), (char*) &v, (char*) &v + sizeof v); }
 
-static void walk (const NodePtr& node, const std::function<void (const Mesh&)>& onMesh)
+// Meshes go to onMesh in js-interface's order (a node's own, then its children's); the tree goes into `tree`.
+static void walk (const NodePtr& node, const std::function<void (const Mesh&)>& onMesh, std::vector<char>& tree, uint32_t& meshCount)
 {
-    if (node->IsMeshNode ()) node->EnumerateMeshes (onMesh);
-    for (const NodePtr& child : node->GetChildren ()) walk (child, onMesh);
+    std::string name = node->GetName ();
+    put<uint32_t> (tree, name.size ()); tree.insert (tree.end (), name.begin (), name.end ());
+    std::vector<uint32_t> own;
+    if (node->IsMeshNode ()) node->EnumerateMeshes ([&](const Mesh& mesh) { onMesh (mesh); own.push_back (meshCount++); });
+    put<uint32_t> (tree, own.size ()); for (uint32_t i : own) put<uint32_t> (tree, i);
+    std::vector<NodePtr> children = node->GetChildren ();
+    put<uint32_t> (tree, children.size ());
+    for (const NodePtr& child : children) walk (child, onMesh, tree, meshCount);
 }
 
 int main (int argc, char** argv)
@@ -40,7 +49,8 @@ int main (int argc, char** argv)
     Importer::Result r = importer->LoadFile (std::string (argv[2]), params);
     if (r != Importer::Result::Success) { fprintf (stderr, r == Importer::Result::FileNotFound ? "file not found\n" : "import failed\n"); return 1; }
 
-    std::vector<char> b;
+    std::vector<char> b, tree;
+    uint32_t meshCount = 0;
     std::vector<float> pos, nrm;
     std::vector<uint32_t> idx;
     std::vector<int32_t> faces;
@@ -68,8 +78,9 @@ int main (int argc, char** argv)
         put<uint32_t> (b, faces.size () / 2); b.insert (b.end (), (char*) faces.data (), (char*) (faces.data () + faces.size ()));
         fwrite (b.data (), 1, b.size (), stdout);
         b.clear ();
-    });
+    }, tree, meshCount);
     put<uint32_t> (b, 0xFFFFFFFF);
+    b.insert (b.end (), tree.begin (), tree.end ());
     fwrite (b.data (), 1, b.size (), stdout);
     return 0;
 }
