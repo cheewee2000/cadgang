@@ -68,9 +68,16 @@ Data is the `--dump` output of stage 1: per assembly `<id>.json` (parts with the
 
 ## Stage 3: part classifier
 
-Labels come from body names in Che-Wei's own corpus (2,573 files on the Mac, names like `M3x8 SHCS`, `Hex Nut`, `Washer`, `PCB`), which does not leave the Mac. The Mac session exports `compute/results/parts-labelled.jsonl` (one line per body: label, point cloud of 1024 points, bbox) on request; ask for it. Until then, AutoMate parts can pre-train an encoder unsupervised, and FASTENED-mate counts per part are a weak "fastener" label.
+Labels come from body names in Che-Wei's own corpus (2,573 files on the Mac, names like `M3x8 SHCS`, `Hex Nut`, `Washer`, `PCB`), which does not leave the Mac through git. The Mac session runs `compute/labels/export.mjs` over the corpus and the user copies the result to the cluster by hand:
 
-Classes: screw, nut, washer, standoff, pcb, bearing, other. Target: label the unnamed bodies on import (the corpus had many) so the Bodies panel shows a guess and the solver knows a fastener is a fastener. Same PointNet encoder as stage 2.
+```sh
+JOBS=8 node compute/labels/export.mjs --list ~/cadgang-corpus/corpus.tsv --out ~/cadgang-corpus/parts-labelled.jsonl
+gzip -k ~/cadgang-corpus/parts-labelled.jsonl      # then scp it to the cluster; it is too big for git
+```
+
+One JSON line per named body: `label`, `name`, `file` (basename), `nVerts`, `size` (bbox, mm) and `pts`, 1024 vertices sampled evenly from the body's vertex list (not area-weighted), centred on the bbox centre, mm. The label is a regex on the cleaned name, first match wins: screw, nut, washer, standoff, bearing, magnet, spring, oring, pcb, component (R12, C3, connectors, ICs), battery, other. Bodies with CAD feature names (`body12`, `fillet3`) are skipped. The same shape repeated in one file (a pattern of screws) is one record. `other` is capped at 4 and `component` at 10 per file. Expect label noise: the names are what designers typed. Check a sample before trusting a class.
+
+Classes to predict: screw, nut, washer, standoff, pcb, component, other, and whatever else has a few hundred examples. Target: label the unnamed bodies on import (half the corpus's bodies have no name) so the Bodies panel shows a guess and the solver knows a fastener is a fastener. Same PointNet encoder as stage 2. AutoMate parts can pre-train the encoder unsupervised, and FASTENED-mate counts per part are a weak "fastener" label there.
 
 ## Reporting back
 
