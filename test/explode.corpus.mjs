@@ -13,7 +13,7 @@ const rows = fs.readFileSync(jsonl, 'utf8').split('\n').filter(Boolean).map((l) 
   .filter((r) => r.ok && r.bodies >= 3 && r.bodies <= 200 && r.tris <= 400000 && !done.has(r.file)).sort((a, b) => a.tris - b.tris);
 const JOBS = +(process.env.JOBS || 4);
 let i = 0, n = 0;
-const pairs = (line) => new Set((line.split('COLLIDING ')[1] || '').split(' | ').filter(Boolean).map((s) => s.replace(/: \d+\/\d+$/, '')));
+const pairs = (line) => new Set((line.split('COLLIDING ')[1] || '').split(' | ').filter(Boolean).map((s) => s.replace(/: \d+\/\d+$/, '').split(' in ').sort().join(' ~ ')));   // unordered: 'A in B' and 'B in A' are one pair
 const run = (r) => new Promise((resolve) => {
   const t0 = Date.now(), name = r.file.split('/').pop();
   execFile(process.execPath, ['--max-old-space-size=16384', harness, r.file], { timeout: 600000, maxBuffer: 1 << 26, env: { ...process.env, DEFL: process.env.DEFL || '0.0008' } }, (e, stdout, stderr) => {
