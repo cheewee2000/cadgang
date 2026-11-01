@@ -32,6 +32,7 @@ class PartParsing(unittest.TestCase):
             path = Path(td) / "parts.jsonl.gz"
             row = {"label": "screw", "points": [[i, 0, 0] for i in range(8)]}
             with gzip.open(path, "wt", encoding="utf-8") as out:
+                out.write("# source path comment\n")
                 out.write(json.dumps(row) + "\n")
             records = list(iter_records(path))
             self.assertEqual(len(records), 1)
