@@ -197,7 +197,8 @@ export function explodeOffsets(bodies, centre, hints = new Map()) {
         const lip = (h) => { const q = h.point.clone().sub(b.c); q.addScaledVector(b.axis, -q.dot(b.axis)); const rr = q.length(); return rr > 0.98 * b.r && rr < 1.05 * a.r; };
         const own = (d) => hitFrom(i, d, [bodies[j]], lip)?.gap ?? Infinity;
         const fp = own(plus), fm = own(minus);
-        const d = fp > fm ? plus : fm > fp ? minus : (radial.dot(plus) >= 0 ? plus : minus);
+        const tie = Math.abs(fp - fm) < 0.1 * a.r;   // blocked a hair either way (thread flanks interlocking): neither end is freer
+        const d = !tie && fp > fm ? plus : !tie && fm > fp ? minus : (radial.dot(plus) >= 0 ? plus : minus);
         P.cands.push(plus, minus);
         if (!P.dir) {
           // its way out blocked on contact by something bigger (an SMT nut on its board): held there, it rides that
