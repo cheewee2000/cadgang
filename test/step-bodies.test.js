@@ -87,3 +87,8 @@ test('the import worker transfers typed geometry and reports round-trip timing',
   assert.ok(m.timings.workerRoundTripMs >= m.timings.totalMs);
   assert.doesNotThrow(() => pack(m));
 });
+
+test('an empty STEP export (header and product, no faces) says so instead of blaming the format', async () => {
+  const txt = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nENDSEC;\nDATA;\n#1=PRODUCT('x','x','',(#2));\nENDSEC;\nEND-ISO-10303-21;\n";
+  await assert.rejects(importCadFile(Buffer.from(txt), { name: 'empty.step' }), /no geometry/);
+});

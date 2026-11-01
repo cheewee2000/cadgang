@@ -125,6 +125,8 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
     // entities, 14k solids) and reports plain failure; size tells the two apart.
     const mb = buffer.byteLength / 1048576;
     if (mb > 150) throw new Error(tooBig(name, mb.toFixed(0)));
+    // a STEP with a header and a product but no faces (an empty export; 7 of 2,500 files on one Mac) is the file's fault, not the format's
+    if (!/\.(igs|iges|brep)$/i.test(name) && Buffer.from(buffer.buffer ?? buffer, buffer.byteOffset ?? 0, buffer.byteLength).indexOf('FACE') < 0) throw new Error(`'${name}' has no geometry — the export is empty (no faces in the file)`);
     throw new Error(`Could not read '${name}' — not a valid STEP/IGES/BREP file?`);
   }
 

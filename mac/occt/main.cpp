@@ -7,6 +7,9 @@
 #include "importer-step.hpp"
 #include "importer-iges.hpp"
 #include "importer-brep.hpp"
+#include <Message.hxx>
+#include <Message_Messenger.hxx>
+#include <Message_PrinterOStream.hxx>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +26,10 @@ static void walk (const NodePtr& node, const std::function<void (const Mesh&)>& 
 int main (int argc, char** argv)
 {
     if (argc < 5) { fprintf (stderr, "usage: cadgang-occt <step|iges|brep> <file> <linDefl> <angDefl>\n"); return 2; }
+    // OCCT reports to stdout ("Total number of loaded entities 668." from the IGES reader, in colour); stdout is the
+    // mesh stream, so every IGES import came back unreadable. Send the messenger to stderr.
+    Message::DefaultMessenger ()->RemovePrinters (STANDARD_TYPE (Message_PrinterOStream));
+    Message::DefaultMessenger ()->AddPrinter (new Message_PrinterOStream ("cerr", false));
     ImporterPtr importer;
     if (!strcmp (argv[1], "iges")) importer = std::make_shared<ImporterIges> ();
     else if (!strcmp (argv[1], "brep")) importer = std::make_shared<ImporterBrep> ();
