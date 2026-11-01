@@ -170,3 +170,22 @@ test('a ball joint leaves by the open side of its socket', () => {
   const d = ball.userData.offset.clone().normalize();
   assert.ok(d.z > 0.95, `out of the open top, got ${d.toArray()}`);
 });
+
+// ---- rules read off the solver's own trace: the direction each body's rule gave it, before the rounds re-aim a blocked part
+
+const tube = (r, h) => new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 48, 1, true));
+const ring = (ri, ro, y, down = false) => { const g = new THREE.RingGeometry(ri, ro, 48); g.rotateX(down ? Math.PI / 2 : -Math.PI / 2); g.translate(0, y, 0); return new THREE.Mesh(g); };
+function ruleDirs(bodies, centre) {
+  const lines = [], err = console.error, env = process.env.EXPLODE_TRACE;
+  console.error = (s) => lines.push(String(s)); process.env.EXPLODE_TRACE = '1';
+  try { explodeOffsets(bodies, centre); } finally { console.error = err; if (env === undefined) delete process.env.EXPLODE_TRACE; else process.env.EXPLODE_TRACE = env; }
+  return Object.fromEntries(lines.filter((l) => l.startsWith('[round 0]')).map((l) => [l.slice(10, 34).trim(), l.match(/dir (\S+)/)[1].split(',').map(Number)]));
+}
+
+test('a thread held a hair either way in its housing is a tie: it leaves by the radial, not by the bigger hair', () => {
+  // a bore r 3 closed at both ends by lips (r 1.5): the pin r 2.9 sits 0.01 under the top lip and 0.02 over the bottom one
+  const housing = merged([tube(3, 20), tube(10, 20), ring(1.5, 10, 10, true), ring(1.5, 10, -10)]);
+  const pin = merged([tube(2.9, 19.97), ring(2, 2.9, 9.985), ring(2, 2.9, -9.985, true)]); pin.geometry.translate(0, 0.005, 0);
+  housing.userData.name = 'housing'; pin.userData.name = 'pin';
+  assert.deepEqual(ruleDirs([housing, pin], new THREE.Vector3(0, -40, 0)).pin, [0, 1, 0]);   // the radial points +y
+});
