@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { importCadFile, importCadFileInWorker } from '../src/core/step.js';
+import { execFileSync } from 'node:child_process';
+import { importCadFile, importCadFileInWorker, parseNative } from '../src/core/step.js';
 import { pack } from '../src/server/view.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'asm.step');
@@ -86,4 +87,30 @@ test('the import worker transfers typed geometry and reports round-trip timing',
   assert.ok(m.normals == null || m.normals instanceof Float32Array);
   assert.ok(m.timings.workerRoundTripMs >= m.timings.totalMs);
   assert.doesNotThrow(() => pack(m));
+});
+
+test('an empty STEP export (header and product, no faces) says so instead of blaming the format', async () => {
+  const txt = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nENDSEC;\nDATA;\n#1=PRODUCT('x','x','',(#2));\nENDSEC;\nEND-ISO-10303-21;\n";
+  await assert.rejects(importCadFile(Buffer.from(txt), { name: 'empty.step' }), /no geometry/);
+});
+
+test('the native importer gives every body the same name, path and colour as the WASM one', { skip: !fs.existsSync(new URL('../bin/cadgang-occt', import.meta.url)) && 'no bin/cadgang-occt (bash mac/occt/build.sh)' }, async () => {
+  const dir = path.dirname(fixture);
+  for (const name of ['nested.step', 'asm.step']) {
+    const buf = fs.readFileSync(path.join(dir, name)), seen = {};
+    try {
+      for (const wasm of ['0', '1']) {
+        process.env.CADGANG_WASM = wasm;
+        const m = await importCadFile(buf, { name });
+        assert.equal(m.timings.importer, wasm === '1' ? 'wasm' : 'native');
+        seen[wasm] = m.bodies.map((b) => ({ name: b.name, path: b.path ?? [], color: b.color ?? null }));
+      }
+    } finally { delete process.env.CADGANG_WASM; }
+    assert.deepEqual(seen['0'], seen['1'], name);
+    // the fixtures are simple enough for the text fallbacks, so check the part tree the bodies hang from too
+    const native = parseNative(execFileSync(fileURLToPath(new URL('../bin/cadgang-occt', import.meta.url)), ['step', path.join(dir, name), '0.001', '0.5'], { maxBuffer: 2 ** 30 }));
+    const occt = await (await import('occt-import-js')).default();
+    const tree = (t) => ({ name: t.name, meshes: [...t.meshes], children: t.children.map(tree) });
+    assert.deepEqual(tree(native.root), tree(occt.ReadStepFile(new Uint8Array(buf), {}).root), name);
+  }
 });

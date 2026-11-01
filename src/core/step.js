@@ -68,7 +68,7 @@ function readerFor(occt, name = '') {
 const NATIVE = fileURLToPath(new URL('../../bin/cadgang-occt', import.meta.url));
 const hasNative = () => process.env.CADGANG_WASM !== '1' && fs.existsSync(NATIVE);
 
-/** Run cadgang-occt on the buffer; returns what occt-import-js's Read*File returns (meshes only). */
+/** Run cadgang-occt on the buffer; returns what occt-import-js's Read*File returns. */
 async function readNative(buffer, name, linearDeflection, angularDeflection) {
   const ext = String(name).toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
   const fmt = ext === 'igs' || ext === 'iges' ? 'iges' : ext === 'brep' ? 'brep' : 'step';
@@ -77,11 +77,11 @@ async function readNative(buffer, name, linearDeflection, angularDeflection) {
   try {
     const out = await new Promise((resolve, reject) => execFile(NATIVE, [fmt, tmp, String(linearDeflection), String(angularDeflection)],
       { encoding: 'buffer', maxBuffer: 2 ** 32 }, (e, stdout, stderr) => e ? reject(new Error(String(stderr).trim() || e.message)) : resolve(stdout)));
-    return { success: true, meshes: parseNative(out) };
+    return { success: true, ...parseNative(out) };
   } catch { return { success: false }; }
   finally { fs.promises.rm(tmp, { force: true }); }
 }
-/** main.cpp's stream → occt-import-js mesh objects. */
+/** main.cpp's stream → what occt-import-js returns: { meshes, root } (root is null from an older binary). */
 export function parseNative(buf) {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength), meshes = [];
   let o = 0;
@@ -98,7 +98,13 @@ export function parseNative(buf) {
     for (let nf = u32(); nf--;) { const first = u32(), last = dv.getInt32(o, true); o += 4; brep_faces.push({ first, last }); }
     meshes.push({ name, color, attributes: { position: { array: position }, ...(normal && { normal: { array: normal } }) }, index: { array: index }, brep_faces });
   }
-  return meshes;
+  const node = () => {
+    const nameLen = u32(), name = buf.subarray(o, o + nameLen).toString('utf8'); o += nameLen;
+    const own = []; for (let n = u32(); n--;) own.push(u32());
+    const children = []; for (let n = u32(); n--;) children.push(node());
+    return { name, meshes: own, children };
+  };
+  return { meshes, root: o < buf.byteLength ? node() : null };
 }
 
 /**
@@ -125,6 +131,8 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
     // entities, 14k solids) and reports plain failure; size tells the two apart.
     const mb = buffer.byteLength / 1048576;
     if (mb > 150) throw new Error(tooBig(name, mb.toFixed(0)));
+    // a STEP with a header and a product but no faces (an empty export; 7 of 2,500 files on one Mac) is the file's fault, not the format's
+    if (!/\.(igs|iges|brep)$/i.test(name) && Buffer.from(buffer.buffer ?? buffer, buffer.byteOffset ?? 0, buffer.byteLength).indexOf('FACE') < 0) throw new Error(`'${name}' has no geometry — the export is empty (no faces in the file)`);
     throw new Error(`Could not read '${name}' — not a valid STEP/IGES/BREP file?`);
   }
 
@@ -224,7 +232,7 @@ function fillStyles(buffer, result, bodies, parents) {
     const own = styles.parts.get(node.name);
     (node.meshes ?? []).forEach((i, k) => { partOf[i] = node.name; if (own?.length === node.meshes.length) fromText[i] = own[k]; });
     for (const c of node.children ?? []) walk(c);
-  })(result.root);   // the WASM importer's tree; the native one sends meshes only
+  })(result.root);   // the importer's tree (the native binary streams it after the meshes)
   bodies.forEach((b, i) => {
     const st = fromText[i];
     // OCCT's writer names an unnamed product after itself ("Open CASCADE STEP translator 7.6 2.1"): no part, no folder
