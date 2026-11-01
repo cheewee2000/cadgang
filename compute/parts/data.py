@@ -33,7 +33,7 @@ CLASS_ID = {c: i for i, c in enumerate(CLASSES)}
 PLURALS = {c + 's': c for c in CLASSES}
 LABEL_KEYS = ('label', 'class', 'category')
 POINT_KEYS = ('points', 'pts', 'cloud', 'point_cloud', 'pointcloud', 'xyz', 'pc')
-BBOX_KEYS = ('bbox', 'box', 'aabb', 'bounds')
+BBOX_KEYS = ('bbox', 'box', 'aabb', 'bounds', 'size')
 GROUP_KEYS = ('group', 'assembly', 'assembly_id', 'file', 'file_id', 'path', 'document', 'doc', 'source')
 ID_KEYS = ('id', 'body_id', 'uid', 'name')
 MIN_POINTS = 8
@@ -165,7 +165,7 @@ def iter_records(path):
     with opener(path, 'rt', encoding='utf-8') as f:
         for lineno, line in enumerate(f, 1):
             s = line.strip()
-            if not s:
+            if not s or s.startswith('#'):
                 continue
             try:
                 obj = json.loads(s)

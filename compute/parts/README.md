@@ -28,13 +28,13 @@ One body per line. The parser accepts several layouts, because the Mac export's 
 |---|---|---|
 | label (required) | `label`, `class`, `category` | case-insensitive; `Screws` → screw. Nothing else is guessed: `Hex Nut` is an unknown label, not a nut |
 | points (required) | `points`, `pts`, `cloud`, `point_cloud`, `pointcloud`, `xyz`, `pc` | flat `[x,y,z,x,y,z,…]`, nested `[[x,y,z],…]`, channels-first `[[x…],[y…],[z…]]`, `{x:[…],y:[…],z:[…]}`; at least 8 finite points |
-| bbox | `bbox`, `box`, `aabb`, `bounds` | `[minx,miny,minz,maxx,maxy,maxz]`, `[[min],[max]]`, `{min,max}` (lists or `{x,y,z}`), `{center,size}`, or 3 extents |
+| bbox | `bbox`, `box`, `aabb`, `bounds`, `size` | `[minx,miny,minz,maxx,maxy,maxz]`, `[[min],[max]]`, `{min,max}` (lists or `{x,y,z}`), `{center,size}`, or 3 extents |
 | group | `group`, `assembly`, `assembly_id`, `file`, `file_id`, `path`, `document`, `doc`, `source` | any string |
 | id | `id`, `body_id`, `uid`, `name` | any string |
 
 The bbox gives the body's **real size in mm**, so the point cloud may be normalised. Without a bbox the size comes from the points, which is wrong if they are normalised; `validate` warns when that happens. `--bbox-scale` converts other units.
 
-Unknown labels are counted and **skipped** by default. `cache --unknown other` folds them into `other`, and `--unknown error` stops on the first one. Neither happens unless asked.
+Blank lines and `#` source-path comments are ignored. Unknown labels are counted and **skipped** by default. `cache --unknown other` folds them into `other`, and `--unknown error` stops on the first one. Neither happens unless asked.
 
 **Ask the Mac session for** a group key per body (the source file), the bbox in mm, and the label set above. Without a group key, bodies from one file can land in both train and test, and the score comes out optimistic.
 
