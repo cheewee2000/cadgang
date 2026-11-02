@@ -68,8 +68,9 @@ async function loadOcct() {
 
   fs.mkdirSync(cacheDir, { recursive: true });
   const stale = !fs.existsSync(mjsPath) ||
-    fs.statSync(mjsPath).mtimeMs < fs.statSync(srcPath).mtimeMs;
-  if (stale) fs.copyFileSync(srcPath, mjsPath);
+    fs.statSync(mjsPath).mtimeMs < fs.statSync(srcPath).mtimeMs ||
+    !fs.readFileSync(mjsPath, 'utf8').includes(GLUE_PATCH_MARK);
+  if (stale) fs.writeFileSync(mjsPath, patchGlue(fs.readFileSync(srcPath, 'utf8')));
 
   const hadRequire = 'require' in globalThis;
   const hadDirname = '__dirname' in globalThis;
@@ -91,6 +92,80 @@ async function loadOcct() {
   }
 }
 
+// ------------------------------------------------- the by-value destructor leak
+//
+// opencascade.js registers every non-transient base class — TopoDS_Shape, gp_Pnt, Bnd_Box, TopLoc_Location
+// and some 240 more — with a destructor that does nothing: one shared no-op function. Those classes are
+// exactly what OCCT hands back by value (bop.Shape(), box.CornerMin(), curve.Value(u)), each as a fresh
+// malloc'd copy, so every such object leaks its bytes — and a TopoDS_Shape also keeps its reference to the
+// geometry, which is the whole part. Measured: a sheet-metal part grew the heap 96 MB per rebuild after
+// a full collection; 100k boxes from BRepPrimAPI_MakeBox lost 1 GB. The constructor classes (gp_Pnt_3,
+// Handle_*, transients) have real destructors and are left alone.
+//
+// Two hooks go into the glue when it is copied to the cache: runDestructor asks __cadgangDestroy first,
+// and attachFinalizer also registers handles of these classes, so an orphaned copy nobody delete()s is
+// freed when V8 collects its wrapper. The hooks are installed by patchBaseClassDestructors() below.
+const GLUE_PATCH_MARK = 'cadgang-glue-patch-2';   // bump when patchGlue changes
+function patchGlue(text) {
+  const edits = [
+    ['function runDestructor($$){if($$.smartPtr){$$.smartPtrType.rawDestructor($$.smartPtr)}else{$$.ptrType.registeredClass.rawDestructor($$.ptr)}}',
+      'function runDestructor($$){if($$.smartPtr){$$.smartPtrType.rawDestructor($$.smartPtr)}else if(!(Module.__cadgangDestroy&&Module.__cadgangDestroy($$))){$$.ptrType.registeredClass.rawDestructor($$.ptr)}}'],
+    ['if(hasSmartPtr){var info={$$:$$};finalizationRegistry.register(handle,info,handle)}',
+      'if(hasSmartPtr||(Module.__cadgangFinalize&&Module.__cadgangFinalize($$))){var info={$$:$$};finalizationRegistry.register(handle,info,handle)}'],
+    // C++ exceptions: this build throws them to JS and has no catch support, so nothing ever frees one. Every OCCT
+    // throw replicad swallows (a projection with no point, a fillet that will not fit) left ~120 B behind. Record
+    // each thrown pointer; freeThrownExceptions() runs its destructor and frees it once the JS handling is over.
+    ['function ___cxa_throw(ptr,type,destructor){var info=new ExceptionInfo(ptr);info.init(type,destructor);exceptionLast=ptr;uncaughtExceptionCount++;throw ptr}',
+      'function ___cxa_throw(ptr,type,destructor){var info=new ExceptionInfo(ptr);info.init(type,destructor);exceptionLast=ptr;uncaughtExceptionCount++;if(Module.__cadgangThrown)Module.__cadgangThrown.push(ptr);throw ptr}'
+      + 'Module.__cadgangFreeException=function(ptr){var info=new ExceptionInfo(ptr);var d=info.get_destructor();if(d)getWasmTableEntry(d)(ptr);_free(info.ptr)};'],
+  ];
+  for (const [from, to] of edits) {
+    if (text.split(from).length !== 2) throw new Error(`cadgang: the OCCT glue changed; the by-value destructor patch no longer fits (${from.slice(0, 40)}…)`);
+    text = text.replace(from, () => to);   // a function: a string replacement would read the $$ in the glue as $
+  }
+  return `// ${GLUE_PATCH_MARK}\n${text}`;
+}
+function patchBaseClassDestructors(OC) {
+  const probe = new OC.gp_Ax2d_1();
+  const sample = probe.Location();   // a by-value gp_Pnt2d: its class carries the shared no-op destructor
+  const NOOP = sample.$$.ptrType.registeredClass.rawDestructor;
+  const isNoop = ($$) => !$$.smartPtr && $$.ptrType.registeredClass.rawDestructor === NOOP;
+  // Handles come back by value too (GCE2d_MakeSegment.Value(), BRep_Tool.Surface()), as copies with a real
+  // destructor that nobody calls — each holds a reference, so the curve or surface behind it leaks (~100 B per
+  // line segment drawn). Finalizing the copy runs that destructor when V8 drops the wrapper.
+  const isHandle = ($$) => !$$.smartPtr && $$.ptrType.registeredClass.name.startsWith('Handle_');
+  // And what JS itself constructs — `new OC.Geom2dAPI_InterCurveCurve_1()` and every other suffixed
+  // constructor class — is JS-owned, so a wrapper dropped without delete() can be destroyed on collection
+  // (replicad forgets its intersector on every early return). Not transients: a `new Geom2d_TrimmedCurve_1`
+  // belongs to the Handle it is wrapped in, which frees it.
+  const owned = new WeakMap();   // registeredClass → is a non-transient constructor class
+  const isOwned = ($$) => {
+    const rc = $$.ptrType.registeredClass;
+    let v = owned.get(rc);
+    if (v === undefined) owned.set(rc, v = /_\d+$/.test(rc.name) && !OC.Standard_Transient.prototype.isPrototypeOf(rc.instancePrototype));
+    return !$$.smartPtr && v;
+  };
+  OC.__cadgangFinalize = ($$) => isNoop($$) || isHandle($$) || isOwned($$);
+  OC.__cadgangDestroy = ($$) => {
+    if (!isNoop($$)) return false;
+    // Let go of what the object holds first — a TopoDS_Shape its geometry, a TopLoc_Location its datum.
+    const h = Object.create($$.ptrType.registeredClass.instancePrototype, { $$: { value: $$ } });
+    try { if (typeof h.Nullify === 'function') h.Nullify(); else if (typeof h.Clear === 'function') h.Clear(); } catch { /* nothing held */ }
+    OC._free($$.ptr);
+    return true;
+  };
+  sample.delete(); probe.delete();
+  OC.__cadgangThrown = [];
+}
+
+/** Free the C++ exceptions thrown since the last pass; called from collectNow(), between units of work. */
+function freeThrownExceptions() {
+  const thrown = OC?.__cadgangThrown;
+  if (!thrown?.length) return;
+  for (const ptr of thrown) { try { OC.__cadgangFreeException(ptr); } catch { /* already gone */ } }
+  thrown.length = 0;
+}
+
 /**
  * Load OCCT and hand it to replicad. Idempotent and safe to call concurrently —
  * every caller awaits the same promise.
@@ -106,6 +181,7 @@ export function initBrep() {
     };
 
     OC = await loadOcct();
+    patchBaseClassDestructors(OC);
     rc = await import('replicad');
     rc.setOC(OC);
 
@@ -296,6 +372,7 @@ function collectNow() {
   clearTimeout(collectTimer);
   collectTimer = null;
   scopesSinceCollect = 0;
+  freeThrownExceptions();
   if (!forceGC) return;
   // Three passes with a turn of the loop between them. One pass is not enough:
   // the first collection is what RUNS the finalizers, and the delete() calls
