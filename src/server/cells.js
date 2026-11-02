@@ -17,7 +17,7 @@ import express from 'express';
 import { toBinarySTL } from '../core/stl.js';
 import { GraphError } from '../core/errors.js';
 import {
-  evaluateCells, evaluationOrder, dependenciesOf, dependencyGraph, hasUnresolvedSelections,
+  evaluateCellsSettled, evaluationOrder, dependenciesOf, dependencyGraph, hasUnresolvedSelections,
 } from '../core/cells.js';
 import { compileCell } from '../core/sandbox.js';
 import { cellApi } from '../core/cellapi.js';
@@ -67,15 +67,24 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
     return withShapeOf(doc, req.query.cell || req.body?.cell || doc.terminal, body, opts);
   }
 
+  // ponytail: one build at a time per kernel — a settling evaluate yields between cells, and the brep scope stack is one global
+  let building = Promise.resolve();
+  function acquireBuild() {
+    let release; const mine = new Promise((r) => { release = r; });
+    const prev = building; building = prev.then(() => mine);
+    return prev.then(() => release);
+  }
+
   async function withShapeOf(document, target, body, { partial = false, requireAssertions = false } = {}) {
     if (!target) throw new GraphError('The cell document is empty — add a cell first');
     await initBrep();
+    const release = await acquireBuild();
     const scope = beginBrepScope();
     try {
       // Walk the whole chain: a broken cell above the target only matters if the
       // target needed what it made. A box built from scratch under a half-drawn
       // sketch still has a topology to report.
-      const run = evaluateCells(document, target, { stopOnError: false });
+      const run = await evaluateCellsSettled(document, target, { stopOnError: false });
       const shown = run.value ? target : partial ? run.lastGood : null;
       if (!shown) {
         const mine = run.report.find((c) => c.id === target && c.status !== 'ok');
@@ -105,6 +114,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
       });
     } finally {
       scope.dispose();
+      release();
     }
   }
 
@@ -296,10 +306,11 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
       }
 
       await initBrep();
+      const release = await acquireBuild();
       const scope = beginBrepScope();
       try {
         const source = pickSource(doc, id);
-        const shape = evaluateCells(doc, source).value;
+        const shape = (await evaluateCellsSettled(doc, source)).value;
         if (!shape) throw new GraphError(`Cannot pick on '${id}': '${source}' produced no geometry`);
 
         const list = enumerate(shape, wanted);
@@ -314,6 +325,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
         res.json(doc.resolveSelection(id, name, { query, anchor }));
       } finally {
         scope.dispose();
+        release();
       }
     } catch (e) { fail(res, e); }
   });
@@ -412,10 +424,11 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
       const target = req.query.cell || doc.terminal;
       if (!target) throw new GraphError('The cell document is empty — add a cell first');
       await initBrep();
+      const release = await acquireBuild();
       const scope = beginBrepScope();
       try {
         const stopOnError = req.query.stopOnError === '1';
-        const run = evaluateCells(doc, target, { stopOnError });
+        const run = await evaluateCellsSettled(doc, target, { stopOnError });
         // Measures follow the same fallback as the viewport: a broken tail cell
         // should not also blank the numbers for the part that did build.
         const shape = run.value ?? run.results.get(run.lastGood) ?? null;
@@ -431,6 +444,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
         });
       } finally {
         scope.dispose();
+        release();
       }
     } catch (e) { fail(res, e); }
   });

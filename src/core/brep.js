@@ -129,6 +129,9 @@ export function initBrep() {
 /** Above this many bytes the kernel makes room before building: see initBrep() and the cell cache. */
 export const BREP_ROOM_BYTES = parseInt(process.env.CADGANG_BREP_ROOM || String(512 * 2 ** 20), 10);
 
+/** Collect replicad's finalizer-held intermediates now, and wait for their frees to land. */
+export const settleBrep = () => settle();
+
 async function settle(rc) {
   collectNow();
   await new Promise((r) => setImmediate(() => setImmediate(() => setImmediate(r))));   // after collectNow's three passes and the finalizers they queue

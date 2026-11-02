@@ -24,7 +24,7 @@ import path from 'node:path';
 import { GraphError } from './errors.js';
 import { compileCell, normalizeParams } from './sandbox.js';
 import { cellApi, checkCellResult } from './cellapi.js';
-import { trackBrepShape, nameParts, partsOf, setParts, brepHeapBytes, BREP_ROOM_BYTES } from './brep.js';
+import { trackBrepShape, nameParts, partsOf, setParts, brepHeapBytes, BREP_ROOM_BYTES, beginBrepScope, settleBrep } from './brep.js';
 
 const CELL_ID = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 const PROMPT_LIMIT = 20000;
@@ -689,7 +689,30 @@ export function clearCellCache() {
  * can show every broken cell in one pass, which is what the authoring loop
  * wants — but geometry is then only whatever the last successful cell produced.
  */
-export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true } = {}) {
+export function evaluateCells(doc, targetId = doc.terminal, opts = {}) {
+  const steps = evaluateCellsSteps(doc, targetId, opts);
+  let s = steps.next();
+  while (!s.done) s = steps.next();
+  return s.value;
+}
+
+/**
+ * The same, letting the kernel collect between cells. A cell's build leaves hundreds of MB of
+ * replicad intermediates that only a garbage-collection turn frees, and a synchronous evaluation
+ * never gets one: the OCCT heap (2 GB cap, never shrinks) then holds every cell's garbage at once,
+ * and a 19-cell document peaks at 1.7 GB, over the kernel's restart line, on every cold build.
+ */
+export async function evaluateCellsSettled(doc, targetId = doc.terminal, opts = {}) {
+  const steps = evaluateCellsSteps(doc, targetId, opts);
+  let s = steps.next();
+  while (!s.done) {
+    if (brepHeapBytes() > BREP_ROOM_BYTES) await settleBrep();
+    s = steps.next();
+  }
+  return s.value;
+}
+
+function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
   if (!targetId) throw new GraphError('Document has no cells to evaluate');
   const order = evaluationOrder(doc, targetId);
   const results = new Map();
@@ -751,8 +774,13 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
       entry.ms = Date.now() - started;
       continue;
     }
+    // Each cell builds in its own scope: its result moves out to the caller's, its scraps go at once.
+    // A cell's intermediates run to hundreds of MB, and the OCCT heap caps at 2 GB — summed over a
+    // document they fill it in one evaluation, and the kernel restarts, cold, every request.
+    const cellScope = beginBrepScope();
     try {
       if (!asserting) makeRoom(cell.id);
+      yield;   // a settling driver collects here, before this cell builds on the last one's leftovers
       const compiled = compiledFor(cell);
       const value = compiled.run(cellApi({
         params: cell.params, input, inputs, selections: cell.selections, sketch: cell.sketch,
@@ -793,6 +821,7 @@ export function evaluateCells(doc, targetId = doc.terminal, { stopOnError = true
         throw new GraphError(msg.includes(`'${cell.id}'`) ? msg : `Cell '${cell.id}': ${msg}`);
       }
     } finally {
+      cellScope.dispose(results.get(cell.id));
       entry.ms = Date.now() - started;
     }
   }

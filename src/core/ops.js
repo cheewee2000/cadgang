@@ -824,8 +824,8 @@ export function length(shape, query) {
 /** Volume shared by two bodies — 0 means no interference. */
 export function interference(a, b) {
   return attempt('interference', () => {
-    const common = track(borrow(a, 'a').intersect(borrow(b, 'b')));
-    try { return kernelOf().measureVolume(common); } catch { return 0; }
+    const common = borrow(a, 'a').intersect(borrow(b, 'b'));   // freed here, not at the scope's end: a clash sweep makes dozens
+    try { return kernelOf().measureVolume(common); } catch { return 0; } finally { try { common.delete(); } catch { /* gone */ } }
   });
 }
 
