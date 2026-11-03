@@ -2841,7 +2841,7 @@ document.addEventListener('visibilitychange', focus);
     if (msg.type === 'hello' && msg.version) { if (pageVersion && pageVersion !== msg.version) location.reload(); pageVersion = msg.version; }
     if (msg.type === 'snapshot_request') postSnapshot();
     if (msg.type === 'ask' && !follow && msg.subject === subject && model.children.length) answer(msg);
-    if (msg.type === 'busy') showBusy(msg.what);
+    if (msg.type === 'busy' && subject.split('|').some((p) => p.startsWith(`${msg.dir}/`))) showBusy(msg.what);   // only the windows on that project
     if (msg.type === 'markup_changed' && msg.subject === subject) loadMarkup();
     if (msg.type === 'parts_changed' && msg.subject === subject && msg.from !== clientId) loadNames();   // Claude (or another window) renamed bodies
     if (msg.type === 'joints_changed' && msg.subject === subject && msg.from !== clientId) loadJoints();   // Claude set or drove a joint

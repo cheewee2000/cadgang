@@ -170,9 +170,13 @@ function sessionFor(dir) {
   if (knownSessions[entry.key] !== dir) { knownSessions[entry.key] = dir; try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(SESSIONS_PATH, JSON.stringify(knownSessions)); } catch {} }
   return entry;
 }
-// A session's build holds its kernel, and the tabs on that project wait behind it: they say why.
-let working = 0;
-function busy(d, what) { working += d; if (d > 0 && working === 1) broadcast({ type: 'busy', what }); if (!working) broadcast({ type: 'busy', what: null }); }
+// A session's build holds its kernel, and the tabs on that project wait behind it: they say why (and only they:
+// the message names the project folder, and a window on another file ignores it).
+const working = new Map();   // project dir → builds in flight
+function busy(dir, d) {
+  const n = (working.get(dir) || 0) + d; working.set(dir, n);
+  if (n === (d > 0 ? 1 : 0)) broadcast({ type: 'busy', dir, what: n ? `Claude (${path.basename(dir)}) is building…` : null });
+}
 app.use('/api/cells', (req, res, next) => {
   // MCP alone names a filesystem folder. The browser follows with an opaque
   // key, so no local path appears in its URL or becomes a read primitive.
@@ -187,7 +191,7 @@ app.use('/api/cells', (req, res, next) => {
     entry = sessionKeys.get(key) ?? (known && known !== project.dir && fs.existsSync(known) ? sessionFor(known) : null);
     if (!entry && known !== project.dir) return res.status(404).json({ error: 'That live authoring session is no longer available' });
   }
-  if (header && dir && !req.query.wait) { busy(+1, `Claude (${path.basename(dir)}) is building…`); res.once('close', () => busy(-1)); }
+  if (header && dir && !req.query.wait) { busy(dir, +1); res.once('close', () => busy(dir, -1)); }
   const k = kernelFor(entry ? path.join(entry.dir, 'cadgang', 'cells.json') : cells.filePath);
   k.inflight++; res.once('close', () => { k.inflight--; });
   k.ready.then(() => proxy(k, req, res, { 'x-cadgang-dir': entry?.dir ?? project.dir ?? '', 'x-cadgang-session': entry?.key ?? '' }), (e) => res.status(502).json({ error: e.message }));
