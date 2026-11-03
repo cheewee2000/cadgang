@@ -568,11 +568,10 @@ function bodiesHead() {
   if (saved.width) column.style.width = `${saved.width}px`;
   panel.classList.toggle('min', !!saved.min);
   const head = document.createElement('div'); head.className = 'bodies-head';
-  const btn = document.createElement('button'); btn.className = 'ghost';
+  const btn = document.createElement('button'); btn.className = 'ghost fold';   // at the left, like every other panel's fold
   const paint = () => { const min = panel.classList.contains('min'); btn.textContent = min ? '+' : '−'; btn.title = min ? 'Show the bodies' : 'Fold the list'; };
   btn.addEventListener('click', () => { panel.classList.toggle('min'); paint(); saveBodies(); });
   paint();
-  const tools = document.createElement('span'); tools.className = 'bodies-tools'; tools.append(btn);
   // On the column's right edge, not inside the panel: inside, it scrolled away with a long list and sat under its scrollbar.
   column.querySelector(':scope > .bodies-grip')?.remove();
   const grip = document.createElement('div'); grip.className = 'bodies-grip'; grip.title = 'Drag to set the width';
@@ -587,7 +586,8 @@ function bodiesHead() {
     };
     grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
   });
-  head.append(Object.assign(document.createElement('span'), { textContent: 'BODIES' }), tools);
+  const tools = document.createElement('span'); tools.className = 'bodies-tools';   // SHOW ALL, at the right
+  head.append(btn, Object.assign(document.createElement('span'), { textContent: 'BODIES', style: 'flex: 1' }), tools);
   column.append(grip);
   return head;
 }
