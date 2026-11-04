@@ -82,7 +82,7 @@ const brep = Object.freeze({
   cone: keyed('cone', ops.cone),
   union: keyed('union', ops.union),
   compound,
-  name: keyed('name', ops.name),
+  name: ops.name,   // a label on the same geometry: the key (and every measure of it) stays
   subtract: keyed('subtract', ops.subtract),
   intersect: keyed('intersect', ops.intersect),
   fillet: keyed('fillet', ops.fillet),

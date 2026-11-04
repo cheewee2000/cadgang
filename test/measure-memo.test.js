@@ -11,7 +11,9 @@ test('a clash check between two unchanged parts is a lookup, not a kernel call',
   doc.addCell({ id: 'a', prompt: 'a', code: 'export default ({ brep }) => brep.box(10, 10, 10, { center: \'xy\' })' });   // an options object from the sandbox's realm keys too
   doc.addCell({ id: 'b', prompt: 'b', code: 'export default ({ brep }) => brep.translate(brep.box(10, 10, 10), [5, 0, 0])' });
   doc.addCell({ id: 'c', prompt: 'c', code: 'export default ({ brep }) => brep.translate(brep.box(10, 10, 10), [40, 0, 0])' });
-  doc.addCell({ id: 'check', kind: 'assert', refs: ['a', 'b', 'c'], prompt: 'clashes', code: `export default ({ brep, inputs, assert }) => {
+  // names a part on its way into an assembly: a label, not a change, so the part's measures still hit once this cell is cached
+  doc.addCell({ id: 'asm', refs: ['a', 'b', 'c'], prompt: 'asm', code: 'export default ({ brep, inputs }) => brep.compound(brep.name(inputs.a, \'A\'), inputs.b, inputs.c)' });
+  doc.addCell({ id: 'check', kind: 'assert', refs: ['a', 'b', 'c', 'asm'], prompt: 'clashes', code: `export default ({ brep, inputs, assert }) => {
     const v = brep.interference(inputs.a, inputs.b) + brep.interference(inputs.b, inputs.c) + brep.interference(inputs.a, inputs.c);
     const box = brep.bbox(brep.compound(inputs.a, inputs.b, inputs.c));
     assert.ok(v > 0, 'measured ' + Math.round(v) + ' ' + box.size.map(Math.round));
