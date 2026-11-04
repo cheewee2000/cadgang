@@ -9,15 +9,17 @@
  * X-Cadgang-Session (the browser key the change broadcasts carry).
  */
 
+import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 import express from 'express';
 import { CellDocument } from '../core/cells.js';
-import { cellsRouter } from './cells.js';
+import { cellsRouter, packBinaryMesh } from './cells.js';
 import { historyRouter } from './history.js';
 import { optionsRouter } from './options.js';
-import { initBrep, brepHeapBytes, brepOperationStats } from '../core/brep.js';
+import { initBrep, brepHeapBytes, brepOperationStats, progress, tessellate, brepBBox } from '../core/brep.js';
 import { setImportRoot } from '../core/ops.js';
 
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '../..');
@@ -32,6 +34,30 @@ doc.onChange(() => broadcast({ type: 'cells_changed', revision: doc.revision, se
 routes.use('/history', historyRouter(doc, { dirOf: () => path.join(path.dirname(doc.filePath || CELLS_PATH), 'history'), modelOf: api.modelOf, broadcast }));
 routes.use('/options', optionsRouter(doc, { modelOf: api.modelOf, broadcast }));
 routes.use(api);
+
+// Live building: a cell program runs for a minute or more with this process blocked in OCCT, so the page
+// could not even ask for a mesh. Instead, after a feature op lands and a second has passed since the last
+// draft, the shape it made is tessellated coarse into a file (a synchronous write; the IPC pipe would fill
+// and queue behind the blocked loop) and a one-line notice goes to the main server, which tells the page
+// (cells_progress) and serves the file (/api/cells/draft). Primitives and moves are skipped: they are
+// usually tools about to be cut or joined, and a lone cylinder flashing over the model says nothing.
+const DRAFT_MS = parseInt(process.env.CADGANG_DRAFT_MS || '1000', 10);
+const DRAFT_FILE = path.join(os.tmpdir(), `cadgang-draft-${process.pid}.bin`);
+const NOT_A_STEP = new Set(['box', 'cylinder', 'sphere', 'cone', 'torus', 'coil', 'translate', 'rotate', 'scale', 'mirror']);
+let draftAt = 0;
+progress.fn = (op, shape) => {
+  if (DRAFT_MS < 0 || NOT_A_STEP.has(op) || performance.now() - draftAt < DRAFT_MS) return;
+  try {
+    const bb = brepBBox(shape); if (!bb) return;
+    const size = bb.max.map((v, i) => v - bb.min[i]);
+    const t = tessellate(shape, { tolerance: Math.min(5, Math.max(0.1, Math.hypot(...size) / 300)), angularTolerance: 0.6 });
+    fs.writeFileSync(`${DRAFT_FILE}.part`, packBinaryMesh({ cell: progress.cell, op, bbox: { ...bb, size } }, t, null));
+    fs.renameSync(`${DRAFT_FILE}.part`, DRAFT_FILE);   // never half a file on the other side
+    send({ type: 'draft', session, cell: progress.cell, op, file: DRAFT_FILE });
+  } catch (e) { console.error(`kernel: draft after ${op} skipped: ${e.message}`); }
+  draftAt = performance.now();   // after the tessellation: its cost does not shorten the gap
+};
+process.on('exit', () => { try { fs.unlinkSync(DRAFT_FILE); } catch { /* none written */ } });
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));

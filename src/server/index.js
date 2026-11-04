@@ -103,6 +103,7 @@ function kernelFor(cellsPath) {
       if (m.type === 'listening') { k.port = m.port; resolve(k); }
       else if (m.type === 'stats') k.stats = m;
       else if (m.type === 'broadcast') broadcast(m.msg);
+      else if (m.type === 'draft') { drafts.set(m.session || '', m.file); broadcast({ type: 'cells_progress', session: m.session, cell: m.cell, op: m.op }); }
     });
     child.on('exit', (code) => {
       if (kernels.get(cellsPath) === k) kernels.delete(cellsPath);
@@ -184,6 +185,14 @@ function busy(dir, d) {
   const n = (working.get(dir) || 0) + d; working.set(dir, n);
   if (n === (d > 0 ? 1 : 0)) broadcast({ type: 'busy', dir, what: n ? `Claude (${path.basename(dir)}) is building…` : null });
 }
+// The rough mesh of what a kernel is building right now (see kernel.js), answered here because that
+// kernel is blocked in the build. Routed before the proxy below.
+const drafts = new Map();   // session key ('' = the app's project) → the kernel's draft file (packed binary mesh)
+app.get('/api/cells/draft', (req, res) => {
+  const file = drafts.get(String(req.query.session || ''));
+  if (!file) return res.status(404).json({ error: 'Nothing is being built' });
+  res.type('application/octet-stream').sendFile(file, (e) => { if (e && !res.headersSent) res.status(404).json({ error: 'That draft is gone' }); });
+});
 app.use('/api/cells', (req, res, next) => {
   // MCP alone names a filesystem folder. The browser follows with an opaque
   // key, so no local path appears in its URL or becomes a read primitive.

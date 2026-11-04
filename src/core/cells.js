@@ -24,7 +24,7 @@ import path from 'node:path';
 import { GraphError } from './errors.js';
 import { compileCell, normalizeParams } from './sandbox.js';
 import { cellApi, checkCellResult } from './cellapi.js';
-import { trackBrepShape, nameParts, partsOf, setParts, brepHeapBytes, BREP_ROOM_BYTES, beginBrepScope, settleBrep } from './brep.js';
+import { trackBrepShape, nameParts, partsOf, setParts, brepHeapBytes, BREP_ROOM_BYTES, beginBrepScope, settleBrep, progress } from './brep.js';
 
 const CELL_ID = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 const PROMPT_LIMIT = 20000;
@@ -782,6 +782,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
       if (!asserting) makeRoom(cell.id);
       yield;   // a settling driver collects here, before this cell builds on the last one's leftovers
       const compiled = compiledFor(cell);
+      progress.cell = cell.id;
       const value = compiled.run(cellApi({
         params: cell.params, input, inputs, selections: cell.selections, sketch: cell.sketch,
         checked: entry.checks, flats: entry.flats,
@@ -821,6 +822,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
         throw new GraphError(msg.includes(`'${cell.id}'`) ? msg : `Cell '${cell.id}': ${msg}`);
       }
     } finally {
+      progress.cell = null;
       cellScope.dispose(results.get(cell.id));
       entry.ms = Date.now() - started;
     }

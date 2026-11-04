@@ -701,16 +701,17 @@ function pickSource(doc, id) {
  * [indices u32][edge lines f32]. `bin` in the json holds the four lengths. JSON number
  * arrays were megabytes of text to write and parse on every edit.
  */
-function sendBinaryMesh(res, meta, t, edges) {
+/** A ?bin=1 mesh: a 4-byte JSON length, the JSON (meta + `bin`: the four array lengths), then the arrays. */
+export function packBinaryMesh(meta, t, edges) {
   const parts = [t.positions, t.normals, t.indices, Float32Array.from(edges?.lines ?? [])];
   const json = Buffer.from(JSON.stringify({ ...meta, edges: edges && { groups: edges.groups }, bin: parts.map((a) => a.length) }));
   const pad = (4 - (json.length % 4)) % 4;
   const head = Buffer.alloc(4);
   head.writeUInt32LE(json.length + pad);
-  res.type('application/octet-stream').send(Buffer.concat([
-    head, json, Buffer.alloc(pad, 0x20),
-    ...parts.map((a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength)),
-  ]));
+  return Buffer.concat([head, json, Buffer.alloc(pad, 0x20), ...parts.map((a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength))]);
+}
+function sendBinaryMesh(res, meta, t, edges) {
+  res.type('application/octet-stream').send(packBinaryMesh(meta, t, edges));
 }
 
 function measuresOf(shape) {

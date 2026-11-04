@@ -303,12 +303,22 @@ export function brepOperationStats() {
 /** Tests and benchmark runs use a fresh observation window. */
 export function resetBrepOperationStats() { operationStats.clear(); }
 
+/**
+ * Live building: after every op that made a shape, `progress.fn(op, shape)` sees it (the kernel host
+ * sends the viewer a rough draft, throttled), and `progress.cell` names the cell building it.
+ */
+export const progress = { fn: null, cell: null };
+let progressing = false;
 /** Run an OCCT call, translating its failure mode into a GraphError. */
 function attempt(op, fn) {
   const started = performance.now();
   try {
     const value = fn();
     recordOperation(op, performance.now() - started, false);
+    if (progress.fn && !progressing && value?.wrapped && typeof value.mesh === 'function') {
+      progressing = true;   // the hook's own tessellation is an op too
+      try { progress.fn(op, value); } catch { /* a draft is cosmetic */ } finally { progressing = false; }
+    }
     return value;
   } catch (e) {
     recordOperation(op, performance.now() - started, true);

@@ -970,7 +970,7 @@ async function refreshOnce({ structural }) {
     pendingPicks = [];
   }
   renderPending();
-  if ($('#status').textContent === 'Evaluating…') $('#status').textContent = '';
+  if (/^(Evaluating…|building )/.test($('#status').textContent)) $('#status').textContent = '';
 
   if (changed || structural) renderStack();
   else {
@@ -1079,6 +1079,21 @@ $('#stepBtn').onclick = async () => {
 
 // ------------------------------------------------------------------- live
 
+/**
+ * A cell program under way: the kernel sends a rough mesh of the shape its last op made (cells_progress),
+ * so the model is watched being built, op by op, instead of appearing when the whole program is done.
+ * One fetch at a time; a draft that lands mid-fetch is simply superseded by the next. The real mesh
+ * replaces it when the refresh after the commit finishes.
+ */
+let draftRun = null;
+function showDraft({ cell, op }) {
+  if (draftRun || pick || viewingVersion !== null || viewingOption !== null) return;
+  draftRun = apiMesh('/draft').then((m) => {
+    setGeometry(m); frame(m.bbox);
+    $('#status').textContent = `building ${cell || ''} · ${op}…`;
+  }).catch(() => {}).finally(() => { draftRun = null; });
+}
+
 function connect() {
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.onmessage = (ev) => {
@@ -1098,6 +1113,7 @@ function connect() {
       refresh({ structural: true });
     }
     if (msg.type === 'cells_changed' && sessionMatches(msg.session) && msg.revision !== doc.revision && !inFlight) refresh({ structural: false });
+    if (msg.type === 'cells_progress' && sessionMatches(msg.session)) showDraft(msg);
     if (msg.type === 'history_changed') renderHistory();
     if (msg.type === 'options_changed') renderOptions();
     if (msg.type === 'snapshot_request') postSnapshot();
