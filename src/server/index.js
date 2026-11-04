@@ -263,6 +263,8 @@ wss.on('connection', (ws) => {
       const msg = JSON.parse(m);
       if (msg.type === 'focus' && active !== ws) { active = ws; broadcastTabs(); }
       if (msg.type === 'open_subject') { ws.subject = String(msg.subject || ''); broadcastTabs(); }
+      // a page was asked to open a file another page has: that page comes forward (and takes the next open)
+      if (msg.type === 'raise') { for (const c of wss.clients) if (c.subject === msg.subject && c.readyState === 1) { c.send(JSON.stringify({ type: 'raise', subject: msg.subject })); active = c; } broadcastTabs(); }
     } catch {}
   });
   ws.on('close', () => { if (ws.subject) broadcastTabs(); });

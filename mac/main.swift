@@ -211,6 +211,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         guard let body = m.body as? [String: Any], let cmd = body["cmd"] as? String else { return }
         if cmd == "defaultApp" { makeDefaultViewer() }
+        if cmd == "raise", let w = m.webView { w.window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }   // the window that already has the file asked for
         if cmd.hasPrefix("render"), let w = m.webView as? DropWebView { render(cmd, body, in: w) }
         // AirDrop the ?follow link: the sheet lists nearby devices; the iPad opens it in Safari.
         if cmd == "airdrop", let s = body["url"] as? String, let u = URL(string: s) { NSSharingService(named: .sendViaAirDrop)?.perform(withItems: [u]) }

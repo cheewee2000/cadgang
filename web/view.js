@@ -2540,6 +2540,9 @@ window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
   paths = [].concat(paths);
   // Another file is on screen (or on its way): this one gets its own tab, or its own window in the Mac app (the
   // shell turns window.open into a window). A blocked popup falls back to opening in place.
+  // Already open in another window (the server lists every page's file): that window comes forward and
+  // reloads it, instead of a second window on the same file.
+  if (!keep && paths.join('|') !== subject && tabList.some((t) => t.subject === paths.join('|')) && ws?.readyState === 1) { ws.send(JSON.stringify({ type: 'raise', subject: paths.join('|') })); return; }
   if (!keep && (model.children.length || loading) && paths.join('|') !== subject
       && window.open(`${location.pathname}?open=${encodeURIComponent(paths.join('|'))}`)) return;
   const my = ++loadSeq, mine = () => my === loadSeq;
@@ -2881,6 +2884,7 @@ document.addEventListener('visibilitychange', focus);
     if (msg.type === 'drawing' && msg.spec) makeDrawing(msg.spec);
     if (msg.type === 'subject') followTo(msg.subject);
     if (msg.type === 'tabs') setTabs(msg.tabs || []);
+    if (msg.type === 'raise' && msg.subject === subject) { window.webkit?.messageHandlers?.cadgang?.postMessage({ cmd: 'raise' }); window.focus(); window.cadgangOpen(subject.split('|'), { keep: true }); }   // this window has the file another was asked to open: come forward, fresh
     if (msg.type === 'file_changed' && subject.split('|').includes(msg.path)) { say('file changed, reloading…'); window.cadgangOpen(subject.split('|'), { keep: true }); }
   };
   ws.onclose = () => setTimeout(connect, 1500);
