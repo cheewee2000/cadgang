@@ -795,7 +795,10 @@ function bodiesInWindow(x0, y0, x1, y1, crossing = false) {
   return out;
 }
 const eachSelected = (f) => { for (const m of selected) f(m); syncRows(); commit(); };
-function hideSelected() { eachSelected((m) => setBodyVisible(m, false)); }
+function hideSelected() {
+  if (!selected.size && planes.selected) { planes.set(planes.selected, { on: false }); planes.select(null); return; }   // the selected plane, when no part is (select(null) repaints the tree and commits)
+  eachSelected((m) => setBodyVisible(m, false));
+}
 function showAllBodies() { for (const m of model.children) setBodyVisible(m, true); syncRows(); commit(); }
 const selActions = {
   hide: hideSelected,
