@@ -449,7 +449,7 @@ function listBodies() {
       nm.addEventListener('click', (e) => {
         e.preventDefault();
         if (e.shiftKey || e.metaKey || e.ctrlKey) { selectBodies(members, members.every((o) => selected.has(o)) ? 'toggle' : 'add'); return; }
-        for (const o of model.children) setBodyVisible(o, members.includes(o));
+        isolate(members);
         syncRows();
       });
       row.append(fold, cb, nm, see(() => { const on = !members.every((m) => m.userData.ghost); for (const m of members) setBodyGhost(m, on); syncRows(); }));
@@ -469,7 +469,7 @@ function listBodies() {
       nm.addEventListener('click', (e) => {
         e.preventDefault();
         if (e.shiftKey || e.metaKey || e.ctrlKey) { selectBodies([m], 'toggle'); return; }
-        for (const o of model.children) setBodyVisible(o, o === m);
+        isolate([m]);
         selectBodies([m], 'set');
         syncRows();
       });
@@ -740,6 +740,12 @@ function setBodyVisible(m, on) {
   if (!on && selected.delete(m)) paintSelection();
   measure.invalidate();
 }
+/** Show only these bodies, and turn the view about them: the orbit's centre moves to what is left on screen (where they are now, exploded or not). */
+function isolate(members) {
+  for (const o of model.children) setBodyVisible(o, members.includes(o));
+  const b = new THREE.Box3(); for (const m of members) b.expandByObject(m);
+  if (!b.isEmpty()) { b.getCenter(orbit.target); rerender(); }
+}
 
 // SELECTION: shift- or ⌘-click a part, shift-drag a window over several, or shift-click names in the list, then hide,
 // show, isolate or give them a material together (the bar over the viewport; H hides, ⇧H shows all, Esc clears).
@@ -807,7 +813,7 @@ function showAllBodies() { for (const m of model.children) setBodyVisible(m, tru
 const selActions = {
   hide: hideSelected,
   show: () => eachSelected((m) => setBodyVisible(m, true)),
-  only: () => { if (!selected.size) return say('select a part first'); for (const m of model.children) setBodyVisible(m, selected.has(m)); syncRows(); commit(); },   // nothing selected hides nothing
+  only: () => { if (!selected.size) return say('select a part first'); isolate([...selected]); syncRows(); commit(); },   // nothing selected hides nothing
   clear: () => selectBodies([], 'set'),
 };
 for (const b of document.querySelectorAll('[data-sel]')) b.addEventListener('click', () => selActions[b.dataset.sel]());
