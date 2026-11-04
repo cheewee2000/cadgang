@@ -1100,7 +1100,13 @@ function connect() {
 
 // -------------------------------------------------------------------- boot
 
-applyTheme();
+if (document.documentElement.classList.contains('panel')) {
+  // Docked: light or dark is the viewer's call (its data-theme), now and whenever it changes.
+  const root = window.parent.document.documentElement;
+  const follow = () => { theme = root.dataset.theme === 'dark' ? 'dark' : 'light'; applyTheme(); };
+  new MutationObserver(follow).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+  follow();
+} else applyTheme();
 if (followedSession) document.querySelector('.project-name').textContent = 'live';
 resize();
 fetch('/api/health')

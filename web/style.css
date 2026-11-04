@@ -438,6 +438,7 @@ header #explode { width: 100px; }
 
 /* Cells: the transcript Claude writes, docked at the right of the model */
 #cellsPane { flex: 0 0 420px; min-width: 280px; max-width: 70vw; display: flex; min-height: 0; border-left: var(--bw-hair) solid var(--rule); }
+#cellsPane[hidden] { display: none; }
 #cellsGrip { flex: 0 0 5px; cursor: col-resize; background: var(--paper-2); }
 #cellsGrip:hover { background: var(--rule); }
 #cellsFrame { flex: 1 1 auto; min-width: 0; border: 0; height: 100%; }
