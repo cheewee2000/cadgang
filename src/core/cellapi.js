@@ -50,7 +50,8 @@ const memo = new Map();   // op + argument keys → the number or plain object i
 export function clearMeasureMemo() { memo.clear(); }
 const measured = (op, fn) => (...args) => {
   const k = keyOf(op, args);
-  if (k == null) return fn(...args);
+  if (k == null) { if (process.env.CADGANG_MEMO_DEBUG) console.error(`memo: ${op} unkeyed (${args.map((a) => isShape(a) ? a.__key ?? 'shape?' : typeof a).join(', ')})`); return fn(...args); }
+  if (process.env.CADGANG_MEMO_DEBUG && !memo.has(k)) console.error(`memo: ${op} miss ${k}`);
   if (memo.has(k)) { const v = memo.get(k); memo.delete(k); memo.set(k, v); return structuredClone(v); }   // re-insert: Map order is the LRU order
   const v = fn(...args);
   if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value);

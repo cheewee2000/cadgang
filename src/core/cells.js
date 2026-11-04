@@ -752,7 +752,11 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
     const inputs = {};
     for (const dep of dependenciesOf(doc, index)) inputs[dep] = results.get(dep) ?? null;
     const input = cell.refs?.length ? inputs[cell.refs[0]] : previous;
-    const inputKeys = [previousKey, ...dependenciesOf(doc, index).map((dep) => keys.get(dep) ?? null)];
+    // Keyed by what the program can see: its refs, or the previous result when it names `input` /
+    // `inputs`. A part written from scratch under another part is its own thing, and an edit above
+    // it must not rebuild it — a document of parts is the common case, and so is editing one of them.
+    const inputKeys = cell.refs?.length ? dependenciesOf(doc, index).map((dep) => keys.get(dep) ?? null)
+      : /\binputs?\b/.test(cell.code || '') ? [previousKey] : [];
     const key = cellKey(cell, inputKeys);
     // An assertion hands on its input, so it hands on its input's key too.
     if (cell.kind === CELL_KIND.assert) keys.set(cell.id, cell.refs?.length ? keys.get(cell.refs[0]) ?? null : previousKey);
