@@ -357,3 +357,7 @@ html.panel main { flex-direction: column; }
 html.panel #panel { flex: 1 1 auto; max-width: none; min-width: 0; border-right: 0; }
 html.panel #dragbar { flex: 0 0 5px; cursor: row-resize; border-right: 0; border-top: var(--bw-hair) solid var(--rule); }
 html.panel #viewport { flex: 0 0 40%; min-height: 120px; }   /* the live model: every committed cell change redraws it */
+
+/* Which cell the viewport shows. Docked only: the standalone page says it in the footer. */
+.shown { position: absolute; left: var(--sp-3); top: var(--sp-3); z-index: 2; font-size: var(--fs-12); letter-spacing: var(--ls-label); color: var(--ink-faint); pointer-events: none; }
+html:not(.panel) .shown, .shown[hidden] { display: none; }

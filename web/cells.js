@@ -252,6 +252,7 @@ window.addEventListener('pointermove', (e) => {
 });
 attachOrbitInput(viewport, {
   orbit, camera, THREE, yawSign: -1,
+  scheme: () => { try { return JSON.parse(localStorage.getItem('cadgang-view'))?.scroll === 'mouse' ? 'mouse' : 'trackpad'; } catch { return 'trackpad'; } },   // the viewer's Trackpad / Mouse choice
   hitAt: (e) => {
     if (!meshObj) return null;
     raycaster.setFromCamera(pointerNDC(e), camera);
@@ -1008,7 +1009,7 @@ async function refreshOnce({ structural }) {
     ? `vol ${fmt(m.volume)} mm³ · area ${fmt(m.area)} mm² · bbox ${m.bbox.size.map(fmt).join(' × ')} mm${m.bodies > 1 ? ` · ${m.bodies} BODIES` : ''}`
     : '';
 
-  if (!doc.cells.length) { setGeometry(null); $('#stats').textContent = ''; return; }
+  if (!doc.cells.length) { setGeometry(null); $('#stats').textContent = ''; $('#shown').hidden = true; return; }
 
   try {
     // In pick mode the viewport must show the shape being picked ON — the
@@ -1025,10 +1026,12 @@ async function refreshOnce({ structural }) {
     const showing = mesh.partial ? ` · showing ${mesh.cell}` : '';
     $('#stats').textContent =
       `${mesh.indices.length / 3} tris · ${mesh.faces?.length ?? 0} faces · exact${showing}`;
+    $('#shown').textContent = mesh.cell || ''; $('#shown').hidden = !mesh.cell;
   } catch (e) {
     lastMesh = null;
     setGeometry(null);
     $('#stats').textContent = 'no geometry';
+    $('#shown').hidden = true;
   }
 }
 

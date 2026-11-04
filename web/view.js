@@ -3726,3 +3726,10 @@ $('#cellsGrip').addEventListener('pointerdown', (e) => {
 });
 if (cellsPref.w) cellsPane.style.flexBasis = `${cellsPref.w}px`;
 if (cellsPref.on && !follow) setCells(true);
+// The shell hands a trackpad pinch to this frame only (mac/main.swift magnify): over the pane it is the pane's.
+{
+  const mine = window.cadgangPinch; let overPane = false;
+  cellsPane.addEventListener('pointerenter', () => { overPane = true; });
+  cellsPane.addEventListener('pointerleave', () => { overPane = false; });
+  window.cadgangPinch = (m) => { const p = overPane && cellsFrame.contentWindow?.cadgangPinch; p ? p(m) : mine?.(m); };
+}
