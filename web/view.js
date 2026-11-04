@@ -1556,9 +1556,12 @@ function applyCamera() {
   camera.updateProjectionMatrix();
 }
 
+/** Fit the selection if there is one, else what shows; the whole model only when nothing shows. */
 function fit() {
   if (!bbox) return;
-  const b = new THREE.Box3().setFromObject(model);   // what is on screen now, exploded or not
+  const b = new THREE.Box3();   // what is on screen now, exploded or not
+  for (const m of selected.size ? selected : model.children.filter((o) => o.visible)) b.expandByObject(m);
+  if (b.isEmpty()) b.setFromObject(model);
   const ref = scaleRef.box(); if (ref) b.union(ref);   // and the thing beside it for scale
   b.getCenter(orbit.target);
   const r = b.getSize(new THREE.Vector3()).length() / 2;
