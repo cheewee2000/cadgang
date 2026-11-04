@@ -1335,9 +1335,20 @@ export function importStepSolids(buffer) {
 const MESH_BUDGET = 40000;
 const COARSE = 0.1;
 
+// One edit is tessellated three times at the same tolerance — the pane's mesh, the history's look, Claude's
+// render — so a keyed shape's mesh is kept (keys are content hashes: a hit is the same geometry).
+const MESH_CACHE_MAX = 24;
+const meshCache = new Map();
+const cachedMesh = (shape, tolerance, angularTolerance, make) => {
+  const k = shape?.__key ? `${shape.__key}|${tolerance}|${angularTolerance}` : null;
+  if (k && meshCache.has(k)) { const v = meshCache.get(k); meshCache.delete(k); meshCache.set(k, v); return v; }
+  const v = make();
+  if (k && v) { if (meshCache.size >= MESH_CACHE_MAX) meshCache.delete(meshCache.keys().next().value); meshCache.set(k, v); }
+  return v;
+};
 export function tessellate(shape, { tolerance = 0.01, angularTolerance = 0.3 } = {}) {
   requireSolid(shape, 'shape');
-  return attempt('tessellation', () => {
+  return cachedMesh(shape, tolerance, angularTolerance, () => attempt('tessellation', () => {
     let mesh = shape.mesh({ tolerance: Math.max(tolerance, COARSE), angularTolerance });
     // Triangle count grows about linearly with 1/tolerance, so judge the budget
     // on the FINE count the coarse one predicts — judging the coarse count let a
@@ -1354,18 +1365,20 @@ export function tessellate(shape, { tolerance = 0.01, angularTolerance = 0.3 } =
       // picking in the viewport works the same for both.
       faces: groups.map((g) => ({ first: g.start / 3, count: g.count / 3, faceId: g.faceId })),
     };
-  });
+  }));
 }
 
 /** Crisp B-rep edge polylines for the wireframe overlay. */
 export function tessellateEdges(shape, { tolerance = 0.01, angularTolerance = 0.3 } = {}) {
   if (!shape || typeof shape.meshEdges !== 'function') return null;
-  try {
-    const e = shape.meshEdges({ tolerance, angularTolerance, keepMesh: true });
-    return { lines: Array.from(e.lines), groups: e.edgeGroups ?? [] };
-  } catch {
-    return null; // wireframe is cosmetic; never fail a build over it
-  }
+  return cachedMesh(shape, `edges ${tolerance}`, angularTolerance, () => {
+    try {
+      const e = shape.meshEdges({ tolerance, angularTolerance, keepMesh: true });
+      return { lines: Array.from(e.lines), groups: e.edgeGroups ?? [] };
+    } catch {
+      return null; // wireframe is cosmetic; never fail a build over it
+    }
+  });
 }
 
 /**
