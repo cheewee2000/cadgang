@@ -766,7 +766,8 @@ function paintSelection() {
   $('#selBar').hidden = !n;
   const tools = $('#markupTools');   // under the Measure / markup row, right-aligned with it
   if (n && tools) $('#selBar').style.top = `${tools.offsetTop + tools.offsetHeight + 6}px`;
-  $('#selCount').textContent = `${n} selected`;
+  $('#selCount').textContent = n === 1 ? labelOf([...selected][0]) : `${n} selected`;   // one: its name; more: how many
+  $('#selCount').title = [...selected].map(labelOf).join('\n');
   if (n) { const first = [...selected][0], c = $('#selColor'); if (c && !first.isLine) c.style.background = c.dataset.hex = hexOfRGB(finishFacts(first).color); }   // the colour they have, as the row shows it
   paintWeight();
 }

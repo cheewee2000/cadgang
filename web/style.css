@@ -340,6 +340,7 @@ footer > * { white-space: nowrap; }
 .bodies label.sel { outline: var(--bw-hair) solid #1d6bff; outline-offset: 1px; }
 .selbar { position: absolute; top: calc(var(--sp-3) + 34px); right: var(--sp-3); z-index: 3; display: flex; align-items: center; gap: var(--sp-2); background: var(--paper); border: var(--bw-hair) solid #1d6bff; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-12); letter-spacing: var(--ls-label); white-space: nowrap; }
 .selbar[hidden] { display: none; }
+.selbar #selCount { max-width: 14em; overflow: hidden; text-overflow: ellipsis; }   /* a long name is cut; its tip has every name */
 .selbar button, .selbar select { font-size: var(--fs-12); height: 22px; padding: 0 var(--sp-2); }
 .selbar select { padding-right: 22px; background-position: right 4px center; }
 .marquee { position: fixed; z-index: 9; pointer-events: none; border: 1px solid #1d6bff; background: rgba(29, 107, 255, 0.12); }
