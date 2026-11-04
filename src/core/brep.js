@@ -1346,8 +1346,23 @@ const cachedMesh = (shape, tolerance, angularTolerance, make) => {
   if (k && v) { if (meshCache.size >= MESH_CACHE_MAX) meshCache.delete(meshCache.keys().next().value); meshCache.set(k, v); }
   return v;
 };
-export function tessellate(shape, { tolerance = 0.01, angularTolerance = 0.3 } = {}) {
+const mergeMeshes = (parts) => {
+  const positions = new Float32Array(parts.reduce((n, p) => n + p.positions.length, 0)), normals = new Float32Array(positions.length);
+  const indices = new Uint32Array(parts.reduce((n, p) => n + p.indices.length, 0)), faces = [];
+  let v = 0, i = 0;
+  for (const p of parts) {
+    positions.set(p.positions, v * 3); normals.set(p.normals, v * 3);
+    for (let k = 0; k < p.indices.length; k++) indices[i + k] = p.indices[k] + v;
+    for (const f of p.faces) faces.push({ ...f, first: f.first + i / 3 });
+    v += p.positions.length / 3; i += p.indices.length;
+  }
+  return { positions, normals, indices, faces };
+};
+export function tessellate(shape, opts = {}) {
+  const { tolerance = 0.01, angularTolerance = 0.3 } = opts;
   requireSolid(shape, 'shape');
+  const kids = compoundParts.of(shape);
+  if (kids?.length) return cachedMesh(shape, tolerance, angularTolerance, () => mergeMeshes(kids.map((k) => tessellate(k, opts))));
   return cachedMesh(shape, tolerance, angularTolerance, () => attempt('tessellation', () => {
     let mesh = shape.mesh({ tolerance: Math.max(tolerance, COARSE), angularTolerance });
     // Triangle count grows about linearly with 1/tolerance, so judge the budget
@@ -1369,8 +1384,16 @@ export function tessellate(shape, { tolerance = 0.01, angularTolerance = 0.3 } =
 }
 
 /** Crisp B-rep edge polylines for the wireframe overlay. */
-export function tessellateEdges(shape, { tolerance = 0.01, angularTolerance = 0.3 } = {}) {
+export function tessellateEdges(shape, opts = {}) {
+  const { tolerance = 0.01, angularTolerance = 0.3 } = opts;
   if (!shape || typeof shape.meshEdges !== 'function') return null;
+  const kids = compoundParts.of(shape);
+  if (kids?.length) return cachedMesh(shape, `edges ${tolerance}`, angularTolerance, () => {
+    const all = kids.map((k) => tessellateEdges(k, opts)); if (all.some((e) => !e)) return null;
+    const lines = [], groups = [];
+    for (const e of all) { const at = lines.length / 3; for (const g of e.groups) groups.push({ ...g, start: g.start + at }); for (const x of e.lines) lines.push(x); }
+    return { lines, groups };
+  });
   return cachedMesh(shape, `edges ${tolerance}`, angularTolerance, () => {
     try {
       const e = shape.meshEdges({ tolerance, angularTolerance, keepMesh: true });
@@ -1405,9 +1428,13 @@ export function brepBBox(shape) {
  * every side — a number that fails a fitsIn() the part passes. AddOptimal
  * bounds the surfaces themselves.
  */
+/** A compound's parts, when something upstream (cellapi.js) recorded them: an assembly is meshed, boxed
+ *  and measured part by part, each a cache hit when that part did not change. */
+export const compoundParts = { of: () => null };
 // Bounds by shape key: a request meshes a part for its box, then meshes it for its mesh, then measures
 // it — and the history's look and Claude's render ask the same again. Keys are content hashes.
 const boundsCache = new Map();
+const unionBounds = (boxes) => ({ min: [0, 1, 2].map((k) => Math.min(...boxes.map((b) => b.min[k]))), max: [0, 1, 2].map((k) => Math.max(...boxes.map((b) => b.max[k]))) });
 const keyedBounds = (shape, kind, make) => {
   const k = shape?.__key ? `${kind}|${shape.__key}` : null;
   if (k && boundsCache.has(k)) { const v = boundsCache.get(k); return { min: [...v.min], max: [...v.max] }; }
@@ -1418,15 +1445,17 @@ const keyedBounds = (shape, kind, make) => {
 /** The analytic box, never short, at most a few tenths long on curved faces: enough to tell two parts apart. */
 export function looseBounds(shape) {
   return keyedBounds(shape, 'loose', () => {
+    const kids = compoundParts.of(shape);
+    if (kids?.length) return unionBounds(kids.map(looseBounds));
     const box = new OC.Bnd_Box_1();
-    OC.BRepBndLib.AddOptimal(shape.wrapped, box, false, false);
+    OC.BRepBndLib.Add(shape.wrapped, box, true);   // poles and existing triangulation: fast, never short
     const lo = box.CornerMin(), hi = box.CornerMax();
     const out = { min: [lo.X(), lo.Y(), lo.Z()], max: [hi.X(), hi.Y(), hi.Z()] };
     lo.delete(); hi.delete(); box.delete();
     return out;
   });
 }
-export function tightBounds(shape) { return keyedBounds(shape, 'tight', () => tightBoundsOf(shape)); }
+export function tightBounds(shape) { return keyedBounds(shape, 'tight', () => { const kids = compoundParts.of(shape); return kids?.length ? unionBounds(kids.map(tightBounds)) : tightBoundsOf(shape); }); }
 function tightBoundsOf(shape) {
   // Offset and spline surfaces still come back a few tenths too big from the
   // analytic box; their triangulation is the honest extent, to its deflection.

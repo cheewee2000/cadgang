@@ -51,12 +51,13 @@ const DRAFT_FILE = path.join(os.tmpdir(), `cadgang-draft-${process.pid}.bin`);
 // check cell, where the moved pose IS the test (the lid swung open, a caster turned). A render (what
 // Claude asked to see, with its mesh already made) always goes out.
 const PRIMITIVES = new Set(['box', 'cylinder', 'sphere', 'cone', 'torus', 'coil']), MOVES = new Set(['translate', 'rotate', 'scale', 'mirror']);
-let draftAt = 0;
+let draftAt = 0, draftCost = 0;   // when the last draft was written, and what it cost
 progress.fn = (op, shape, { cell = progress.cell, mesh = null, edges = null } = {}) => {
   if (DRAFT_MS < 0) return;
   if (op === 'done') { send({ type: 'draft', session, cell: null, op, kind: 'done', file: null }); return; }
-  if (op !== 'render' && (PRIMITIVES.has(op) || (MOVES.has(op) && !progress.asserting) || performance.now() - draftAt < DRAFT_MS)) return;
+  if (op !== 'render' && (PRIMITIVES.has(op) || (MOVES.has(op) && !progress.asserting) || performance.now() - draftAt < Math.max(DRAFT_MS, draftCost * 4))) return;   // a 2 s draft waits 8 s: drafting never takes the build over
   const kind = op === 'render' ? 'render' : progress.asserting ? 'assert' : 'build';
+  const begun = performance.now();
   try {
     const bb = brepBBox(shape); if (!bb) return;
     const size = bb.max.map((v, i) => v - bb.min[i]);
@@ -65,7 +66,7 @@ progress.fn = (op, shape, { cell = progress.cell, mesh = null, edges = null } = 
     fs.renameSync(`${DRAFT_FILE}.part`, DRAFT_FILE);   // never half a file on the other side
     send({ type: 'draft', session, cell, op, kind, file: DRAFT_FILE });
   } catch (e) { console.error(`kernel: draft after ${op} skipped: ${e.message}`); }
-  draftAt = performance.now();   // after the tessellation: its cost does not shorten the gap
+  draftAt = performance.now(); draftCost = draftAt - begun;   // after the tessellation: its cost does not shorten the gap
 };
 process.on('exit', () => { try { fs.unlinkSync(DRAFT_FILE); } catch { /* none written */ } });
 

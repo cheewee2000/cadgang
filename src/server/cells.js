@@ -20,7 +20,7 @@ import {
   evaluateCellsSettled, evaluationOrder, dependenciesOf, dependencyGraph, hasUnresolvedSelections,
 } from '../core/cells.js';
 import { compileCell } from '../core/sandbox.js';
-import { cellApi } from '../core/cellapi.js';
+import { cellApi, measuresOf as cellMeasures } from '../core/cellapi.js';
 import { topology, Query, enumerate, anchorFor } from '../core/query.js';
 import { solveWithDrag } from '../core/sketch.js';
 import { drawOn, eraseEntity, eraseConstraint, dimensionOn } from '../core/sketchdraw.js';
@@ -722,12 +722,9 @@ const measuresCache = new Map();   // shape key → its measures: the pane, the 
 function measuresOf(shape) {
   const k = shape?.__key;
   if (k && measuresCache.has(k)) return structuredClone(measuresCache.get(k));
-  const { min, max, size } = ops.bbox(shape);
+  const { volume, area, bbox: { min, max, size }, bodies } = cellMeasures(shape);   // part by part for an assembly, memoized
   const r4 = (v) => Math.round(v * 1e4) / 1e4;
-  const m = {
-    volume: r4(ops.volume(shape)), area: r4(ops.area(shape)),
-    bbox: { min: min.map(r4), max: max.map(r4), size: size.map(r4) }, bodies: ops.bodies(shape),
-  };
+  const m = { volume: r4(volume), area: r4(area), bbox: { min: min.map(r4), max: max.map(r4), size: size.map(r4) }, bodies };
   if (k) { if (measuresCache.size >= 64) measuresCache.delete(measuresCache.keys().next().value); measuresCache.set(k, structuredClone(m)); }
   return m;
 }

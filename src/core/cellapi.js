@@ -16,7 +16,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as ops from './ops.js';
-import { looseBounds } from './brep.js';
+import { looseBounds, compoundParts } from './brep.js';
 import { q as queryRoot, topology, Query } from './query.js';
 import { Sketch } from './sketch.js';
 import * as checks from './checks.js';
@@ -94,6 +94,7 @@ const moved = (op) => keyed(op, (shape, ...rest) => {
   if (children.has(shape) && !(op === 'mirror' && rest[2]?.keep)) children.set(r, () => parts(shape)?.map((k) => brep[op](k, ...rest)));
   return r;
 });
+compoundParts.of = parts;   // brep.js meshes, boxes and measures an assembly part by part
 /** A cached cell result is a clone (cells.js); its parts come back by their keys, looked up when asked. */
 export const childKeys = (shape) => parts(shape)?.map((k) => k.__key) ?? null;
 export const adoptChildren = (shape, thunk) => children.set(shape, thunk);
@@ -116,6 +117,11 @@ const apart = (a, b) => {
   const p = loose(a), q = loose(b);
   return [0, 1, 2].some((k) => p.min[k] > q.max[k] + BOX_PAD || q.min[k] > p.max[k] + BOX_PAD);
 };
+const volumeOfOne = measured('volume', ops.volume), areaOfOne = measured('area', ops.area), bodiesOfOne = measured('bodies', ops.bodies);
+const summed = (one, self) => (shape) => { const kids = parts(shape); return kids ? kids.reduce((n, k) => n + self(k), 0) : one(shape); };
+const volume = summed(volumeOfOne, (k) => volume(k)), area = summed(areaOfOne, (k) => area(k)), bodies = summed(bodiesOfOne, (k) => bodies(k));
+/** What a result reports (the pane, the history, Claude): each a memo hit for a part that did not change. */
+export const measuresOf = (shape) => ({ volume: volume(shape), area: area(shape), bbox: bbox(shape), bodies: bodies(shape) });
 const interference = (a, b) => {
   const A = parts(a), B = parts(b);
   if (!A && !B) return apart(a, b) ? 0 : a?.__key > b?.__key ? interferenceOfOne(b, a) : interferenceOfOne(a, b);   // symmetric: one memo entry per pair
@@ -174,12 +180,12 @@ const brep = Object.freeze({
   draft: keyed('draft', ops.draft),
   split: keyed('split', ops.split),
   planeOf: keyed('planeOf', ops.planeOf),
-  volume: measured('volume', ops.volume),
-  area: measured('area', ops.area),
+  volume,
+  area,
   bbox,
   centroid: measured('centroid', ops.centroid),
   distance: measured('distance', ops.distance),
-  bodies: measured('bodies', ops.bodies),
+  bodies,
   importStep: keyed('importStep', ops.importStep),
 });
 
