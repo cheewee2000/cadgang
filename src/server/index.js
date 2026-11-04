@@ -103,7 +103,7 @@ function kernelFor(cellsPath) {
       if (m.type === 'listening') { k.port = m.port; resolve(k); }
       else if (m.type === 'stats') k.stats = m;
       else if (m.type === 'broadcast') broadcast(m.msg);
-      else if (m.type === 'draft') { drafts.set(m.session || '', m.file); broadcast({ type: 'cells_progress', session: m.session, cell: m.cell, op: m.op }); }
+      else if (m.type === 'draft') { drafts.set(m.session || '', m.file); broadcast({ type: 'cells_progress', session: m.session, cell: m.cell, op: m.op, kind: m.kind }); }
     });
     child.on('exit', (code) => {
       if (kernels.get(cellsPath) === k) kernels.delete(cellsPath);

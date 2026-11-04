@@ -937,7 +937,7 @@ async function refreshOnce({ structural }) {
     return;
   }
 
-  const sig = JSON.stringify(doc.cells.map((c) => [c.id, c.prompt, c.code, c.refs, c.status, Object.keys(c.params || {})]));
+  const sig = stackSig(doc);
   const changed = sig !== structureSig;
   structureSig = sig;
   // The first mesh of a cold kernel can take minutes: show the transcript now, the geometry when it lands.
@@ -970,7 +970,7 @@ async function refreshOnce({ structural }) {
     pendingPicks = [];
   }
   renderPending();
-  if (/^(Evaluating…|building )/.test($('#status').textContent)) $('#status').textContent = '';
+  if (/^(Evaluating…|building |testing |Claude is looking)/.test($('#status').textContent)) $('#status').textContent = '';
 
   if (changed || structural) renderStack();
   else {
@@ -1085,12 +1085,20 @@ $('#stepBtn').onclick = async () => {
  * One fetch at a time; a draft that lands mid-fetch is simply superseded by the next. The real mesh
  * replaces it when the refresh after the commit finishes.
  */
+const stackSig = (d) => JSON.stringify(d.cells.map((c) => [c.id, c.prompt, c.code, c.refs, c.status, Object.keys(c.params || {})]));
+/** The stack as just committed, drawn now: its mesh may be a minute away, and the refresh above waits for it. */
+function showStack(d) {
+  const sig = stackSig(d);
+  if (sig === structureSig) return;
+  doc = d; structureSig = sig; renderStack();
+  $('#status').textContent = 'Evaluating…';
+}
 let draftRun = null;
-function showDraft({ cell, op }) {
+function showDraft({ cell, op, kind }) {
   if (draftRun || pick || viewingVersion !== null || viewingOption !== null) return;
   draftRun = apiMesh('/draft').then((m) => {
     setGeometry(m); frame(m.bbox);
-    $('#status').textContent = `building ${cell || ''} · ${op}…`;
+    $('#status').textContent = kind === 'render' ? `Claude is looking at ${cell || 'the model'}` : `${kind === 'assert' ? 'testing' : 'building'} ${cell || ''} · ${op}…`;
   }).catch(() => {}).finally(() => { draftRun = null; });
 }
 
@@ -1112,7 +1120,7 @@ function connect() {
       structureSig = ''; framed = false;
       refresh({ structural: true });
     }
-    if (msg.type === 'cells_changed' && sessionMatches(msg.session) && msg.revision !== doc.revision && !inFlight) refresh({ structural: false });
+    if (msg.type === 'cells_changed' && sessionMatches(msg.session) && msg.revision !== doc.revision && !inFlight) { refresh({ structural: false }); if (msg.doc) showStack(msg.doc); }
     if (msg.type === 'cells_progress' && sessionMatches(msg.session)) showDraft(msg);
     if (msg.type === 'history_changed') renderHistory();
     if (msg.type === 'options_changed') renderOptions();

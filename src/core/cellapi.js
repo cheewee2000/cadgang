@@ -12,6 +12,7 @@
  * there for every later cell in the document.
  */
 
+import crypto from 'node:crypto';
 import * as ops from './ops.js';
 import { q as queryRoot, topology, Query } from './query.js';
 import { Sketch } from './sketch.js';
@@ -20,63 +21,113 @@ import { GraphError } from './errors.js';
 import { sheetMetalNamespace } from './sheetmetal.js';
 import { softNamespace } from './softgoods.js';
 
+/**
+ * Shape keys. A cell's inputs carry their cell's cache key (cells.js), and every op here stamps its result
+ * with a key made of the op and its arguments' keys, so two shapes with one key are the same geometry.
+ * An argument that cannot be keyed (a query, whose steps are functions; a sketch; a callback) leaves the
+ * result unkeyed, and so is anything built from it — a part's result is keyed again by its cell.
+ */
+const isShape = (v) => !!v && typeof v === 'object' && typeof v.clone === 'function' && 'wrapped' in v;
+let keyable = true;
+const argKey = (v) => {
+  if (isShape(v)) { if (!v.__key) keyable = false; return v.__key; }
+  if (v == null || typeof v !== 'object') { if (typeof v === 'function') keyable = false; return v; }
+  if (Array.isArray(v)) return v.map(argKey);
+  if (Object.getPrototypeOf(v) === Object.prototype) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, argKey(x)]));
+  keyable = false; return null;
+};
+const keyOf = (op, args) => { keyable = true; const s = JSON.stringify(args.map(argKey)); return keyable ? crypto.createHash('sha1').update(op).update(s).digest('base64url').slice(0, 20) : null; };
+const keyed = (op, fn) => (...args) => { const r = fn(...args); if (isShape(r)) { const k = keyOf(op, args); if (k) r.__key = k; } return r; };
+
+/**
+ * Measures (a clash volume, a bounding box) of a keyed shape are remembered, so a check of two parts
+ * that did not change is a lookup. This is what makes an assertion cell over a whole assembly cost only
+ * the pairs the edit touched: the cell itself re-runs, the kernel work does not.
+ */
+const MEMO_MAX = 20000;
+const memo = new Map();   // op + argument keys → the number or plain object it measured
+export function clearMeasureMemo() { memo.clear(); }
+const measured = (op, fn) => (...args) => {
+  const k = keyOf(op, args);
+  if (k == null) return fn(...args);
+  if (memo.has(k)) { const v = memo.get(k); memo.delete(k); memo.set(k, v); return structuredClone(v); }   // re-insert: Map order is the LRU order
+  const v = fn(...args);
+  if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value);
+  memo.set(k, v);
+  return structuredClone(v);
+};
+
+// A compound remembers what went into it, so its box is the union of its parts' boxes (each a memo hit
+// when that part is unchanged) instead of a coarse mesh of the whole assembly on every evaluate.
+const children = new WeakMap();
+const alive = (s) => { try { return !s.wrapped.isDeleted(); } catch { return false; } };
+const compound = keyed('compound', (...shapes) => { const r = ops.compound(...shapes); children.set(r, shapes.flat().filter(Boolean)); return r; });
+const bboxOfOne = measured('bbox', ops.bbox);
+const bbox = (shape) => {
+  const kids = children.get(shape);
+  if (!kids || !kids.every((s) => s.__key && alive(s))) return bboxOfOne(shape);
+  const boxes = kids.map(bbox);
+  const min = [0, 1, 2].map((k) => Math.min(...boxes.map((b) => b.min[k]))), max = [0, 1, 2].map((k) => Math.max(...boxes.map((b) => b.max[k])));
+  return { min, max, size: [0, 1, 2].map((k) => max[k] - min[k]) };
+};
+
 /** The `brep` namespace: primitives, booleans, modifiers, measures. */
 const brep = Object.freeze({
-  box: ops.box,
-  cylinder: ops.cylinder,
-  sphere: ops.sphere,
-  torus: ops.torus,
-  cone: ops.cone,
-  union: ops.union,
-  compound: ops.compound,
-  name: ops.name,
-  subtract: ops.subtract,
-  intersect: ops.intersect,
-  fillet: ops.fillet,
-  chamfer: ops.chamfer,
-  shell: ops.shell,
-  translate: ops.translate,
+  box: keyed('box', ops.box),
+  cylinder: keyed('cylinder', ops.cylinder),
+  sphere: keyed('sphere', ops.sphere),
+  torus: keyed('torus', ops.torus),
+  cone: keyed('cone', ops.cone),
+  union: keyed('union', ops.union),
+  compound,
+  name: keyed('name', ops.name),
+  subtract: keyed('subtract', ops.subtract),
+  intersect: keyed('intersect', ops.intersect),
+  fillet: keyed('fillet', ops.fillet),
+  chamfer: keyed('chamfer', ops.chamfer),
+  shell: keyed('shell', ops.shell),
+  translate: keyed('translate', ops.translate),
   scoped: ops.scoped,
-  rotate: ops.rotate,
-  scale: ops.scale,
-  mirror: ops.mirror,
-  extrude: ops.extrude,
-  revolve: ops.revolve,
-  loft: ops.loft,
-  sweep: ops.sweep,
-  pipe: ops.pipe,
-  coil: ops.coil,
-  rib: ops.rib,
-  emboss: ops.emboss,
-  thread: ops.thread,
-  pushPull: ops.pushPull,
-  simplify: ops.simplify,
-  pathPattern: ops.pathPattern,
-  plane: ops.plane,
-  planeThrough: ops.planeThrough,
-  pivotPlane: ops.pivotPlane,
-  midplane: ops.midplane,
-  axisOf: ops.axisOf,
-  mass: ops.mass,
-  length: ops.length,
-  interference: ops.interference,
-  polyline: ops.polyline,
-  spline: ops.spline,
-  helix: ops.helix,
-  hole: ops.hole,
-  linearPattern: ops.linearPattern,
-  circularPattern: ops.circularPattern,
-  offset: ops.offset,
-  draft: ops.draft,
-  split: ops.split,
-  planeOf: ops.planeOf,
-  volume: ops.volume,
-  area: ops.area,
-  bbox: ops.bbox,
-  centroid: ops.centroid,
-  distance: ops.distance,
-  bodies: ops.bodies,
-  importStep: ops.importStep,
+  rotate: keyed('rotate', ops.rotate),
+  scale: keyed('scale', ops.scale),
+  mirror: keyed('mirror', ops.mirror),
+  extrude: keyed('extrude', ops.extrude),
+  revolve: keyed('revolve', ops.revolve),
+  loft: keyed('loft', ops.loft),
+  sweep: keyed('sweep', ops.sweep),
+  pipe: keyed('pipe', ops.pipe),
+  coil: keyed('coil', ops.coil),
+  rib: keyed('rib', ops.rib),
+  emboss: keyed('emboss', ops.emboss),
+  thread: keyed('thread', ops.thread),
+  pushPull: keyed('pushPull', ops.pushPull),
+  simplify: keyed('simplify', ops.simplify),
+  pathPattern: keyed('pathPattern', ops.pathPattern),
+  plane: keyed('plane', ops.plane),
+  planeThrough: keyed('planeThrough', ops.planeThrough),
+  pivotPlane: keyed('pivotPlane', ops.pivotPlane),
+  midplane: keyed('midplane', ops.midplane),
+  axisOf: keyed('axisOf', ops.axisOf),
+  mass: measured('mass', ops.mass),
+  length: measured('length', ops.length),
+  interference: measured('interference', ops.interference),
+  polyline: keyed('polyline', ops.polyline),
+  spline: keyed('spline', ops.spline),
+  helix: keyed('helix', ops.helix),
+  hole: keyed('hole', ops.hole),
+  linearPattern: keyed('linearPattern', ops.linearPattern),
+  circularPattern: keyed('circularPattern', ops.circularPattern),
+  offset: keyed('offset', ops.offset),
+  draft: keyed('draft', ops.draft),
+  split: keyed('split', ops.split),
+  planeOf: keyed('planeOf', ops.planeOf),
+  volume: measured('volume', ops.volume),
+  area: measured('area', ops.area),
+  bbox,
+  centroid: measured('centroid', ops.centroid),
+  distance: measured('distance', ops.distance),
+  bodies: measured('bodies', ops.bodies),
+  importStep: keyed('importStep', ops.importStep),
 });
 
 /** The `q` namespace: face and edge queries. */
@@ -118,7 +169,7 @@ function assertions(sink) {
     },
 
     volumeUnder(shape, limit) {
-      const v = ops.volume(shape);
+      const v = brep.volume(shape);
       return record({
         label: 'volume under', ok: v < limit, value: round(v), limit, unit: 'mm³',
         message: `Volume ${v.toFixed(2)} mm³ is not under ${limit} mm³`,
@@ -126,7 +177,7 @@ function assertions(sink) {
     },
 
     volumeOver(shape, limit) {
-      const v = ops.volume(shape);
+      const v = brep.volume(shape);
       return record({
         label: 'volume over', ok: v > limit, value: round(v), limit, unit: 'mm³',
         message: `Volume ${v.toFixed(2)} mm³ is not over ${limit} mm³`,
@@ -134,7 +185,7 @@ function assertions(sink) {
     },
 
     fitsIn(shape, [x, y, z]) {
-      const { size } = ops.bbox(shape);
+      const { size } = brep.bbox(shape);
       const over = size.map((s, i) => s - [x, y, z][i]).findIndex((d) => d > 1e-9);
       record({
         label: 'fits in', ok: over < 0, value: size.map(round), limit: [x, y, z], unit: 'mm',
@@ -166,7 +217,7 @@ function assertions(sink) {
 
     /** The result must be ONE connected solid — a union of bodies that never touch is two. */
     singleBody(shape) {
-      const n = ops.bodies(shape);
+      const n = brep.bodies(shape);
       return record({
         label: 'single body', ok: n === 1, value: n, limit: 1, unit: null,
         message: `The result is ${n} separate bodies, not one — the parts do not touch (a gap under the kernel tolerance counts as a gap)`,

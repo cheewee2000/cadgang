@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { GraphError } from './errors.js';
 import { compileCell, normalizeParams } from './sandbox.js';
-import { cellApi, checkCellResult } from './cellapi.js';
+import { cellApi, checkCellResult, clearMeasureMemo } from './cellapi.js';
 import { trackBrepShape, nameParts, partsOf, setParts, brepHeapBytes, BREP_ROOM_BYTES, beginBrepScope, settleBrep, progress } from './brep.js';
 
 const CELL_ID = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
@@ -674,6 +674,7 @@ function makeRoom(id) {
 /** Drop every cached shape (tests, and anything that changes what a cell means). */
 export function clearCellCache() {
   for (const key of [...resultCache.keys()]) forget(key);
+  clearMeasureMemo();
 }
 
 /**
@@ -767,6 +768,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
       entry.flats.push(...(hit.flats || []).map((f) => ({ ...f })));
       entry.cached = true;
       results.set(cell.id, setParts(trackBrepShape(hit.shape.clone()), partsOf(hit.shape)));   // a clone keeps the part names
+      results.get(cell.id).__key = key;   // the shape's identity for the measure memo (cellapi.js)
       keys.set(cell.id, key);
       previous = results.get(cell.id);
       previousKey = key;
@@ -782,7 +784,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
       if (!asserting) makeRoom(cell.id);
       yield;   // a settling driver collects here, before this cell builds on the last one's leftovers
       const compiled = compiledFor(cell);
-      progress.cell = cell.id;
+      progress.cell = cell.id; progress.asserting = asserting;
       const value = compiled.run(cellApi({
         params: cell.params, input, inputs, selections: cell.selections, sketch: cell.sketch,
         checked: entry.checks, flats: entry.flats,
@@ -799,6 +801,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
       // that changes the model is not a check.
       if (!asserting) {
         keys.set(cell.id, key);
+        results.get(cell.id).__key = key;
         previous = results.get(cell.id);
         previousKey = key;
         lastGood = cell.id;
@@ -822,7 +825,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
         throw new GraphError(msg.includes(`'${cell.id}'`) ? msg : `Cell '${cell.id}': ${msg}`);
       }
     } finally {
-      progress.cell = null;
+      progress.cell = null; progress.asserting = false;
       cellScope.dispose(results.get(cell.id));
       entry.ms = Date.now() - started;
     }

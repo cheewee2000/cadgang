@@ -30,7 +30,9 @@ const broadcast = (msg) => send({ type: 'broadcast', msg });
 const doc = new CellDocument(CELLS_PATH), proj = { dir: null };
 let session = null;
 const api = cellsRouter(doc, ROOT, { project: proj }), routes = express.Router();
-doc.onChange(() => broadcast({ type: 'cells_changed', revision: doc.revision, session }));
+// The document rides along: the page draws the stack from it at once, since a build may be holding
+// this process for the next minute and a fetch would wait behind it.
+doc.onChange(() => broadcast({ type: 'cells_changed', revision: doc.revision, session, doc: doc.toJSON() }));
 routes.use('/history', historyRouter(doc, { dirOf: () => path.join(path.dirname(doc.filePath || CELLS_PATH), 'history'), modelOf: api.modelOf, broadcast }));
 routes.use('/options', optionsRouter(doc, { modelOf: api.modelOf, broadcast }));
 routes.use(api);
@@ -43,17 +45,22 @@ routes.use(api);
 // usually tools about to be cut or joined, and a lone cylinder flashing over the model says nothing.
 const DRAFT_MS = parseInt(process.env.CADGANG_DRAFT_MS || '1000', 10);
 const DRAFT_FILE = path.join(os.tmpdir(), `cadgang-draft-${process.pid}.bin`);
-const NOT_A_STEP = new Set(['box', 'cylinder', 'sphere', 'cone', 'torus', 'coil', 'translate', 'rotate', 'scale', 'mirror']);
+// A primitive is usually a tool about to be cut or joined, so it is not a step; a move is one only in a
+// check cell, where the moved pose IS the test (the lid swung open, a caster turned). A render (what
+// Claude asked to see, with its mesh already made) always goes out.
+const PRIMITIVES = new Set(['box', 'cylinder', 'sphere', 'cone', 'torus', 'coil']), MOVES = new Set(['translate', 'rotate', 'scale', 'mirror']);
 let draftAt = 0;
-progress.fn = (op, shape) => {
-  if (DRAFT_MS < 0 || NOT_A_STEP.has(op) || performance.now() - draftAt < DRAFT_MS) return;
+progress.fn = (op, shape, { cell = progress.cell, mesh = null, edges = null } = {}) => {
+  if (DRAFT_MS < 0) return;
+  if (op !== 'render' && (PRIMITIVES.has(op) || (MOVES.has(op) && !progress.asserting) || performance.now() - draftAt < DRAFT_MS)) return;
+  const kind = op === 'render' ? 'render' : progress.asserting ? 'assert' : 'build';
   try {
     const bb = brepBBox(shape); if (!bb) return;
     const size = bb.max.map((v, i) => v - bb.min[i]);
-    const t = tessellate(shape, { tolerance: Math.min(5, Math.max(0.1, Math.hypot(...size) / 300)), angularTolerance: 0.6 });
-    fs.writeFileSync(`${DRAFT_FILE}.part`, packBinaryMesh({ cell: progress.cell, op, bbox: { ...bb, size } }, t, null));
+    const t = mesh ?? tessellate(shape, { tolerance: Math.min(5, Math.max(0.1, Math.hypot(...size) / 300)), angularTolerance: 0.6 });
+    fs.writeFileSync(`${DRAFT_FILE}.part`, packBinaryMesh({ cell, op, kind, bbox: { ...bb, size } }, t, edges));
     fs.renameSync(`${DRAFT_FILE}.part`, DRAFT_FILE);   // never half a file on the other side
-    send({ type: 'draft', session, cell: progress.cell, op, file: DRAFT_FILE });
+    send({ type: 'draft', session, cell, op, kind, file: DRAFT_FILE });
   } catch (e) { console.error(`kernel: draft after ${op} skipped: ${e.message}`); }
   draftAt = performance.now();   // after the tessellation: its cost does not shorten the gap
 };

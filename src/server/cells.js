@@ -35,7 +35,7 @@ function meshingBounds(bbox, padFraction = 0.05) {
 import { meshStats } from '../core/mesher.js';
 import { renderMesh } from '../core/render.js';
 import {
-  initBrep, beginBrepScope, tessellate, tessellateEdges, exportStep, tightBounds,
+  initBrep, beginBrepScope, tessellate, tessellateEdges, exportStep, tightBounds, progress,
   brepDistance, brepBBox,
 } from '../core/brep.js';
 
@@ -611,9 +611,11 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
   /** PNG preview: the exact solid's tessellation, rasterised with its edges drawn over. */
   r.get('/preview.png', async (req, res) => {
     try {
-      await withShape(req, ({ shape }) => {
+      await withShape(req, ({ shape, shown }) => {
         const tol = tolerance(req, shape);
-        const png = renderMesh(tessellate(shape, { tolerance: tol }), tessellateEdges(shape, { tolerance: tol }), brepBBox(shape), {
+        const t = tessellate(shape, { tolerance: tol }), edges = tessellateEdges(shape, { tolerance: tol });
+        progress.fn?.('render', shape, { cell: shown, mesh: t, edges });   // what Claude is looking at, in the user's pane too (kernel.js)
+        const png = renderMesh(t, edges, brepBBox(shape), {
           width: parseInt(req.query.width || '640', 10),
           height: parseInt(req.query.height || '480', 10),
           yaw: parseFloat(req.query.yaw ?? '-35'),

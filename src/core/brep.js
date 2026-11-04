@@ -307,7 +307,7 @@ export function resetBrepOperationStats() { operationStats.clear(); }
  * Live building: after every op that made a shape, `progress.fn(op, shape)` sees it (the kernel host
  * sends the viewer a rough draft, throttled), and `progress.cell` names the cell building it.
  */
-export const progress = { fn: null, cell: null };
+export const progress = { fn: null, cell: null, asserting: false };
 let progressing = false;
 /** Run an OCCT call, translating its failure mode into a GraphError. */
 function attempt(op, fn) {
