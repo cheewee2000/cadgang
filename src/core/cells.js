@@ -20,11 +20,12 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { GraphError } from './errors.js';
 import { compileCell, normalizeParams } from './sandbox.js';
 import { cellApi, checkCellResult, clearMeasureMemo, childKeys, adoptChildren } from './cellapi.js';
-import { trackBrepShape, nameParts, partsOf, setParts, brepHeapBytes, BREP_ROOM_BYTES, beginBrepScope, settleBrep, progress } from './brep.js';
+import { trackBrepShape, nameParts, partsOf, setParts, brepHeapBytes, BREP_ROOM_BYTES, beginBrepScope, settleBrep, progress, brepToBuffer, brepFromBuffer } from './brep.js';
 
 const CELL_ID = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 const PROMPT_LIMIT = 20000;
@@ -646,11 +647,51 @@ function cellKey(cell, inputKeys) {
 
 const versionsOf = new Map();   // cell id -> the keys of its cached versions
 
-function cacheResult(key, value, logs, checks, flats = [], id = null) {
+function cacheResult(key, value, logs, checks, flats = [], id = null, dir = null) {
   if (resultCache.size >= RESULT_CACHE_LIMIT) forget(resultCache.keys().next().value);
   const shape = setParts(value.clone(), partsOf(value)); shape.__key = key;   // keyed, so it can stand in as a part of a cached assembly
-  resultCache.set(key, { shape, kids: childKeys(value), logs, checks, flats, id });
+  const entry = { shape, kids: childKeys(value), logs, checks, flats, id };
+  resultCache.set(key, entry);
   if (id) (versionsOf.get(id) ?? versionsOf.set(id, new Set()).get(id)).add(key);
+  if (dir) diskWrite(dir, key, entry);
+}
+
+/**
+ * The same cache on disk (~/Library/Caches/cadgang/cells/<document>/<key>.brep + .json), so a fresh
+ * kernel — after the app restarts, or the OCCT heap fills and the kernel is replaced — finds the parts
+ * that did not change instead of rebuilding the whole stack. Binary BRep: a part reads back in a
+ * fraction of what it took to build. CADGANG_DISK_CACHE=0 turns it off.
+ */
+const DISK_CACHE = process.env.CADGANG_DISK_CACHE !== '0';
+const DISK_CACHE_FILES = 400;   // ponytail: newest-by-mtime count cap, a byte budget if a project's cache folder ever matters
+// Under ~/Library/Caches, not beside the document: a project folder lives in Dropbox, and a cache does not belong there.
+const diskDir = (doc) => DISK_CACHE && doc.filePath ? path.join(os.homedir(), 'Library', 'Caches', 'cadgang', 'cells', crypto.createHash('sha1').update(path.resolve(doc.filePath)).digest('hex').slice(0, 16)) : null;
+const diskName = (key) => key.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+function diskWrite(dir, key, { shape, kids, logs, checks, flats, id }) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const base = path.join(dir, diskName(key));
+    fs.writeFileSync(base + '.brep', brepToBuffer(shape));
+    fs.writeFileSync(base + '.json', JSON.stringify({ id, kids, logs, checks, flats, parts: partsOf(shape) }));
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.brep'));
+    if (files.length > DISK_CACHE_FILES) {
+      const at = (f) => { try { return fs.statSync(path.join(dir, f)).mtimeMs; } catch { return 0; } };
+      for (const f of files.sort((a, b) => at(a) - at(b)).slice(0, files.length - DISK_CACHE_FILES)) for (const ext of ['.brep', '.json']) { try { fs.unlinkSync(path.join(dir, f.replace(/\.brep$/, ext))); } catch { /* gone */ } }
+    }
+  } catch (e) { console.error(`cells: cache of ${id} not written: ${e.message}`); }
+}
+function diskRead(dir, key) {
+  const base = path.join(dir, diskName(key));
+  if (!fs.existsSync(base + '.brep')) return null;
+  try {
+    const meta = JSON.parse(fs.readFileSync(base + '.json', 'utf8'));
+    const shape = setParts(brepFromBuffer(fs.readFileSync(base + '.brep')), meta.parts); shape.__key = key;
+    const entry = { shape, kids: meta.kids, logs: meta.logs || [], checks: meta.checks || [], flats: meta.flats || [], id: meta.id };
+    if (resultCache.size >= RESULT_CACHE_LIMIT) forget(resultCache.keys().next().value);
+    resultCache.set(key, entry);
+    if (entry.id) (versionsOf.get(entry.id) ?? versionsOf.set(entry.id, new Set()).get(entry.id)).add(key);
+    return entry;
+  } catch (e) { console.error(`cells: cache ${base} not read: ${e.message}`); return null; }
 }
 
 function forget(key) {
@@ -764,7 +805,8 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
 
     const started = Date.now();
     const asserting = cell.kind === CELL_KIND.assert;
-    const hit = !asserting && resultCache.get(key);
+    const dir = diskDir(doc);
+    const hit = !asserting && (resultCache.get(key) || (dir && diskRead(dir, key)));
     if (hit) {
       resultCache.delete(key); // re-insert: Map order is the LRU order
       resultCache.set(key, hit);
@@ -811,7 +853,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
         previous = results.get(cell.id);
         previousKey = key;
         lastGood = cell.id;
-        cacheResult(key, previous, entry.logs, entry.checks, entry.flats, cell.id);
+        cacheResult(key, previous, entry.logs, entry.checks, entry.flats, cell.id, dir);
       }
     } catch (err) {
       // A lost pick is not a bug in the code — it is a question only the human

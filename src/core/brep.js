@@ -514,6 +514,24 @@ export function brepCommonVolume(a, b) {
   }
 }
 
+/** A shape as OCCT's binary BRep, and back (UNTRACKED: the caller owns the shape). The on-disk cell cache (cells.js). */
+export function brepToBuffer(shape) {
+  const name = `/cache-${process.pid}-${Date.now()}.brep`, progress = new OC.Message_ProgressRange_1();
+  try {
+    if (!OC.BinTools.Write_3(shape.wrapped, name, progress)) throw new Error('BRep write failed');
+    return Buffer.from(OC.FS.readFile(name));
+  } finally { progress.delete(); try { OC.FS.unlink(name); } catch { /* never written */ } }
+}
+export function brepFromBuffer(buffer) {
+  const name = `/cache-${process.pid}-${Date.now()}.brep`, progress = new OC.Message_ProgressRange_1();
+  const shape = new OC.TopoDS_Shape();
+  try {
+    OC.FS.writeFile(name, new Uint8Array(buffer));
+    if (!OC.BinTools.Read_2(shape, name, progress)) throw new Error('BRep read failed');
+    return kernel().cast(shape);
+  } finally { progress.delete(); try { OC.FS.unlink(name); } catch { /* never written */ } }
+}
+
 /** True for the {kind:'sketch'} values sketch blocks emit. */
 export const isSketch = (v) => v?.kind === 'sketch';
 
