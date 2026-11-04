@@ -115,6 +115,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
     } finally {
       scope.dispose();
       release();
+      progress.fn?.('done', null);   // the run is over: the pane drops its last draft and status (kernel.js)
     }
   }
 

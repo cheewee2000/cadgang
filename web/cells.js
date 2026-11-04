@@ -1095,7 +1095,14 @@ function showStack(d) {
 }
 let draftRun = null;
 function showDraft({ cell, op, kind }) {
-  if (draftRun || pick || viewingVersion !== null || viewingOption !== null) return;
+  if (pick || viewingVersion !== null || viewingOption !== null) return;
+  if (kind === 'done') {   // the run ended (an evaluate with no commit behind it): back to the real model
+    if (/^Claude is looking/.test($('#status').textContent)) return;   // a render stays: it is what Claude asked to see
+    if (/^(building |testing )/.test($('#status').textContent)) $('#status').textContent = '';
+    if (lastMesh) setGeometry(lastMesh);
+    return;
+  }
+  if (draftRun) return;
   draftRun = apiMesh('/draft').then((m) => {
     setGeometry(m); frame(m.bbox);
     $('#status').textContent = kind === 'render' ? `Claude is looking at ${cell || 'the model'}` : `${kind === 'assert' ? 'testing' : 'building'} ${cell || ''} · ${op}…`;

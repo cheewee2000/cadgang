@@ -52,6 +52,7 @@ const PRIMITIVES = new Set(['box', 'cylinder', 'sphere', 'cone', 'torus', 'coil'
 let draftAt = 0;
 progress.fn = (op, shape, { cell = progress.cell, mesh = null, edges = null } = {}) => {
   if (DRAFT_MS < 0) return;
+  if (op === 'done') { send({ type: 'draft', session, cell: null, op, kind: 'done', file: null }); return; }
   if (op !== 'render' && (PRIMITIVES.has(op) || (MOVES.has(op) && !progress.asserting) || performance.now() - draftAt < DRAFT_MS)) return;
   const kind = op === 'render' ? 'render' : progress.asserting ? 'assert' : 'build';
   try {
