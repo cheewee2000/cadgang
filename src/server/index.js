@@ -173,6 +173,7 @@ function sessionFor(dir) {
 // A session's build holds its kernel, and the tabs on that project wait behind it: they say why (and only they:
 // the message names the project folder, and a window on another file ignores it).
 const working = new Map();   // project dir → builds in flight
+let lastActive = null;       // the project Claude last touched: a Cells page opened between two calls still finds it
 function busy(dir, d) {
   const n = (working.get(dir) || 0) + d; working.set(dir, n);
   if (n === (d > 0 ? 1 : 0)) broadcast({ type: 'busy', dir, what: n ? `Claude (${path.basename(dir)}) is building…` : null });
@@ -185,7 +186,8 @@ app.use('/api/cells', (req, res, next) => {
   if (header) {
     if (!fs.existsSync(dir)) return res.status(404).json({ error: `Project folder no longer exists: ${dir}` });
     if (dir !== project.dir) entry = sessionFor(dir);
-    broadcast({ type: 'cells_project_active', session: entry?.key ?? null, name: path.basename(dir) });
+    lastActive = { type: 'cells_project_active', session: entry?.key ?? null, name: path.basename(dir) };
+    broadcast(lastActive);
   } else if (req.query.session) {
     const key = String(req.query.session), known = knownSessions[key];
     entry = sessionKeys.get(key) ?? (known && known !== project.dir && fs.existsSync(known) ? sessionFor(known) : null);
@@ -226,6 +228,7 @@ app.use(express.static(path.join(ROOT, 'web'), { setHeaders: (res) => res.set('C
 // Pages compare this with what they loaded and reload themselves when the server came back newer.
 wss.on('connection', (ws) => {
   ws.send(JSON.stringify({ type: 'hello', version: VERSION, cellsRevision: appRevision() }));
+  if (lastActive) ws.send(JSON.stringify(lastActive));
   active ??= ws;
   ws.on('message', (m) => {
     try {
