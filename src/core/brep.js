@@ -1337,13 +1337,20 @@ const COARSE = 0.1;
 
 // One edit is tessellated three times at the same tolerance — the pane's mesh, the history's look, Claude's
 // render — so a keyed shape's mesh is kept (keys are content hashes: a hit is the same geometry).
-const MESH_CACHE_MAX = 24;
+// A byte budget, not a count: an assembly's parts each hold a viewport mesh, its edges, a render mesh and a
+// scrub mesh, and a count of 24 thrashed on fifteen parts (every request re-meshed them all).
+const MESH_CACHE_BYTES = parseInt(process.env.CADGANG_MESH_CACHE_MB || '192', 10) * 2 ** 20;
 const meshCache = new Map();
+let meshCacheBytes = 0;
+const meshBytes = (v) => (v.positions?.byteLength ?? 0) + (v.normals?.byteLength ?? 0) + (v.indices?.byteLength ?? 0) + (v.lines?.length ?? 0) * 8 + 1024;
 const cachedMesh = (shape, tolerance, angularTolerance, make) => {
   const k = shape?.__key ? `${shape.__key}|${tolerance}|${angularTolerance}` : null;
   if (k && meshCache.has(k)) { const v = meshCache.get(k); meshCache.delete(k); meshCache.set(k, v); return v; }
   const v = make();
-  if (k && v) { if (meshCache.size >= MESH_CACHE_MAX) meshCache.delete(meshCache.keys().next().value); meshCache.set(k, v); }
+  if (k && v) {
+    meshCache.set(k, v); meshCacheBytes += meshBytes(v);
+    while (meshCacheBytes > MESH_CACHE_BYTES && meshCache.size > 1) { const [old, gone] = meshCache.entries().next().value; meshCache.delete(old); meshCacheBytes -= meshBytes(gone); }
+  }
   return v;
 };
 const mergeMeshes = (parts) => {
