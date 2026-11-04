@@ -310,8 +310,13 @@ $('#dragbar').addEventListener('pointerdown', (e) => {
 window.addEventListener('pointerup', () => { if (dragBar) { dragBar = false; resize(); } });
 window.addEventListener('pointermove', (e) => {
   if (!dragBar) return;
-  const w = Math.max(300, Math.min(window.innerWidth * 0.7, e.clientX));
-  $('#panel').style.flexBasis = `${w}px`;
+  if (document.documentElement.classList.contains('panel')) {   // docked: the live model sits under the stack, the bar sets its height
+    const h = Math.max(120, Math.min(window.innerHeight * 0.8, window.innerHeight - e.clientY));
+    $('#viewport').style.flexBasis = `${h}px`;
+  } else {
+    const w = Math.max(300, Math.min(window.innerWidth * 0.7, e.clientX));
+    $('#panel').style.flexBasis = `${w}px`;
+  }
   resize();
 });
 
@@ -350,6 +355,7 @@ const fmt = (n) => (Math.abs(n) >= 1000 ? n.toFixed(0) : parseFloat(n.toPrecisio
  */
 function renderStack() {
   const stack = $('#stack');
+  const scrolled = stack.scrollTop;   // a rebuild must not throw the reader back to the top
   sketches.clear();
   $('#stackCount').textContent = doc.cells.length
     ? `${doc.cells.length} cell${doc.cells.length === 1 ? '' : 's'}`
@@ -485,6 +491,7 @@ function renderStack() {
     stack.append(el);
   });
   paintReport();
+  stack.scrollTop = scrolled;
 }
 
 /** One parameter: a scrubbable name and an exact number field. */

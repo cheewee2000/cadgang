@@ -351,5 +351,8 @@ footer {
 .opt button { margin-top: var(--sp-1); width: 100%; font-size: var(--fs-12); padding: 4px; }
 
 /* ?panel=1: docked at the right of the viewer. The transcript only; the viewer shows the model. */
-html.panel header, html.panel #dragbar, html.panel #viewport, html.panel footer, html.panel .stack-hint { display: none; }
-html.panel #panel { flex: 1 1 auto; max-width: none; border-right: 0; }
+html.panel header, html.panel footer, html.panel .stack-hint, html.panel #markupTools { display: none; }   /* the viewer has its own markup */
+html.panel main { flex-direction: column; }
+html.panel #panel { flex: 1 1 auto; max-width: none; min-width: 0; border-right: 0; }
+html.panel #dragbar { flex: 0 0 5px; cursor: row-resize; border-right: 0; border-top: var(--bw-hair) solid var(--rule); }
+html.panel #viewport { flex: 0 0 40%; min-height: 120px; }   /* the live model: every committed cell change redraws it */
