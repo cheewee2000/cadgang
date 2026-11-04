@@ -16,7 +16,7 @@ import crypto from 'node:crypto';
 import { fork } from 'node:child_process';
 import express from 'express';
 import { WebSocketServer } from 'ws';
-import { viewRouter } from './view.js';
+import { viewRouter, mayReadLocal } from './view.js';
 import { CellDocument } from '../core/cells.js';
 import { SoftgoodsDocument } from '../core/softgoods-document.js';
 import { softgoodsRouter } from './softgoods.js';
@@ -192,6 +192,19 @@ app.get('/api/cells/draft', (req, res) => {
   const file = drafts.get(String(req.query.session || ''));
   if (!file) return res.status(404).json({ error: 'Nothing is being built' });
   res.type('application/octet-stream').sendFile(file, (e) => { if (e && !res.headersSent) res.status(404).json({ error: 'That draft is gone' }); });
+});
+// The project a window's file belongs to: the nearest folder above it with a cell document. That window's
+// Cells pane pins itself to it (view.js), so each tab shows its own project's cells. {} when there is none.
+app.get('/api/cells/session', (req, res) => {
+  if (!mayReadLocal(req)) return res.status(403).json({ error: 'Only from this computer' });
+  for (const file of String(req.query.subject || '').split('|')) {
+    if (!path.isAbsolute(file)) continue;
+    for (let dir = path.dirname(file); dir !== path.dirname(dir); dir = path.dirname(dir)) {
+      if (!fs.existsSync(path.join(dir, 'cadgang', 'cells.json'))) continue;
+      return res.json({ session: dir === project.dir ? null : sessionFor(dir).key, name: path.basename(dir) });
+    }
+  }
+  res.json({});
 });
 app.use('/api/cells', (req, res, next) => {
   // MCP alone names a filesystem folder. The browser follows with an opaque

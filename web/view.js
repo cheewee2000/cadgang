@@ -2486,7 +2486,7 @@ async function openBuffers(files) {
   const t0 = performance.now(), ticket = ++loadTicket;
   clearModel();
   subject = files.map((f) => f.name).join('|');   // bytes have no path: markups attach by name
-  announce(); renderTabs();
+  announce(); renderTabs(); syncCellsPane();
 
   let shown = 0, label = '';
   for (const { name, buffer } of files) {
@@ -2528,7 +2528,7 @@ async function openPaths(paths, keep, mine) {
   const t0 = performance.now(), ticket = ++loadTicket;
   clearModel();
   subject = paths.join('|');   // markups attach to the file by path
-  announce(); renderTabs();
+  announce(); renderTabs(); syncCellsPane();
   // The address says what is open, from the first byte: a reload brings the file back, and the Mac app
   // reads its windows' addresses to reopen the same files after a quit or a crash, even one mid-load.
   if (!follow) window.history.replaceState(null, '', `${location.pathname}?open=${encodeURIComponent(subject)}`);   // window.history: `history` here is the undo stack
@@ -3388,7 +3388,7 @@ async function openProject(buffer, name, path = '') {
   say(`loading ${name}…`); progressStart(name);
   try {
     subject = path || `project:${name}`;   // markups come from the file itself
-    announce(); renderTabs();
+    announce(); renderTabs(); syncCellsPane();
     await loadBundle(buffer);
     projectPath = path;
     if (path && !follow) window.history.replaceState(null, '', `${location.pathname}?open=${encodeURIComponent(path)}`);
@@ -3714,7 +3714,16 @@ const saveCells = () => { try { localStorage.setItem('cadgang-cells', JSON.strin
 function setCells(on) {
   cellsPref.on = on; saveCells();
   $('#cellsBtn').classList.toggle('on', on); cellsPane.hidden = !on;
-  if (on && !cellsFrame.src) cellsFrame.src = 'cells?panel=1';   // loads once, on first open
+  if (on) syncCellsPane();
+}
+// The pane shows the cells of the project this window's file belongs to (the nearest folder above it with
+// a cell document), so each tab has its own; a file in no project leaves the pane following Claude.
+async function syncCellsPane() {
+  if (!cellsPref.on) return;
+  const s = subject ? await fetch(`api/cells/session?subject=${encodeURIComponent(subject)}`).then((r) => r.json()).catch(() => ({})) : {};
+  const follow = cellsFrame.contentWindow?.cadgangFollow;
+  if (follow) follow(s);
+  else if (!cellsFrame.src || 'session' in s) cellsFrame.src = 'cells?panel=1' + ('session' in s ? `&pin=${encodeURIComponent(s.session ?? '')}&name=${encodeURIComponent(s.name)}` : '');
 }
 window.cadgangCells = () => setCells(!cellsPref.on);
 $('#cellsBtn').addEventListener('click', window.cadgangCells);

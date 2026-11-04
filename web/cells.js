@@ -23,8 +23,27 @@ const $ = (sel) => document.querySelector(sel);
 const API = '/api/cells';
 let followedSession = new URLSearchParams(location.search).get('session');
 if (new URLSearchParams(location.search).has('panel')) document.documentElement.classList.add('panel');   // docked in the viewer: the transcript only, the model is next door
+// Docked in a window on a project's file, the pane is pinned to that project (view.js syncCellsPane): Claude
+// working elsewhere does not pull it away. Unpinned, it follows the project Claude last touched.
+let pinned = new URLSearchParams(location.search).has('pin'), lastActive = null;
+if (pinned) followedSession = new URLSearchParams(location.search).get('pin') || null;
+window.cadgangFollow = ({ session, name } = {}) => {
+  pinned = session !== undefined;
+  const to = pinned ? { session: session ?? null, name } : lastActive;
+  if (to) followProject(to, pinned ? `Cells of ${name || 'this project'}` : `Following Claude in ${to.name || 'the active project'}`);
+};
 const cellURL = (path) => { const u = new URL(API + path, location.href); if (followedSession) u.searchParams.set('session', followedSession); return u.pathname + u.search; };
 const sessionMatches = (key) => (key || null) === (followedSession || null);
+
+function followProject({ session, name }, note) {
+  if ((session || null) === (followedSession || null)) return;
+  followedSession = session || null;
+  const u = new URL(location.href); if (followedSession) u.searchParams.set('session', followedSession); else u.searchParams.delete('session'); window.history.replaceState(null, '', u);
+  document.querySelector('.project-name').textContent = name || 'live';
+  say(note);
+  structureSig = ''; framed = false;
+  refresh({ structural: true });
+}
 
 // ---------------------------------------------------------------- transport
 
@@ -1119,14 +1138,7 @@ function connect() {
     // Non-structural on purpose: a real change of structure is caught by the
     // signature check inside, while a drawn line or a turned knob must not
     // remount every canvas on the page.
-    if (msg.type === 'cells_project_active' && msg.session !== undefined && msg.session !== followedSession) {
-      followedSession = msg.session;
-      const u = new URL(location.href); if (followedSession) u.searchParams.set('session', followedSession); else u.searchParams.delete('session'); window.history.replaceState(null, '', u);
-      document.querySelector('.project-name').textContent = msg.name || 'live';
-      say(`Following Claude in ${msg.name || 'the active project'}`);
-      structureSig = ''; framed = false;
-      refresh({ structural: true });
-    }
+    if (msg.type === 'cells_project_active' && msg.session !== undefined) { lastActive = msg; if (!pinned) followProject(msg, `Following Claude in ${msg.name || 'the active project'}`); }
     if (msg.type === 'cells_changed' && sessionMatches(msg.session) && msg.revision !== doc.revision && !inFlight) { refresh({ structural: false }); if (msg.doc) showStack(msg.doc); }
     if (msg.type === 'cells_progress' && sessionMatches(msg.session)) showDraft(msg);
     if (msg.type === 'history_changed') renderHistory();
@@ -1148,7 +1160,7 @@ if (document.documentElement.classList.contains('panel')) {
   new MutationObserver(follow).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
   follow();
 } else applyTheme();
-if (followedSession) document.querySelector('.project-name').textContent = 'live';
+if (followedSession || pinned) document.querySelector('.project-name').textContent = new URLSearchParams(location.search).get('name') || 'live';
 resize();
 fetch('/api/health')
   .then((r) => r.json())
