@@ -73,8 +73,10 @@ process.on('exit', () => { try { fs.unlinkSync(DRAFT_FILE); } catch { /* none wr
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 let inflight = 0;
+const DRAFT_AFTER_MS = parseInt(process.env.CADGANG_DRAFT_AFTER_MS || '3000', 10);
 app.use('/api/cells', (req, res, next) => {
   inflight++; res.once('close', () => { inflight--; });
+  draftAt = performance.now() + DRAFT_AFTER_MS - DRAFT_MS;   // a request that is done in a few seconds is not worth drafting: its poses cost as much as its checks
   proj.dir = req.get('x-cadgang-dir') || null;
   session = req.get('x-cadgang-session') || null;
   setImportRoot(proj.dir || process.cwd());
