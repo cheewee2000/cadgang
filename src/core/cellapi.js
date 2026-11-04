@@ -42,9 +42,9 @@ const argKey = (v) => {
 };
 const keyOf = (op, args) => { keyable = true; const s = JSON.stringify(args.map(argKey)); return keyable ? crypto.createHash('sha1').update(op).update(s).digest('base64url').slice(0, 20) : null; };
 // A keyed op's result is kept too (an untracked clone the memo owns; a hit hands out a tracked clone), so a
-// check cell's clips and poses, which re-run on every evaluate, are lookups once made. Moves and
-// primitives are cheaper to redo than to keep, and a compound carries its parts, which a clone would not.
-const SHAPE_MEMO_MAX = 96, SHAPE_MEMO_SKIP = new Set(['box', 'cylinder', 'sphere', 'cone', 'torus', 'translate', 'rotate', 'scale', 'mirror', 'compound', 'plane', 'planeThrough', 'pivotPlane', 'midplane', 'axisOf']);
+// check cell's clips and poses, which re-run on every evaluate, are lookups once made. Primitives are
+// cheaper to redo than to keep, and a compound carries its parts, which a clone would not.
+const SHAPE_MEMO_MAX = 128, SHAPE_MEMO_SKIP = new Set(['box', 'cylinder', 'sphere', 'cone', 'torus', 'compound', 'plane', 'planeThrough', 'pivotPlane', 'midplane', 'axisOf']);   // a moved copy shares its geometry: cheap to keep, and a check's 86 poses cost 1 s to redo
 const shapeMemo = new Map();
 export function clearShapeMemo() { for (const v of shapeMemo.values()) { try { v.delete(); } catch { /* gone */ } } shapeMemo.clear(); }
 const keyed = (op, fn) => (...args) => {
@@ -111,11 +111,14 @@ const parts = (s) => {
   return kids && kids.every((k) => k?.__key && alive(k)) ? kids : null;
 };
 const compound = keyed('compound', (...shapes) => { const r = ops.compound(...shapes); children.set(r, shapes.flat().filter(Boolean)); return r; });
-const moved = (op) => keyed(op, (shape, ...rest) => {
-  const r = ops[op](shape, ...rest);
-  if (children.has(shape) && !(op === 'mirror' && rest[2]?.keep)) children.set(r, () => parts(shape)?.map((k) => brep[op](k, ...rest)));
-  return r;
-});
+const moved = (op) => {
+  const move = keyed(op, ops[op]);
+  return (shape, ...rest) => {
+    const r = move(shape, ...rest);   // kept or fresh: either way a moved compound's parts are the moved parts
+    if (children.has(shape) && !children.has(r) && !(op === 'mirror' && rest[2]?.keep)) children.set(r, () => parts(shape)?.map((k) => brep[op](k, ...rest)));
+    return r;
+  };
+};
 compoundParts.of = parts;   // brep.js meshes, boxes and measures an assembly part by part
 /** A cached cell result is a clone (cells.js); its parts come back by their keys, looked up when asked. */
 export const childKeys = (shape) => parts(shape)?.map((k) => k.__key) ?? null;

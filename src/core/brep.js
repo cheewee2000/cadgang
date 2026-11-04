@@ -199,7 +199,7 @@ export function initBrep() {
   // A big heap gets its garbage collected BEFORE the next job rather than after
   // it: the OCCT heap never shrinks, so a rebuild that starts on top of the last
   // one's leftovers is what pushes it over the restart limit.
-  return scopesSinceCollect && brepHeapBytes() > BREP_ROOM_BYTES ? initPromise.then(settle) : initPromise;
+  return scopesSinceCollect >= 4 && brepHeapBytes() > BREP_ROOM_BYTES ? initPromise.then(settle) : initPromise;   // not after every request: a cache-hit request leaves nothing to collect, and a settle is 0.7 s
 }
 
 /** Above this many bytes the kernel makes room before building: see initBrep() and the cell cache. */
