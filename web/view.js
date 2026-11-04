@@ -131,7 +131,8 @@ function styleMesh(m) {
     if (!ui.color && src.pbr && SOLID_LOOKS.has(ui.look)) Object.assign(mat, src.pbr);
     const tint = src.tint || m.userData.tint;
     if (!ui.color && tint && mat.color && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.color.setRGB(...tint, THREE.SRGBColorSpace);
-    if (m.userData.finish && FINISHES[m.userData.finish] && 'roughness' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.roughness = FINISHES[m.userData.finish].rough;
+    const fin = src.finish || m.userData.finish;
+    if (fin && FINISHES[fin] && 'roughness' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.roughness = FINISHES[fin].rough;
     if (m.userData.opacity < 1 && SOLID_LOOKS.has(ui.look)) Object.assign(mat, { transparent: true, opacity: m.userData.opacity, depthWrite: false });
     if (m.userData.ghost) Object.assign(mat, { transparent: true, opacity: Math.min(mat.opacity, 0.15), depthWrite: false, transmission: 0 });
     if (m.userData.map && !ui.color && 'map' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) { mat.map = m.userData.map; mat.color?.set(0xffffff); }
@@ -272,7 +273,7 @@ function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', pa
   m.userData.map = map;             // the file's image texture, drawn on every solid look
   m.userData.glow = glow;           // and how much it lights itself (RENDER)
   m.userData.tint = tints[file]?.[m.userData.name] ?? null;   // the user's colour for it, kept from last time
-  for (const [i, g] of (groups ?? []).entries()) g.tint = tints[file]?.[`${m.userData.name}#${i}`] ?? null;   // and for each of its finishes
+  for (const [i, g] of (groups ?? []).entries()) { g.tint = tints[file]?.[`${m.userData.name}#${i}`] ?? null; g.finish = finishes[file]?.[`${m.userData.name}#${i}`] ?? null; }   // and for each of its finishes
   m.userData.finish = finishes[file]?.[m.userData.name] ?? null;   // and the finish
   m.userData.faces = faces;   // B-rep face ranges, when the importer knew them: picked by measure
   model.add(m);
@@ -488,20 +489,11 @@ function listBodies() {
           const r2 = document.createElement('div'); r2.className = 'finish-row'; r2._body = m; r2._group = g;
           const fn = Object.assign(document.createElement('span'), { className: 'fname', textContent: g.name || 'finish', title: `${g.name || 'finish'}\nClick: select its body · Shift-click: add it to the selection` });
           fn.addEventListener('click', (e) => { e.preventDefault(); selectBodies([m], e.shiftKey || e.metaKey || e.ctrlKey ? 'toggle' : 'set'); });
-          r2.append(fn, Object.assign(document.createElement('span'), { className: 'bits' }));
+          r2.append(fn, matWord(m, g), Object.assign(document.createElement('span'), { className: 'bits' }));
           subs.append(r2);
         }
       } else if (gap) row.append(Object.assign(document.createElement('span'), { className: 'fold-gap' }));   // aligns with the +/−
-      // the material word: a list that reads as text; a choice shows under the MATERIALS look, so it switches to it
-      const pick = document.createElement('select'); pick.className = 'ghost mat-word';
-      lazyOptions(pick, () => Object.entries(MATERIALS).map(([k, d]) => new Option(d.label, k)));
-      pick.addEventListener('pointerdown', (e) => e.stopPropagation());
-      pick.addEventListener('click', (e) => e.stopPropagation());
-      pick.addEventListener('change', () => {
-        pickMaterial(m, pick.value);
-        if (ui.look !== 'materials') { $('#look').value = 'materials'; $('#look').dispatchEvent(new Event('change', { bubbles: true })); }
-        styleMesh(m); paintFinishes(); rerender(); commit();
-      });
+      const pick = matWord(m);
       const edit = Object.assign(document.createElement('span'), { className: 'body-edit', textContent: '✎', title: 'Rename this body' });
       edit.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); startRename(m); });
       const tag = Object.assign(document.createElement('span'), { className: 'mat-tag' }); tag._body = m;   // material · finish · colour (paintFinishes)
@@ -859,7 +851,7 @@ const finishWord = (name, rough, metal) => {
 };
 /** One finish of a body (its own, or a glTF group's): { name, finish, color: [r,g,b], colorText }. */
 function finishFacts(m, src = m.userData) {
-  const def = MATERIALS[materialOf(m)];
+  const def = MATERIALS[materialOf(m, src !== m.userData ? src : null)];
   const name = src.name ?? m.userData.material ?? '';
   const fileName = src === m.userData ? m.userData.material || '' : name;
   const rough = src.pbr?.roughness ?? def?.rough, metal = (src.pbr?.metalness ?? def?.metal ?? 0) > 0.5;
@@ -919,26 +911,34 @@ function choose(sel, value, label) {
   if (![...sel.options].some((o) => o.value === value)) { if (sel._full) sel.append(new Option(label, value)); else sel.replaceChildren(new Option(label, value)); }
   sel.value = value;
 }
+/** The material word of a body, or of one of its finishes (g): a list that reads as text; a choice shows under the MATERIALS look, so it switches to it. */
+function matWord(m, g = null) {
+  const pick = document.createElement('select'); pick.className = 'ghost mat-word';
+  lazyOptions(pick, () => Object.entries(MATERIALS).map(([k, d]) => new Option(d.label, k)));
+  pick.addEventListener('pointerdown', (e) => e.stopPropagation());
+  pick.addEventListener('click', (e) => e.stopPropagation());
+  pick.addEventListener('change', () => {
+    pickMaterial(m, pick.value, g);
+    if (ui.look !== 'materials') { $('#look').value = 'materials'; $('#look').dispatchEvent(new Event('change', { bubbles: true })); }
+    styleMesh(m); paintFinishes(); rerender(); commit();
+  });
+  return pick;
+}
+/** The finish word and colour swatch of a body (m), or of one of its finishes (g): lists to change them. Without m, plain text. */
 function finishBits(f, m = null, g = null) {
   const frag = document.createDocumentFragment();
-  if (m && g) {
-    frag.append(Object.assign(document.createElement('span'), { className: 'fin', textContent: f.finish || '' }));
-    const sw = Object.assign(document.createElement('button'), { type: 'button', className: 'swatch-pick', title: `${hexOfRGB(f.color)}: click to change this finish's colour` });
-    sw.style.background = hexOfRGB(f.color);
-    sw.addEventListener('pointerdown', (e) => e.stopPropagation());
-    sw.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openColorMenu(sw, hexOfRGB(f.color), (rgb) => { setTint([m], rgb, g); rerender(); paintFinishes(); paintSelection(); }, () => commit()); });
-    frag.append(sw);
-  } else if (m) {
+  if (m) {
+    const cur = g ? g.finish : m.userData.finish;
     const fin = Object.assign(document.createElement('select'), { className: 'fin-word', title: 'Its finish: click to change it' });
     lazyOptions(fin, () => [new Option(f.finish || 'Finish', ''), ...Object.entries(FINISHES).map(([k, d]) => new Option(d.label, k))]);
-    choose(fin, m.userData.finish ?? '', m.userData.finish ? FINISHES[m.userData.finish].label : f.finish || 'Finish');
-    if (!m.userData.finish) fin.options[0].textContent = f.finish || 'Finish';   // the file's (or the material's) until one is chosen
+    choose(fin, cur ?? '', cur ? FINISHES[cur].label : f.finish || 'Finish');
+    if (!cur) fin.options[0].textContent = f.finish || 'Finish';   // the file's (or the material's) until one is chosen
     for (const ev of ['pointerdown', 'click']) fin.addEventListener(ev, (e) => e.stopPropagation());
-    fin.addEventListener('change', () => { setFinish([m], fin.value || null); commit(); });
+    fin.addEventListener('change', () => { setFinish([m], fin.value || null, g); commit(); });
     const sw = Object.assign(document.createElement('button'), { type: 'button', className: 'swatch-pick', title: `${hexOfRGB(f.color)}: click to change the colour` });
     sw.style.background = hexOfRGB(f.color);
     sw.addEventListener('pointerdown', (e) => e.stopPropagation());
-    sw.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openColorMenu(sw, hexOfRGB(f.color), (rgb) => { setTint([m], rgb); rerender(); paintFinishes(); paintSelection(); }, () => commit()); });
+    sw.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openColorMenu(sw, hexOfRGB(f.color), (rgb) => { setTint([m], rgb, g); rerender(); paintFinishes(); paintSelection(); }, () => commit()); });
     frag.append(fin, sw);
     return frag;
   } else {
@@ -949,11 +949,12 @@ function finishBits(f, m = null, g = null) {
   return frag;
 }
 /** The user's finish for these bodies (null: back to the file's). */
-function setFinish(ms, key) {
+function setFinish(ms, key, g = null) {
   for (const m of ms) {
-    m.userData.finish = key;
-    const f = (finishes[m.userData.file] ??= {});
-    if (key) f[m.userData.name] = key; else delete f[m.userData.name];
+    const f = (finishes[m.userData.file] ??= {}), groups = m.userData.groups ?? [];
+    const put = (k, v) => { if (v) f[k] = v; else delete f[k]; };
+    if (g) { g.finish = key; put(`${m.userData.name}#${groups.indexOf(g)}`, key); }
+    else { m.userData.finish = key; put(m.userData.name, key); groups.forEach((x, i) => { x.finish = null; put(`${m.userData.name}#${i}`, null); }); }   // the whole body: its finishes follow
     styleMesh(m);
   }
   saveFinishes(); paintFinishes(); rerender();
@@ -974,8 +975,12 @@ function paintFinishes() {
     bits.replaceChildren(finishBits(f, m));
   }
   for (const r of document.querySelectorAll('#bodies .finish-row')) {
+    const m = r._body, g = r._group, sel = r.querySelector('select.mat-word'), picked = pickedMaterial(m, g);
+    choose(sel, materialOf(m, g), MATERIALS[materialOf(m, g)]?.label ?? materialOf(m, g));
+    sel.classList.toggle('guess', !picked && !g.name);
+    sel.title = picked ? 'Your choice for this finish: click to change it' : `${g.name ? `The file says ${g.name}` : 'As its body'}: click to choose a material for this finish alone`;
     const bits = r.querySelector('.bits');
-    if (!bits.contains(document.activeElement)) bits.replaceChildren(finishBits(finishFacts(r._body, r._group), r._body, r._group));
+    if (!bits.contains(document.activeElement)) bits.replaceChildren(finishBits(finishFacts(m, g), m, g));
   }
   fitNames();   // a new word can widen its column
 }

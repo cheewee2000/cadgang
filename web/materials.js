@@ -22,7 +22,7 @@ export const MATERIALS = {
   nickel: { label: 'Nickel', density: 8.9, color: 0xd3cdc4, metal: 1, rough: 0.14 },
   brass: { label: 'Brass', density: 8.5, color: 0xdcb46a, metal: 1, rough: 0.25 },
   copper: { label: 'Copper', density: 8.96, color: 0xe3a17c, metal: 1, rough: 0.28 },
-  glass: { label: 'Glass', density: 2.5, color: 0xffffff, metal: 0, rough: 0, trans: 1, ior: 1.52 },
+  glass: { label: 'Glass', density: 2.5, color: 0xdfe8ee, metal: 0, rough: 0, trans: 1, ior: 1.52 },   // a breath of blue-grey, as the Glass look
   acrylic: { label: 'Acrylic', density: 1.18, color: 0xf7fbff, metal: 0, rough: 0.02, trans: 1, ior: 1.49 },
   rubber: { label: 'Rubber', density: 1.2, color: 0x2a2a2a, metal: 0, rough: 0.95 },
   wood: { label: 'Wood', density: 0.6, color: 0xb98a5a, metal: 0, rough: 0.75 },
@@ -75,24 +75,28 @@ export const guessMaterial = (name, path = [], material = '') => (material ? gue
 const KEY = 'cadgang-materials';
 let picks = {};
 try { picks = JSON.parse(localStorage.getItem(KEY)) || {}; } catch {}
-/** The user's pick for a body in this file, or undefined (then materialOf is a guess). */
-export const pickedMaterial = (m) => picks[m.userData.file]?.[m.userData.name];
-/** The material key for a body: the user's pick for it in this file, else the guess. */
-export const materialOf = (m) => picks[m.userData.file]?.[m.userData.name] ?? guessMaterial(m.userData.name, m.userData.path, m.userData.material);
-export function pickMaterial(m, key) {
-  if (key) (picks[m.userData.file] ??= {})[m.userData.name] = key;
-  else delete picks[m.userData.file]?.[m.userData.name];   // back to the guess
+// A pick is kept by body name; one finish of a body (a glTF group, g) by name#index.
+const keyFor = (m, g) => (g ? `${m.userData.name}#${m.userData.groups.indexOf(g)}` : m.userData.name);
+/** The user's pick for a body (or one of its finishes) in this file, or undefined (then materialOf is a guess). */
+export const pickedMaterial = (m, g = null) => picks[m.userData.file]?.[keyFor(m, g)];
+/** The material key for a body: the user's pick for it in this file, else the guess. A finish without its own pick follows its body. */
+export const materialOf = (m, g = null) => pickedMaterial(m, g) ?? (g ? materialOf(m) : guessMaterial(m.userData.name, m.userData.path, m.userData.material));
+export function pickMaterial(m, key, g = null) {
+  const f = (picks[m.userData.file] ??= {});
+  if (key) f[keyFor(m, g)] = key; else delete f[keyFor(m, g)];   // back to the guess
+  if (!g) for (const x of m.userData.groups ?? []) delete f[keyFor(m, x)];   // the whole body: its finishes follow
   try { localStorage.setItem(KEY, JSON.stringify(picks)); } catch {}
 }
 
 /** A three.js material for a body under the MATERIALS look. */
 export function materialFor(THREE, m, src = m.userData) {
   // a file with real materials (glTF: colour + roughness/metalness, per group on a multi-finish body) beats the name guess; a pick beats both
-  if (src.pbr && src.color && !picks[m.userData.file]?.[m.userData.name])
+  const g = src !== m.userData ? src : null;
+  if (src.pbr && src.color && !pickedMaterial(m, g) && !pickedMaterial(m))
     return new THREE.MeshPhysicalMaterial({ ...src.pbr, color: new THREE.Color().setRGB(...src.color, THREE.SRGBColorSpace) });
-  const d = MATERIALS[materialOf(m)];
+  const d = MATERIALS[materialOf(m, g)];
   const mat = new THREE.MeshPhysicalMaterial({ color: d.color, metalness: d.metal, roughness: d.rough });
-  if (d.trans) Object.assign(mat, { transmission: 1, ior: d.ior, thickness: 0 });   // thin-walled in the live view: a thickness bent what is behind it per triangle (shattered look); the Metal render refracts for real
+  if (d.trans) Object.assign(mat, { transmission: 0.9, ior: d.ior, thickness: 0, transparent: true, opacity: 0.75 });   // thin-walled in the live view: a thickness bent what is behind it per triangle (shattered look); the Metal render refracts for real. A little opacity: pure transmission vanished against the background
   // Plastic, anodizing, ceramic and epoxy are whatever colour the file says.
   if ((d.fileColor || d === MATERIALS.plastic || d === MATERIALS.gloss) && src.color) mat.color.setRGB(...src.color, THREE.SRGBColorSpace);
   return mat;
