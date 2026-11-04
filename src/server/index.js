@@ -174,6 +174,12 @@ function sessionFor(dir) {
 // the message names the project folder, and a window on another file ignores it).
 const working = new Map();   // project dir → builds in flight
 let lastActive = null;       // the project Claude last touched: a Cells page opened between two calls still finds it
+// After a restart, until Claude's next call says otherwise: the known project whose cells changed last.
+try {
+  const at = (d) => fs.statSync(path.join(d, 'cadgang', 'cells.json')).mtimeMs;
+  const [dir] = Object.values(knownSessions).filter((d) => d !== project.dir && fs.existsSync(path.join(d, 'cadgang', 'cells.json'))).sort((a, b) => at(b) - at(a));
+  if (dir) lastActive = { type: 'cells_project_active', session: sessionFor(dir).key, name: path.basename(dir) };
+} catch {}
 function busy(dir, d) {
   const n = (working.get(dir) || 0) + d; working.set(dir, n);
   if (n === (d > 0 ? 1 : 0)) broadcast({ type: 'busy', dir, what: n ? `Claude (${path.basename(dir)}) is building…` : null });

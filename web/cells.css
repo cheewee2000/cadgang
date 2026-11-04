@@ -349,3 +349,8 @@ footer {
 .opt .opt-meas { font-size: var(--fs-12); color: var(--ink-faint); min-height: 1.4em; }
 .opt .opt-err { font-size: var(--fs-12); color: var(--signal-red); }
 .opt button { margin-top: var(--sp-1); width: 100%; font-size: var(--fs-12); padding: 4px; }
+
+/* ?panel=1: docked at the right of the viewer. The transcript only; the viewer shows the model. */
+html.panel header .logo, html.panel header .proj-sep, html.panel header .linkbtn, html.panel header .toolbar .sep,
+html.panel #themeToggle, html.panel header .version, html.panel #dragbar, html.panel #viewport, html.panel footer, html.panel .stack-hint { display: none; }
+html.panel #panel { flex: 1 1 auto; max-width: none; border-right: 0; }

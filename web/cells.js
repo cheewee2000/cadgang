@@ -22,6 +22,7 @@ import { createMarkup } from './markup.js';
 const $ = (sel) => document.querySelector(sel);
 const API = '/api/cells';
 let followedSession = new URLSearchParams(location.search).get('session');
+if (new URLSearchParams(location.search).has('panel')) document.documentElement.classList.add('panel');   // docked in the viewer: the transcript only, the model is next door
 const cellURL = (path) => { const u = new URL(API + path, location.href); if (followedSession) u.searchParams.set('session', followedSession); return u.pathname + u.search; };
 const sessionMatches = (key) => (key || null) === (followedSession || null);
 

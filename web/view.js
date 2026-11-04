@@ -3705,3 +3705,24 @@ function cursorTip(text, e) {
   tip.textContent = text; tip.hidden = false; tip.dataset.cursor = '1';
   tip.style.left = `${Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 8)}px`; tip.style.top = `${e.clientY + 18}px`;
 }
+
+// --- Cells pane: the transcript Claude writes (web/cells.js) beside the model, as an iframe in panel mode.
+// Open or shut and its width are preferences, like the theme. View › Cells (⌘⇧2) toggles it from the shell.
+const cellsPane = $('#cellsPane'), cellsFrame = $('#cellsFrame');
+let cellsPref = {}; try { cellsPref = JSON.parse(localStorage.getItem('cadgang-cells')) || {}; } catch {}
+const saveCells = () => { try { localStorage.setItem('cadgang-cells', JSON.stringify(cellsPref)); } catch {} };
+function setCells(on) {
+  cellsPref.on = on; saveCells();
+  $('#cellsBtn').classList.toggle('on', on); cellsPane.hidden = !on;
+  if (on && !cellsFrame.src) cellsFrame.src = 'cells?panel=1';   // loads once, on first open
+}
+window.cadgangCells = () => setCells(!cellsPref.on);
+$('#cellsBtn').addEventListener('click', window.cadgangCells);
+$('#cellsGrip').addEventListener('pointerdown', (e) => {
+  e.preventDefault(); const g = e.currentTarget; g.setPointerCapture(e.pointerId); document.body.classList.add('cells-drag');
+  const move = (ev) => { cellsPref.w = Math.round(Math.max(280, Math.min(innerWidth * 0.7, innerWidth - ev.clientX))); cellsPane.style.flexBasis = `${cellsPref.w}px`; };
+  const up = () => { g.removeEventListener('pointermove', move); document.body.classList.remove('cells-drag'); saveCells(); };
+  g.addEventListener('pointermove', move); g.addEventListener('pointerup', up, { once: true });
+});
+if (cellsPref.w) cellsPane.style.flexBasis = `${cellsPref.w}px`;
+if (cellsPref.on && !follow) setCells(true);

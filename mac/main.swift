@@ -111,7 +111,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         return makeWindow(cfg)
     }
 
-    @objc func showCells(_ s: Any?) { keyWeb.load(URLRequest(url: BASE.appendingPathComponent("cells"))) }
+    @objc func showCells(_ s: Any?) { keyWeb.evaluateJavaScript("window.cadgangCells ? cadgangCells() : location.assign('/cells')") }
     @objc func showViewer(_ s: Any?) { keyWeb.load(URLRequest(url: BASE.appendingPathComponent("view"))) }
     @objc func newWindow(_ s: Any?) { makeWindow(web.configuration).load(URLRequest(url: BASE.appendingPathComponent("view"))) }
 
