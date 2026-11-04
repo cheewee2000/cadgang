@@ -129,7 +129,8 @@ function styleMesh(m) {
     // the file's own colour (a STEP part's material) on the solid looks; COLOR still overrides it
     else if (src.color && SOLID_LOOKS.has(ui.look)) mat.color.setRGB(...src.color, THREE.SRGBColorSpace);
     if (!ui.color && src.pbr && SOLID_LOOKS.has(ui.look)) Object.assign(mat, src.pbr);
-    if (!ui.color && m.userData.tint && mat.color && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.color.setRGB(...m.userData.tint, THREE.SRGBColorSpace);
+    const tint = src.tint || m.userData.tint;
+    if (!ui.color && tint && mat.color && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.color.setRGB(...tint, THREE.SRGBColorSpace);
     if (m.userData.finish && FINISHES[m.userData.finish] && 'roughness' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.roughness = FINISHES[m.userData.finish].rough;
     if (m.userData.opacity < 1 && SOLID_LOOKS.has(ui.look)) Object.assign(mat, { transparent: true, opacity: m.userData.opacity, depthWrite: false });
     if (m.userData.ghost) Object.assign(mat, { transparent: true, opacity: Math.min(mat.opacity, 0.15), depthWrite: false, transmission: 0 });
@@ -271,6 +272,7 @@ function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', pa
   m.userData.map = map;             // the file's image texture, drawn on every solid look
   m.userData.glow = glow;           // and how much it lights itself (RENDER)
   m.userData.tint = tints[file]?.[m.userData.name] ?? null;   // the user's colour for it, kept from last time
+  for (const [i, g] of (groups ?? []).entries()) g.tint = tints[file]?.[`${m.userData.name}#${i}`] ?? null;   // and for each of its finishes
   m.userData.finish = finishes[file]?.[m.userData.name] ?? null;   // and the finish
   m.userData.faces = faces;   // B-rep face ranges, when the importer knew them: picked by measure
   model.add(m);
@@ -483,8 +485,10 @@ function listBodies() {
         fold.addEventListener('click', (e) => { e.preventDefault(); subs.hidden = !subs.hidden; fold.textContent = subs.hidden ? '+' : '−'; });
         row.append(fold);
         for (const g of finishes) {
-          const f = finishFacts(m, g), r2 = document.createElement('div'); r2.className = 'finish-row';
-          r2.append(Object.assign(document.createElement('span'), { className: 'fname', textContent: g.name || 'finish', title: g.name }), finishBits(f));
+          const r2 = document.createElement('div'); r2.className = 'finish-row'; r2._body = m; r2._group = g;
+          const fn = Object.assign(document.createElement('span'), { className: 'fname', textContent: g.name || 'finish', title: `${g.name || 'finish'}\nClick: select its body · Shift-click: add it to the selection` });
+          fn.addEventListener('click', (e) => { e.preventDefault(); selectBodies([m], e.shiftKey || e.metaKey || e.ctrlKey ? 'toggle' : 'set'); });
+          r2.append(fn, Object.assign(document.createElement('span'), { className: 'bits' }));
           subs.append(r2);
         }
       } else if (gap) row.append(Object.assign(document.createElement('span'), { className: 'fold-gap' }));   // aligns with the +/−
@@ -852,9 +856,10 @@ function finishFacts(m, src = m.userData) {
   const name = src.name ?? m.userData.material ?? '';
   const fileName = src === m.userData ? m.userData.material || '' : name;
   const rough = src.pbr?.roughness ?? def?.rough, metal = (src.pbr?.metalness ?? def?.metal ?? 0) > 0.5;
-  const rgb = (src === m.userData && m.userData.tint) || src.color || m.userData.color || (def ? hexRGB(def.color) : [0.73, 0.72, 0.7]);
+  const tint = src.tint || m.userData.tint;
+  const rgb = tint || src.color || m.userData.color || (def ? hexRGB(def.color) : [0.73, 0.72, 0.7]);
   const named = /\(([^()]+)\)\s*$/.exec(fileName)?.[1];   // Fusion: "Plastic - Matte (White)"
-  return { name: fileName, finish: finishWord(fileName, rough, metal), color: rgb, colorText: (!m.userData.tint && named && !/\d/.test(named)) ? named : colorName(rgb) || 'Colour' };
+  return { name: fileName, finish: finishWord(fileName, rough, metal), color: rgb, colorText: (!tint && named && !/\d/.test(named)) ? named : colorName(rgb) || 'Colour' };
 }
 const hexOfRGB = (rgb) => `#${new THREE.Color().setRGB(...rgb, THREE.SRGBColorSpace).getHexString(THREE.SRGBColorSpace)}`;
 /**
@@ -906,9 +911,16 @@ function choose(sel, value, label) {
   if (![...sel.options].some((o) => o.value === value)) { if (sel._full) sel.append(new Option(label, value)); else sel.replaceChildren(new Option(label, value)); }
   sel.value = value;
 }
-function finishBits(f, m = null) {
+function finishBits(f, m = null, g = null) {
   const frag = document.createDocumentFragment();
-  if (m) {
+  if (m && g) {
+    frag.append(Object.assign(document.createElement('span'), { className: 'fin', textContent: f.finish || '' }));
+    const sw = Object.assign(document.createElement('button'), { type: 'button', className: 'swatch-pick', title: `${hexOfRGB(f.color)}: click to change this finish's colour` });
+    sw.style.background = hexOfRGB(f.color);
+    sw.addEventListener('pointerdown', (e) => e.stopPropagation());
+    sw.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openColorMenu(sw, hexOfRGB(f.color), (rgb) => { setTint([m], rgb, g); rerender(); paintFinishes(); paintSelection(); }, () => commit()); });
+    frag.append(sw);
+  } else if (m) {
     const fin = Object.assign(document.createElement('select'), { className: 'fin-word', title: 'Its finish: click to change it' });
     lazyOptions(fin, () => [new Option(f.finish || 'Finish', ''), ...Object.entries(FINISHES).map(([k, d]) => new Option(d.label, k))]);
     choose(fin, m.userData.finish ?? '', m.userData.finish ? FINISHES[m.userData.finish].label : f.finish || 'Finish');
@@ -953,6 +965,10 @@ function paintFinishes() {
     if (bits.contains(document.activeElement)) continue;   // a list or picker open in it: leave it be
     bits.replaceChildren(finishBits(f, m));
   }
+  for (const r of document.querySelectorAll('#bodies .finish-row')) {
+    const bits = r.querySelector('.bits');
+    if (!bits.contains(document.activeElement)) bits.replaceChildren(finishBits(finishFacts(r._body, r._group), r._body, r._group));
+  }
   fitNames();   // a new word can widen its column
 }
 /** The body under the pointer: visible, on the kept side of a section, solid ones before see-through ones. */
@@ -965,11 +981,12 @@ function bodyAt(e) {
 }
 const rgbOf = (hex) => { const o = {}; new THREE.Color().setStyle(hex, THREE.SRGBColorSpace).getRGB(o, THREE.SRGBColorSpace); return [o.r, o.g, o.b].map((v) => +v.toFixed(3)); };
 /** The user's colour for these bodies (null: back to the file's). */
-function setTint(ms, rgb) {
+function setTint(ms, rgb, g = null) {
   for (const m of ms) {
-    m.userData.tint = rgb;
-    const f = (tints[m.userData.file] ??= {});
-    if (rgb) f[m.userData.name] = rgb; else delete f[m.userData.name];
+    const f = (tints[m.userData.file] ??= {}), groups = m.userData.groups ?? [];
+    const put = (k, v) => { if (v) f[k] = v; else delete f[k]; };
+    if (g) { g.tint = rgb; put(`${m.userData.name}#${groups.indexOf(g)}`, rgb); }
+    else { m.userData.tint = rgb; put(m.userData.name, rgb); groups.forEach((x, i) => { x.tint = null; put(`${m.userData.name}#${i}`, null); }); }   // the whole body: its finishes follow
     styleMesh(m);
   }
   saveTints();
@@ -1055,7 +1072,8 @@ const moves = (m, v) => v.length() > 0.01 * (m.geometry.boundingBox?.getSize(new
 // Stages (the solver's order of removal): a part waits for what stands in its way, so the slider's first stretch moves the
 // outer parts and the next the ones under them. Part of stage s of S has its own slice of the slider.
 // A stage saved with the file's explode edits (parts[key].stage, e.g. an assembly order written by a CAD script) beats the
-// solver's, and that part moves along its own axis alone, not riding a parent.
+// solver's, and that part moves along its own axis alone, not riding a parent, unless the plan says what it rides
+// (parts[key].rides = the carrier's key): then it travels with that carrier first and leaves it at its own stage.
 const stageOf = (m) => m.userData.fixStage ?? m.userData.stage ?? 0;
 const stageCount = () => 1 + Math.max(0, ...model.children.map(stageOf));
 const stageFrac = (m, k) => { const S = stageCount(); return S < 2 ? k : THREE.MathUtils.clamp(k * S - stageOf(m), 0, 1); };
@@ -1109,7 +1127,7 @@ const partKey = (m) => { const all = model.children; return `${m.userData.name}#
 let partsReady = false, partsSaved = '{}', partsTimer = null;
 function partsState() {
   const out = {};
-  for (const m of model.children) if (m.userData.axis || m.userData.pull != null || m.userData.exTo || m.userData.place || m.userData.fixStage != null) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null, ...(m.userData.exTo && { exTo: m.userData.exTo.toArray().map((v) => +v.toFixed(4)) }), ...(m.userData.place && { place: placeArr(m) }), ...(m.userData.fixStage != null && { stage: m.userData.fixStage }) };
+  for (const m of model.children) if (m.userData.axis || m.userData.pull != null || m.userData.exTo || m.userData.place || m.userData.fixStage != null || m.userData.rides) out[partKey(m)] = { axis: m.userData.axis ?? null, pull: m.userData.pull ?? null, ...(m.userData.exTo && { exTo: m.userData.exTo.toArray().map((v) => +v.toFixed(4)) }), ...(m.userData.place && { place: placeArr(m) }), ...(m.userData.fixStage != null && { stage: m.userData.fixStage }), ...(m.userData.rides && { rides: m.userData.rides }) };
   if (rot.w < 1 - 1e-9) out['@rot'] = rotArr();   // the axes and marks above are in this turned frame
   const names = namesOf();
   if (Object.keys(names).length) out['@names'] = names;
@@ -1135,7 +1153,7 @@ function loadParts() {
     const r = d.parts?.['@rot'];
     if (r) { bakeRot(new THREE.Quaternion().fromArray(r)); history.list = []; history.i = -1; queueMicrotask(commit); }   // undo never goes back past the saved turn
     if (d.parts?.['@names']) { applyNames(d.parts['@names']); history.list = []; history.i = -1; queueMicrotask(commit); }
-    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; m.userData.exTo = p.exTo ? new THREE.Vector3(...p.exTo) : undefined; m.userData.place = placeOf(p.place); m.userData.fixStage = p.stage ?? undefined; } }
+    for (const m of model.children) { const p = d.parts?.[partKey(m)]; if (p) { m.userData.axis = p.axis || undefined; m.userData.pull = p.pull ?? undefined; m.userData.exTo = p.exTo ? new THREE.Vector3(...p.exTo) : undefined; m.userData.place = placeOf(p.place); m.userData.fixStage = p.stage ?? undefined; m.userData.rides = p.rides || undefined; } }
     partsSaved = JSON.stringify(partsState()); partsReady = true;
     applyExplode();
   }).catch(() => { partsReady = true; });
@@ -1171,6 +1189,7 @@ function applyExplode() {
     const v = explodeVec(m), len = v.length();
     at.copy(v).multiplyScalar(len ? (maxTravel(m) * stageFrac(m, k)) / len : 0);
     if (m.userData.parent && m.userData.fixStage == null) at.add(place(m.userData.parent));
+    else if (m.userData.rides) { const r = bodyOfKey(m.userData.rides); if (r && r !== m) at.add(place(r)); }   // a saved plan's subassembly: it goes where its carrier goes, then its own stage moves it off
     if (m.userData.exTo) at.addScaledVector(m.userData.exTo, stageFrac(m, k));   // where it was dragged while exploded: it explodes to there
     return at;
   };
@@ -1618,9 +1637,9 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   renderer.domElement.setPointerCapture(e.pointerId);
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
+  if (pickPlane) { hoverBody(null); measure.showFace(e); return; }   // picking a face: that face lights up, not its body
   if (pickJoint) {
     const { h, a } = jointFaceAt(e) ?? {};
-  if (pickPlane) { hoverBody(null); measure.showFace(e); return; }   // picking a face: that face lights up, not its body
     axisArrow.visible = !!a;
     if (a) {   // the axis it would take, drawn where the face's own frame puts it
       const len = 0.35 * (h.body.geometry.boundingBox?.getSize(new THREE.Vector3()).length() || 10);
@@ -3090,9 +3109,9 @@ function stepViewTween() {
 }
 // Reference planes (Front / Top / Right on and off, and your own), next to Section (planes.js).
 let pickPlane = null;   // set while a new plane waits for its face
+function endPickPlane() { pickPlane = null; renderer.domElement.classList.remove('picking'); measure.showFace(null); }
 const planes = createPlanes({
   THREE, scene, getSubject: () => subject,
-function endPickPlane() { pickPlane = null; renderer.domElement.classList.remove('picking'); measure.showFace(null); }
   // the bodies where they are now (dragged, exploded): their own boxes, not their overlays
   getBox: () => { if (!bbox) return null; const b = new THREE.Box3(); for (const m of model.children) { m.updateMatrixWorld(); if (m.geometry.boundingBox) b.union(m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld)); } return b.isEmpty() ? bbox : b; },
   pickFace: (done) => {
