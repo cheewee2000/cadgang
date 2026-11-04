@@ -1549,7 +1549,7 @@ for (const t of ['gesturestart', 'gesturechange', 'gestureend'])   // WebKit's o
   renderer.domElement.addEventListener(t, (e) => { if (touches.size) { e.preventDefault(); e.stopImmediatePropagation(); } }, { capture: true });
 renderer.domElement.addEventListener('pointerdown', (e) => {
   if (pickPlane) {   // a new plane on the face clicked; anything else backs out
-    const done = pickPlane; pickPlane = null; renderer.domElement.classList.remove('picking');
+    const done = pickPlane; endPickPlane();
     const h = e.button === 0 && faceAt(e);
     if (h) { done(h.point, h.normal); say('plane added'); } else say('no face there: no plane');
     return;
@@ -1617,6 +1617,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 renderer.domElement.addEventListener('pointermove', (e) => {
   if (pickJoint) {
     const { h, a } = jointFaceAt(e) ?? {};
+  if (pickPlane) { hoverBody(null); measure.showFace(e); return; }   // picking a face: that face lights up, not its body
     axisArrow.visible = !!a;
     if (a) {   // the axis it would take, drawn where the face's own frame puts it
       const len = 0.35 * (h.body.geometry.boundingBox?.getSize(new THREE.Vector3()).length() || 10);
@@ -3088,9 +3089,13 @@ function stepViewTween() {
 let pickPlane = null;   // set while a new plane waits for its face
 const planes = createPlanes({
   THREE, scene, getSubject: () => subject,
+function endPickPlane() { pickPlane = null; renderer.domElement.classList.remove('picking'); measure.showFace(null); }
   // the bodies where they are now (dragged, exploded): their own boxes, not their overlays
   getBox: () => { if (!bbox) return null; const b = new THREE.Box3(); for (const m of model.children) { m.updateMatrixWorld(); if (m.geometry.boundingBox) b.union(m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld)); } return b.isEmpty() ? bbox : b; },
-  pickFace: (done) => { pickPlane = done; renderer.domElement.classList.add('picking'); say('click a face for the new plane · Esc cancels'); },
+  pickFace: (done) => {
+    setMeasure(false); const t = $('[data-tool].on')?.dataset.tool; if (t) markup.setTool(t);   // the click is the plane's: no tool in the way
+    pickPlane = done; renderer.domElement.classList.add('picking'); say('click a face for the new plane · Esc cancels');
+  },
   onChange: () => { paintPlaneRows(); commit(); },   // the feature tree's Planes follow; every change (a move, a rename, a delete) is a ⌘Z step
 });
 const planesRow = Object.assign(document.createElement('div'), { className: 'hud-row' });   // Planes and Add an image, one line under Section
@@ -3465,7 +3470,7 @@ const CMDS = [
   { key: 'ArrowLeft', hold: true, label: 'Nudge explode in (hold to scrub)', run: () => scrubExplode(-1) },
   { key: 'h', label: 'Hide selected', run: hideSelected },
   { key: 'h', shift: true, label: 'Show all bodies', run: showAllBodies },
-  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (pickPlane) { pickPlane = null; renderer.domElement.classList.remove('picking'); say(''); return; } if (pickAxis) { endPickAxis(); return; } if (pickJoint) { endPickJoint(); return; } if (measure.on) { measure.cancel(); setMeasure(false); return; } const t = $('[data-tool].on')?.dataset.tool; if (t) { markup.setTool(t); return; } if (selected.size || planes.selected) { selectBodies([], 'set'); planes.select(null); return; } setSectionAxis(''); setMeasure(false); } },
+  { key: 'Escape', label: 'Section off', btn: '[data-sect=""]', run: () => { if (pickPlane) { endPickPlane(); say(''); return; } if (pickAxis) { endPickAxis(); return; } if (pickJoint) { endPickJoint(); return; } if (measure.on) { measure.cancel(); setMeasure(false); return; } const t = $('[data-tool].on')?.dataset.tool; if (t) { markup.setTool(t); return; } if (selected.size || planes.selected) { selectBodies([], 'set'); planes.select(null); return; } setSectionAxis(''); setMeasure(false); } },
   { sep: true },
   ...['front', 'back', 'top', 'bottom', 'right', 'left', 'iso'].map((n, i) => ({ key: String(i + 1), label: `View ${n}`, run: () => setView(String(i + 1)) })),
   { sep: true },

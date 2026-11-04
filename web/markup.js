@@ -66,13 +66,13 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   const toRest = (item, p) => new THREE.Vector3(...p).applyMatrix4(poseOf(item).clone().invert()).toArray();
   const follow = (holder, item) => { const b = bodyOf(item); if (b) { holder.position.copy(b.position); holder.quaternion.copy(b.quaternion); } else { holder.position.set(0, 0, 0); holder.quaternion.identity(); } };
   // A visible reference plane is a surface too (planeAt: the nearest along the ray): a mark on it is in
-  // world space (no part to ride), and the model wins where it is in front.
+  // world space (no part to ride). A plane that is on is there to draw on, so it wins over the model behind or in front of it.
   let hitPlane = null;
   function surfaceAt(e) {
     raycaster.setFromCamera(ndc(e), getCamera());
     const hit = raycaster.intersectObjects(getTargets(), false)[0] ?? null;
     const ph = planeAt?.(raycaster) ?? null;
-    return ph && (!hit || ph.distance < hit.distance) ? { plane: ph } : { hit };
+    return ph ? { plane: ph } : { hit };
   }
   function pointAt(e) {
     const cam = getCamera();
