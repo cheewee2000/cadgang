@@ -24,7 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { GraphError } from './errors.js';
 import { compileCell, normalizeParams } from './sandbox.js';
-import { cellApi, checkCellResult, clearMeasureMemo, childKeys, adoptChildren } from './cellapi.js';
+import { cellApi, checkCellResult, clearMeasureMemo, clearShapeMemo, childKeys, adoptChildren } from './cellapi.js';
 import { trackBrepShape, nameParts, partsOf, setParts, brepHeapBytes, BREP_ROOM_BYTES, beginBrepScope, settleBrep, progress, brepToBuffer, brepFromBuffer } from './brep.js';
 
 const CELL_ID = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
@@ -725,7 +725,7 @@ function makeRoom(id) {
 /** Drop every cached shape (tests, and anything that changes what a cell means). */
 export function clearCellCache() {
   for (const key of [...resultCache.keys()]) forget(key);
-  clearMeasureMemo();
+  clearMeasureMemo(); clearShapeMemo();
 }
 
 /**

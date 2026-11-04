@@ -69,3 +69,22 @@ test('a clash check against an assembly is a check against each part, so an edit
   assert.equal(check().checks[0].label, 'shared 320');
   assert.equal(count('interference'), 3, 'the pairs the other way round are the same pairs');
 });
+
+test('a check cell\'s clips and poses are kept: the second evaluate makes no boolean', async () => {
+  await initBrep(); clearCellCache();
+  const doc = new CellDocument();
+  doc.addCell({ id: 'a', prompt: 'a', code: 'export default ({ brep }) => brep.box(10, 10, 10)' });
+  doc.addCell({ id: 'check', kind: 'assert', refs: ['a'], prompt: 'c', code: `export default ({ brep, inputs, assert }) => {
+    const piece = brep.intersect(inputs.a, brep.translate(brep.box(4, 4, 20), [3, 0, 0]));
+    assert.ok(brep.volume(piece) > 1, 'piece ' + brep.volume(piece).toFixed(0));
+    return inputs.a;
+  }` });
+  resetBrepOperationStats();
+  let run = evaluateCells(doc, 'check');
+  assert.equal(run.report.find((e) => e.id === 'check').status, 'ok');
+  assert.equal(brepOperationStats().intersect?.count, 1);
+  run = evaluateCells(doc, 'check');
+  assert.equal(run.report.find((e) => e.id === 'check').status, 'ok');
+  assert.equal(run.report.find((e) => e.id === 'check').checks[0].label, 'piece 160');
+  assert.equal(brepOperationStats().intersect?.count, 1, 'the clip came from the memo');
+});

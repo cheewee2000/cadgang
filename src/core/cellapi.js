@@ -16,7 +16,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as ops from './ops.js';
-import { looseBounds, compoundParts } from './brep.js';
+import { looseBounds, compoundParts, trackBrepShape } from './brep.js';
 import { q as queryRoot, topology, Query } from './query.js';
 import { Sketch } from './sketch.js';
 import * as checks from './checks.js';
@@ -41,7 +41,29 @@ const argKey = (v) => {
   keyable = false; return null;
 };
 const keyOf = (op, args) => { keyable = true; const s = JSON.stringify(args.map(argKey)); return keyable ? crypto.createHash('sha1').update(op).update(s).digest('base64url').slice(0, 20) : null; };
-const keyed = (op, fn) => (...args) => { const r = fn(...args); if (isShape(r)) { const k = keyOf(op, args); if (k) r.__key = k; } return r; };
+// A keyed op's result is kept too (an untracked clone the memo owns; a hit hands out a tracked clone), so a
+// check cell's clips and poses, which re-run on every evaluate, are lookups once made. Moves and
+// primitives are cheaper to redo than to keep, and a compound carries its parts, which a clone would not.
+const SHAPE_MEMO_MAX = 96, SHAPE_MEMO_SKIP = new Set(['box', 'cylinder', 'sphere', 'cone', 'torus', 'translate', 'rotate', 'scale', 'mirror', 'compound', 'plane', 'planeThrough', 'pivotPlane', 'midplane', 'axisOf']);
+const shapeMemo = new Map();
+export function clearShapeMemo() { for (const v of shapeMemo.values()) { try { v.delete(); } catch { /* gone */ } } shapeMemo.clear(); }
+const keyed = (op, fn) => (...args) => {
+  const k = keyOf(op, args);
+  if (k && !SHAPE_MEMO_SKIP.has(op) && shapeMemo.has(k)) {
+    const kept = shapeMemo.get(k);
+    if (alive(kept)) { shapeMemo.delete(k); shapeMemo.set(k, kept); const r = trackBrepShape(kept.clone()); r.__key = k; return r; }
+    shapeMemo.delete(k);
+  }
+  const r = fn(...args);
+  if (isShape(r) && k) {
+    r.__key = k;
+    if (!SHAPE_MEMO_SKIP.has(op)) {
+      if (shapeMemo.size >= SHAPE_MEMO_MAX) { const [old, v] = shapeMemo.entries().next().value; shapeMemo.delete(old); try { v.delete(); } catch { /* gone */ } }
+      shapeMemo.set(k, r.clone());
+    }
+  }
+  return r;
+};
 
 /**
  * Measures (a clash volume, a bounding box) of a keyed shape are remembered, so a check of two parts
@@ -82,7 +104,7 @@ const measured = (op, fn) => (...args) => {
 // clash check against it is a check against each part. A moved compound's parts are the moved parts,
 // made only when something asks (a thunk).
 const children = new WeakMap();
-const alive = (s) => { try { return !s.wrapped.isDeleted(); } catch { return false; } };
+function alive(s) { try { return !s.wrapped.isDeleted(); } catch { return false; } }
 const parts = (s) => {
   let kids = children.get(s);
   if (typeof kids === 'function') { kids = kids() ?? null; children.set(s, kids); }
