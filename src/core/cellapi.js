@@ -13,6 +13,8 @@
  */
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import * as ops from './ops.js';
 import { q as queryRoot, topology, Query } from './query.js';
 import { Sketch } from './sketch.js';
@@ -48,6 +50,20 @@ const keyed = (op, fn) => (...args) => { const r = fn(...args); if (isShape(r)) 
 const MEMO_MAX = 20000;
 const memo = new Map();   // op + argument keys → the number or plain object it measured
 export function clearMeasureMemo() { memo.clear(); }
+// A kernel keeps the memo in a file too (kernel.js names it), so a fresh kernel's clash checks over
+// unchanged parts are lookups as well: with the parts on disk (cells.js) that is the whole cold start.
+let memoFile = null, memoTimer = null;
+export function persistMeasureMemo(file) {
+  memoFile = file;
+  try { for (const [k, v] of JSON.parse(fs.readFileSync(file, 'utf8'))) memo.set(k, v); } catch { /* nothing kept yet */ }
+  process.once('exit', saveMeasureMemo);   // a kernel leaving at its heap limit takes its measures with it
+}
+export function saveMeasureMemo() {
+  clearTimeout(memoTimer); memoTimer = null;
+  if (!memoFile) return;
+  try { fs.mkdirSync(path.dirname(memoFile), { recursive: true }); fs.writeFileSync(memoFile, JSON.stringify([...memo])); } catch (e) { console.error(`memo: not saved: ${e.message}`); }
+}
+const memoSave = () => { if (memoFile && !memoTimer) memoTimer = setTimeout(saveMeasureMemo, 2000).unref(); };
 const measured = (op, fn) => (...args) => {
   const k = keyOf(op, args);
   if (k == null) { if (process.env.CADGANG_MEMO_DEBUG) console.error(`memo: ${op} unkeyed (${args.map((a) => isShape(a) ? a.__key ?? 'shape?' : typeof a).join(', ')})`); return fn(...args); }
@@ -56,6 +72,7 @@ const measured = (op, fn) => (...args) => {
   const v = fn(...args);
   if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value);
   memo.set(k, v);
+  memoSave();
   return structuredClone(v);
 };
 

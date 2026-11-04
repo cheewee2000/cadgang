@@ -16,6 +16,7 @@ import path from 'node:path';
 import url from 'node:url';
 import express from 'express';
 import { CellDocument } from '../core/cells.js';
+import { persistMeasureMemo } from '../core/cellapi.js';
 import { cellsRouter, packBinaryMesh } from './cells.js';
 import { historyRouter } from './history.js';
 import { optionsRouter } from './options.js';
@@ -28,6 +29,7 @@ const send = (m) => { try { process.send?.(m); } catch { /* the main server is g
 const broadcast = (msg) => send({ type: 'broadcast', msg });
 
 const doc = new CellDocument(CELLS_PATH), proj = { dir: null };
+if (process.env.CADGANG_DISK_CACHE !== '0') persistMeasureMemo(path.join(os.homedir(), 'Library', 'Caches', 'cadgang', 'measures.json'));   // with the parts on disk (cells.js), a fresh kernel's checks are lookups too
 let session = null;
 const api = cellsRouter(doc, ROOT, { project: proj }), routes = express.Router();
 // The document rides along: the page draws the stack from it at once, since a build may be holding
