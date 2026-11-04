@@ -1405,7 +1405,29 @@ export function brepBBox(shape) {
  * every side — a number that fails a fitsIn() the part passes. AddOptimal
  * bounds the surfaces themselves.
  */
-export function tightBounds(shape) {
+// Bounds by shape key: a request meshes a part for its box, then meshes it for its mesh, then measures
+// it — and the history's look and Claude's render ask the same again. Keys are content hashes.
+const boundsCache = new Map();
+const keyedBounds = (shape, kind, make) => {
+  const k = shape?.__key ? `${kind}|${shape.__key}` : null;
+  if (k && boundsCache.has(k)) { const v = boundsCache.get(k); return { min: [...v.min], max: [...v.max] }; }
+  const v = make();
+  if (k) { if (boundsCache.size >= 512) boundsCache.delete(boundsCache.keys().next().value); boundsCache.set(k, { min: [...v.min], max: [...v.max] }); }
+  return v;
+};
+/** The analytic box, never short, at most a few tenths long on curved faces: enough to tell two parts apart. */
+export function looseBounds(shape) {
+  return keyedBounds(shape, 'loose', () => {
+    const box = new OC.Bnd_Box_1();
+    OC.BRepBndLib.AddOptimal(shape.wrapped, box, false, false);
+    const lo = box.CornerMin(), hi = box.CornerMax();
+    const out = { min: [lo.X(), lo.Y(), lo.Z()], max: [hi.X(), hi.Y(), hi.Z()] };
+    lo.delete(); hi.delete(); box.delete();
+    return out;
+  });
+}
+export function tightBounds(shape) { return keyedBounds(shape, 'tight', () => tightBoundsOf(shape)); }
+function tightBoundsOf(shape) {
   // Offset and spline surfaces still come back a few tenths too big from the
   // analytic box; their triangulation is the honest extent, to its deflection.
   const faces = Array.isArray(shape.faces) ? shape.faces : [];

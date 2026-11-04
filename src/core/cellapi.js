@@ -16,6 +16,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as ops from './ops.js';
+import { looseBounds } from './brep.js';
 import { q as queryRoot, topology, Query } from './query.js';
 import { Sketch } from './sketch.js';
 import * as checks from './checks.js';
@@ -109,9 +110,10 @@ const bbox = (shape) => {
 // Boxes a part apart (padded past the coarse mesh's shortfall on a curved extreme) skip the boolean.
 const BOX_PAD = 1;
 const interferenceOfOne = measured('interference', ops.interference);
+const loose = measured('loosebox', looseBounds);   // the analytic box: a tight one meshes an imported caster for 1.5 s
 const apart = (a, b) => {
   if (!isShape(a) || !isShape(b) || !a.__key || !b.__key) return false;
-  const p = bbox(a), q = bbox(b);
+  const p = loose(a), q = loose(b);
   return [0, 1, 2].some((k) => p.min[k] > q.max[k] + BOX_PAD || q.min[k] > p.max[k] + BOX_PAD);
 };
 const interference = (a, b) => {

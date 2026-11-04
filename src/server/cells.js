@@ -718,11 +718,16 @@ function sendBinaryMesh(res, meta, t, edges) {
   res.type('application/octet-stream').send(packBinaryMesh(meta, t, edges));
 }
 
+const measuresCache = new Map();   // shape key → its measures: the pane, the history and Claude's render all ask
 function measuresOf(shape) {
+  const k = shape?.__key;
+  if (k && measuresCache.has(k)) return structuredClone(measuresCache.get(k));
   const { min, max, size } = ops.bbox(shape);
   const r4 = (v) => Math.round(v * 1e4) / 1e4;
-  return {
+  const m = {
     volume: r4(ops.volume(shape)), area: r4(ops.area(shape)),
     bbox: { min: min.map(r4), max: max.map(r4), size: size.map(r4) }, bodies: ops.bodies(shape),
   };
+  if (k) { if (measuresCache.size >= 64) measuresCache.delete(measuresCache.keys().next().value); measuresCache.set(k, structuredClone(m)); }
+  return m;
 }
