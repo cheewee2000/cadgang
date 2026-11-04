@@ -51,7 +51,7 @@ export function clearMeasureMemo() { memo.clear(); }
 const measured = (op, fn) => (...args) => {
   const k = keyOf(op, args);
   if (k == null) { if (process.env.CADGANG_MEMO_DEBUG) console.error(`memo: ${op} unkeyed (${args.map((a) => isShape(a) ? a.__key ?? 'shape?' : typeof a).join(', ')})`); return fn(...args); }
-  if (process.env.CADGANG_MEMO_DEBUG && !memo.has(k)) console.error(`memo: ${op} miss ${k}`);
+  if (process.env.CADGANG_MEMO_DEBUG && !memo.has(k)) console.error(`memo: ${op} miss ${k} (${args.map((a) => isShape(a) ? a.__key : JSON.stringify(a)).join(', ')})`);
   if (memo.has(k)) { const v = memo.get(k); memo.delete(k); memo.set(k, v); return structuredClone(v); }   // re-insert: Map order is the LRU order
   const v = fn(...args);
   if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value);
@@ -60,17 +60,49 @@ const measured = (op, fn) => (...args) => {
 };
 
 // A compound remembers what went into it, so its box is the union of its parts' boxes (each a memo hit
-// when that part is unchanged) instead of a coarse mesh of the whole assembly on every evaluate.
+// when that part is unchanged) instead of a coarse mesh of the whole assembly on every evaluate, and a
+// clash check against it is a check against each part. A moved compound's parts are the moved parts,
+// made only when something asks (a thunk).
 const children = new WeakMap();
 const alive = (s) => { try { return !s.wrapped.isDeleted(); } catch { return false; } };
+const parts = (s) => {
+  let kids = children.get(s);
+  if (typeof kids === 'function') { kids = kids() ?? null; children.set(s, kids); }
+  return kids && kids.every((k) => k?.__key && alive(k)) ? kids : null;
+};
 const compound = keyed('compound', (...shapes) => { const r = ops.compound(...shapes); children.set(r, shapes.flat().filter(Boolean)); return r; });
+const moved = (op) => keyed(op, (shape, ...rest) => {
+  const r = ops[op](shape, ...rest);
+  if (children.has(shape) && !(op === 'mirror' && rest[2]?.keep)) children.set(r, () => parts(shape)?.map((k) => brep[op](k, ...rest)));
+  return r;
+});
+/** A cached cell result is a clone (cells.js); its parts come back by their keys, looked up when asked. */
+export const childKeys = (shape) => parts(shape)?.map((k) => k.__key) ?? null;
+export const adoptChildren = (shape, thunk) => children.set(shape, thunk);
 const bboxOfOne = measured('bbox', ops.bbox);
 const bbox = (shape) => {
-  const kids = children.get(shape);
-  if (!kids || !kids.every((s) => s.__key && alive(s))) return bboxOfOne(shape);
+  const kids = parts(shape);
+  if (!kids) return bboxOfOne(shape);
   const boxes = kids.map(bbox);
   const min = [0, 1, 2].map((k) => Math.min(...boxes.map((b) => b.min[k]))), max = [0, 1, 2].map((k) => Math.max(...boxes.map((b) => b.max[k])));
   return { min, max, size: [0, 1, 2].map((k) => max[k] - min[k]) };
+};
+// Interference with a compound is the sum over its parts (the same number when the parts are clear of
+// each other, which is what a clash check asserts), so an edit to one part re-measures its pairs only.
+// Boxes a part apart (padded past the coarse mesh's shortfall on a curved extreme) skip the boolean.
+const BOX_PAD = 1;
+const interferenceOfOne = measured('interference', ops.interference);
+const apart = (a, b) => {
+  if (!isShape(a) || !isShape(b) || !a.__key || !b.__key) return false;
+  const p = bbox(a), q = bbox(b);
+  return [0, 1, 2].some((k) => p.min[k] > q.max[k] + BOX_PAD || q.min[k] > p.max[k] + BOX_PAD);
+};
+const interference = (a, b) => {
+  const A = parts(a), B = parts(b);
+  if (!A && !B) return apart(a, b) ? 0 : a?.__key > b?.__key ? interferenceOfOne(b, a) : interferenceOfOne(a, b);   // symmetric: one memo entry per pair
+  let v = 0;
+  for (const x of A ?? [a]) for (const y of B ?? [b]) v += interference(x, y);
+  return v;
 };
 
 /** The `brep` namespace: primitives, booleans, modifiers, measures. */
@@ -88,11 +120,11 @@ const brep = Object.freeze({
   fillet: keyed('fillet', ops.fillet),
   chamfer: keyed('chamfer', ops.chamfer),
   shell: keyed('shell', ops.shell),
-  translate: keyed('translate', ops.translate),
+  translate: moved('translate'),
   scoped: ops.scoped,
-  rotate: keyed('rotate', ops.rotate),
-  scale: keyed('scale', ops.scale),
-  mirror: keyed('mirror', ops.mirror),
+  rotate: moved('rotate'),
+  scale: moved('scale'),
+  mirror: moved('mirror'),
   extrude: keyed('extrude', ops.extrude),
   revolve: keyed('revolve', ops.revolve),
   loft: keyed('loft', ops.loft),
@@ -112,7 +144,7 @@ const brep = Object.freeze({
   axisOf: keyed('axisOf', ops.axisOf),
   mass: measured('mass', ops.mass),
   length: measured('length', ops.length),
-  interference: measured('interference', ops.interference),
+  interference,
   polyline: keyed('polyline', ops.polyline),
   spline: keyed('spline', ops.spline),
   helix: keyed('helix', ops.helix),

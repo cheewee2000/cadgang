@@ -51,7 +51,7 @@ import {
   tightBounds,
   requireSolid,
   importStepSolids,
- beginBrepScope } from './brep.js';
+ beginBrepScope, brepCommonVolume } from './brep.js';
 
 // ------------------------------------------------------------------ import
 
@@ -821,12 +821,11 @@ export function length(shape, query) {
   });
 }
 
-/** Volume shared by two bodies — 0 means no interference. */
+/** Volume shared by two bodies — 0 means no interference. One raw Common with oriented boxes, freed at
+ *  once: a clash sweep makes dozens, and replicad's intersect() simplifies a result that is only measured
+ *  (an imported caster against a wheel housing: 20 s that way, 5 s this way). */
 export function interference(a, b) {
-  return attempt('interference', () => {
-    const common = borrow(a, 'a').intersect(borrow(b, 'b'));   // freed here, not at the scope's end: a clash sweep makes dozens
-    try { return kernelOf().measureVolume(common); } catch { return 0; } finally { try { common.delete(); } catch { /* gone */ } }
-  });
+  return attempt('interference', () => brepCommonVolume(borrow(a, 'a'), borrow(b, 'b')));
 }
 
 /** Number of separate solid bodies in the result (1 for one connected part). */

@@ -496,6 +496,24 @@ export function brepBoolean(op, base, tools) {
   }
 }
 
+/** The volume two shapes share, by one raw Common: no simplification of a result that is only measured, and
+ *  OCCT's oriented boxes (SetUseOBB) to pass over the sub-shapes that cannot meet. */
+export function brepCommonVolume(a, b) {
+  const args = new OC.TopTools_ListOfShape_1(), list = new OC.TopTools_ListOfShape_1();
+  const bop = new OC.BRepAlgoAPI_Common_1(), progress = new OC.Message_ProgressRange_1();
+  let common = null;
+  try {
+    args.Append_1(a.wrapped); list.Append_1(b.wrapped);
+    bop.SetArguments(args); bop.SetTools(list); bop.SetUseOBB(true);
+    bop.Build(progress);
+    common = kernel().cast(bop.Shape());
+    try { return kernel().measureVolume(common); } catch { return 0; }
+  } finally {
+    try { common?.delete(); } catch { /* gone */ }
+    for (const o of [bop, progress, args, list]) o.delete();
+  }
+}
+
 /** True for the {kind:'sketch'} values sketch blocks emit. */
 export const isSketch = (v) => v?.kind === 'sketch';
 
