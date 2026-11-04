@@ -931,6 +931,8 @@ async function refreshOnce({ structural }) {
   const sig = JSON.stringify(doc.cells.map((c) => [c.id, c.prompt, c.code, c.refs, c.status, Object.keys(c.params || {})]));
   const changed = sig !== structureSig;
   structureSig = sig;
+  // The first mesh of a cold kernel can take minutes: show the transcript now, the geometry when it lands.
+  if ((changed || structural) && doc.cells.length) { renderStack(); $('#status').textContent = 'Evaluating…'; }
 
   // Outside pick mode the mesh carries the evaluate report: one rebuild per refresh.
   // In pick mode it is the pick source's mesh, so the document is evaluated separately.
@@ -959,6 +961,7 @@ async function refreshOnce({ structural }) {
     pendingPicks = [];
   }
   renderPending();
+  if ($('#status').textContent === 'Evaluating…') $('#status').textContent = '';
 
   if (changed || structural) renderStack();
   else {
