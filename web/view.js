@@ -890,8 +890,9 @@ function openColorMenu(anchor, current, pick, done) {
   const input = Object.assign(document.createElement('input'), { type: 'color', value: current || '#888888', className: 'color-other-input' });
   input.addEventListener('input', () => pick(rgbOf(input.value)));
   input.addEventListener('change', () => { done(); closeColorMenu(); });
-  other.addEventListener('click', () => input.click());
-  menu.append(grid, other, input);
+  // the picker sits over the button, unseen, so the click that opens it is the user's own (a scripted click() does not open WebKit's)
+  const wrap = Object.assign(document.createElement('div'), { className: 'color-other-wrap' }); wrap.append(other, input);
+  menu.append(grid, wrap);
   document.body.append(menu);
   const r = anchor.getBoundingClientRect(), w = menu.offsetWidth, h = menu.offsetHeight;
   menu.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`;
