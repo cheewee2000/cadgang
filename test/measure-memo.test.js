@@ -8,7 +8,7 @@ const count = (op) => brepOperationStats()[op]?.count ?? 0;
 test('a clash check between two unchanged parts is a lookup, not a kernel call', async () => {
   await initBrep(); clearCellCache();
   const doc = new CellDocument();
-  doc.addCell({ id: 'a', prompt: 'a', code: 'export default ({ brep }) => brep.box(10, 10, 10)' });
+  doc.addCell({ id: 'a', prompt: 'a', code: 'export default ({ brep }) => brep.box(10, 10, 10, { center: \'xy\' })' });   // an options object from the sandbox's realm keys too
   doc.addCell({ id: 'b', prompt: 'b', code: 'export default ({ brep }) => brep.translate(brep.box(10, 10, 10), [5, 0, 0])' });
   doc.addCell({ id: 'c', prompt: 'c', code: 'export default ({ brep }) => brep.translate(brep.box(10, 10, 10), [40, 0, 0])' });
   doc.addCell({ id: 'check', kind: 'assert', refs: ['a', 'b', 'c'], prompt: 'clashes', code: `export default ({ brep, inputs, assert }) => {

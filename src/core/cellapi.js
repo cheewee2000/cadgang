@@ -33,7 +33,8 @@ const argKey = (v) => {
   if (isShape(v)) { if (!v.__key) keyable = false; return v.__key; }
   if (v == null || typeof v !== 'object') { if (typeof v === 'function') keyable = false; return v; }
   if (Array.isArray(v)) return v.map(argKey);
-  if (Object.getPrototypeOf(v) === Object.prototype) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, argKey(x)]));
+  const proto = Object.getPrototypeOf(v);   // a cell's own {center: 'xy'} comes from the sandbox's realm, so its prototype is that realm's Object
+  if (proto === null || proto === Object.prototype || proto.constructor?.name === 'Object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, argKey(x)]));
   keyable = false; return null;
 };
 const keyOf = (op, args) => { keyable = true; const s = JSON.stringify(args.map(argKey)); return keyable ? crypto.createHash('sha1').update(op).update(s).digest('base64url').slice(0, 20) : null; };
