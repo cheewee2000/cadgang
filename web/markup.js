@@ -13,7 +13,7 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
 
-export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTargets, layer, tools, onChange, snap = null, planeAt = null, say = () => {}, tipAt = () => {} }) {
+export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTargets, layer, tools, onChange, snap = null, planeAt = null, clipped = null, say = () => {}, tipAt = () => {} }) {
   const group = new THREE.Group();
   group.renderOrder = 5;
   scene.add(group);
@@ -68,9 +68,11 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   // A visible reference plane is a surface too (planeAt: the nearest along the ray): a mark on it is in
   // world space (no part to ride). A plane that is on is there to draw on, so it wins over the model behind or in front of it.
   let hitPlane = null;
+  // The surface under the ray: what shows. A hidden body is not there to draw on, nor the cut-away side of a section.
+  const surfaceHit = () => raycaster.intersectObjects(getTargets().filter((o) => o.visible), false).find((h) => !clipped?.(h.point)) ?? null;
   function surfaceAt(e) {
     raycaster.setFromCamera(ndc(e), getCamera());
-    const hit = raycaster.intersectObjects(getTargets(), false)[0] ?? null;
+    const hit = surfaceHit();
     const ph = planeAt?.(raycaster) ?? null;
     return ph ? { plane: ph } : { hit };
   }
@@ -107,7 +109,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   function penAt(e) {
     if (penOnRef) return pointAt(e);
     raycaster.setFromCamera(ndc(e), getCamera());
-    const hit = raycaster.intersectObjects(getTargets(), false)[0];
+    const hit = surfaceHit();
     if (hit?.face) { penRef = { o: hit.point.clone(), n: hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize() }; return hit.point.toArray(); }
     if (!penRef) return pointAt(e);
     return onPlane(e, penRef.o, penRef.n) ?? onPlane(e, penRef.o, getCamera().getWorldDirection(new THREE.Vector3()));   // that face edge-on: square to the eye

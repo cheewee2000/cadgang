@@ -2770,6 +2770,7 @@ const markup = createMarkup({
   onChange: (items) => { markupChanged(items); commit(); },
   say, tipAt: cursorTip, snap: { snapAt: (e) => measure.snapAt(e), showSnap: (e) => measure.showSnap(e), showFace: (e) => measure.showFace(e), clearSnap: () => measure.clearSnap() },   // the arrow snaps like measure
   planeAt: (ray) => planes.hit(ray),   // marks draw on the visible reference planes too
+  clipped: (p) => !!section.axis && !!bbox && section.plane.distanceToPoint(p) < -1e-6,   // the cut-away side of a section is not a surface
 });
 let markupTimer = null;
 let subject = '';   // what is open: the file path(s) from the shell, or the dropped file name(s)
