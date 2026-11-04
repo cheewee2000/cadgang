@@ -614,7 +614,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
   r.get('/preview.png', async (req, res) => {
     try {
       await withShape(req, ({ shape, shown }) => {
-        const tol = tolerance(req, shape);
+        const tol = req.query.tolerance ? tolerance(req, shape) : tolerance(req, shape) * 4;   // a 640 px look: a quarter of the viewport's triangles rasterise in a quarter of the time
         const t = tessellate(shape, { tolerance: tol }), edges = tessellateEdges(shape, { tolerance: tol });
         progress.fn?.('render', shape, { cell: shown, mesh: t, edges });   // what Claude is looking at, in the user's pane too (kernel.js)
         const png = renderMesh(t, edges, brepBBox(shape), {
@@ -642,7 +642,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
     withShapeOf(document, document.terminal, ({ shape, shown }) => {
       const out = { shown, measures: measuresOf(shape) };
       const diag = Math.hypot(...out.measures.bbox.size) || 1;
-      const tol = Math.min(0.1, Math.max(0.01, diag / 2000));
+      const tol = Math.min(0.1, Math.max(0.01, diag / 2000)) * (mesh ? 1 : 4);   // a version's look is a thumbnail
       if (png || mesh) {
         const t = tessellate(shape, { tolerance: tol });
         const edges = tessellateEdges(shape, { tolerance: tol });
