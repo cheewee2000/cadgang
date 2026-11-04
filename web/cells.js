@@ -361,7 +361,7 @@ const badge = (status) => `<span class="badge ${status}">${status.replace('_', '
  * 'ok'.
  */
 function shownStatus(cell, entry) {
-  if (entry?.status === 'error' || entry?.status === 'failed') return entry.status;
+  if (entry?.status === 'error' || entry?.status === 'failed' || entry?.status === 'skipped') return entry.status;
   return cell?.status ?? 'ok';
 }
 const fmt = (n) => (Math.abs(n) >= 1000 ? n.toFixed(0) : parseFloat(n.toPrecision(6)).toString());
@@ -956,6 +956,7 @@ async function refreshOnce({ structural }) {
     return;
   }
 
+  $('#checksBtn').classList.toggle('on', doc.checks !== false);
   const sig = stackSig(doc);
   const changed = sig !== structureSig;
   structureSig = sig;
@@ -1095,6 +1096,7 @@ $('#stepBtn').onclick = async () => {
     say(`Saved ${name}`);
   } catch (e) { say(e.message, true); }
 };
+$('#checksBtn').addEventListener('click', () => api('/document/checks', { method: 'POST', body: { on: doc.checks === false } }).then(() => refresh({ structural: false })).catch((e) => say(e.message, true)));
 
 // ------------------------------------------------------------------- live
 

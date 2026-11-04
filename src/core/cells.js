@@ -130,8 +130,17 @@ export class CellDocument {
     for (const fn of this._listeners) fn(this);
   }
 
+  /** Off, the assertion cells are skipped (status 'skipped'): a quick edit to one part need not re-run
+   *  the clash checks. Not saved with the document — a kernel starts with checks on. Exports always run them. */
+  setChecks(on) {
+    this.checks = on !== false;
+    this.revision++;
+    for (const fn of this._listeners) fn(this);
+  }
+
   _load(filePath) {
     this.filePath = filePath;
+    this.checks = true;
     this.revision = 0;
     this.cells = [];
     this.output = null;
@@ -755,7 +764,7 @@ export async function evaluateCellsSettled(doc, targetId = doc.terminal, opts = 
   return s.value;
 }
 
-function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
+function* evaluateCellsSteps(doc, targetId, { stopOnError = true, checks = doc.checks !== false } = {}) {
   if (!targetId) throw new GraphError('Document has no cells to evaluate');
   const order = evaluationOrder(doc, targetId);
   const results = new Map();
@@ -805,6 +814,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
 
     const started = Date.now();
     const asserting = cell.kind === CELL_KIND.assert;
+    if (asserting && !checks) { entry.status = 'skipped'; results.set(cell.id, input); continue; }
     const dir = diskDir(doc);
     const hit = !asserting && (resultCache.get(key) || (dir && diskRead(dir, key)));
     if (hit) {
@@ -893,7 +903,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true } = {}) {
     // The one flag exports look at. A document with a failed assertion still
     // renders; it just does not ship.
     // An assertion cell that could not even run its claim has not passed it.
-    assertionsPass: assertions.every((c) => c.ok) && !report.some((e) => e.status === 'failed'),
+    assertionsPass: assertions.every((c) => c.ok) && !report.some((e) => e.status === 'failed' || e.status === 'skipped'),   // a check not run is a claim unmet
     target: targetId,
     // The deepest cell that actually produced a shape. When the newest cell is
     // broken — the normal state mid-edit — this is what the viewport should

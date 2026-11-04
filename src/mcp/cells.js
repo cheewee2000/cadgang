@@ -153,10 +153,11 @@ sm — sheet metal bent from one flat sheet, built to a shop's gauge table so th
   shop's own. sm.gauge('scs-304', 0.060) is SendCutSend 304 stainless at .060 in (radius, bend deduction, min flange,
   max bend length, 30 x 44 in flat). sm.part(name, gauge, {hardware, round: 3}) then, in mm, outside sizes:
     .base(U, V)  the base rectangle, u along x, v along y of its own frame
-    .flange('base.r', 25, {from, to, reverse, angle})  a flange that high off edge b (v 0), t (v V), l (u 0) or r (u U), folded to the
+    .flange('base.r', 25, {from, to, reverse, angle, inset})  a flange that high off edge b (v 0), t (v V), l (u 0) or r (u U), folded to the
       inside at 90° (angle: 45 leans it in as a chamfer; two chamfers meeting at a corner are mitred); flanges stack: 'base.r.t' is the
       tip of that flange, 'base.r.l' / '.r' its sides (a flange's b is its bend);
       reverse: true folds it the other way (Z bends), its height from the parent's inside face, and it may not meet another at a corner
+      inset: the bend line that far in from the edge, on the straight side of a notch you cut away beyond it (a return along a cut edge); never closes a corner, so hold it off the notch's corners with from / to
     .cut('base', sm.rect(u0, v0, u1, v1, r), sm.circle(u, v, r), sm.slot(u0, v0, u1, v1, r), sm.poly(pts))  holes, in that panel's coordinates
     .window('base', [u0, v0, u1, v1], depth)  an opening whose four edges fold in as mitred flaps
     .at('base.b', [x, y, z], frame)  -> [u, v]: a point in the frame make() will get, in that panel's coordinates
@@ -228,7 +229,7 @@ THE AUTHORING LOOP — you cannot see the model, so introspection replaces looki
   6. cadgang_cells_evaluate — confirm every cell is 'ok' AND 'assertionsPass' is true
   7. add an assertion cell for what the prompt promised, so the next parameter change re-checks it`;
 
-const CELL_STATUS = `Cell status: 'ok' (code matches prompt) | 'stale' (prompt edited past the code) | 'diverged' (code hand-edited past the prompt) | 'awaiting_pick' (needs a user selection). Evaluation failure is reported by cadgang_cells_evaluate, not stored on the cell — as is 'failed', which is an assertion cell whose claim missed.`;
+const CELL_STATUS = `Cell status: 'ok' (code matches prompt) | 'stale' (prompt edited past the code) | 'diverged' (code hand-edited past the prompt) | 'awaiting_pick' (needs a user selection). Evaluation failure is reported by cadgang_cells_evaluate, not stored on the cell — as is 'failed', which is an assertion cell whose claim missed, and 'skipped', an assertion cell not run because checks are off (the checks arg).`;
 
 /**
  * Register the cell tools.
@@ -306,11 +307,15 @@ ${CELL_API}`,
           .describe("'assert' makes this a check that fails the document rather than a step that builds geometry"),
         at: z.number().int().optional().describe('Insert position'),
         compiledBy: z.string().optional().describe('Model that authored the code'),
+        checks: z.boolean().optional().describe("false: skip the assertion cells (the clash checks) on every evaluate and render from now on — for a quick edit to one part (a fillet, a hole, a dimension) where the checks cost more than the edit. true runs them again. Exports always run them, and 'assertionsPass' is false while they are off."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async (args) => {
-      try { return ok(await call('/cells', { method: 'POST', body: args })); } catch (e) { return fail(e); }
+    async ({ checks, ...args }) => {
+      try {
+        if (checks !== undefined) await call('/cells/document/checks', { method: 'POST', body: { on: checks } });
+        return ok(await call('/cells', { method: 'POST', body: args }));
+      } catch (e) { return fail(e); }
     }
   );
 
@@ -334,11 +339,13 @@ ${CELL_STATUS}`,
         selections: z.record(z.enum(['face', 'edge'])).optional(),
         sketch: sketchSchema.optional(),
         kind: z.enum(['model', 'assert']).optional(),
+        checks: z.boolean().optional().describe("false: skip the assertion cells (the clash checks) on every evaluate and render from now on — for a quick edit to one part (a fillet, a hole, a dimension) where the checks cost more than the edit. true runs them again. Exports always run them, and 'assertionsPass' is false while they are off."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ id, ...body }) => {
+    async ({ id, checks, ...body }) => {
       try {
+        if (checks !== undefined) await call('/cells/document/checks', { method: 'POST', body: { on: checks } });
         return ok(await call(`/cells/${encodeURIComponent(id)}`, { method: 'PATCH', body }));
       } catch (e) { return fail(e); }
     }
@@ -457,11 +464,13 @@ Args:
       inputSchema: {
         cell: z.string().optional(),
         stopOnError: z.boolean().default(true),
+        checks: z.boolean().optional().describe("false: skip the assertion cells (the clash checks) on every evaluate and render from now on — for a quick edit to one part (a fillet, a hole, a dimension) where the checks cost more than the edit. true runs them again. Exports always run them, and 'assertionsPass' is false while they are off."),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ cell, stopOnError }) => {
+    async ({ cell, stopOnError, checks }) => {
       try {
+        if (checks !== undefined) await call('/cells/document/checks', { method: 'POST', body: { on: checks } });
         const qs = new URLSearchParams();
         if (cell) qs.set('cell', cell);
         if (stopOnError === false) qs.set('stopOnError', '0');

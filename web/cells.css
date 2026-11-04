@@ -240,6 +240,7 @@ footer {
    table. What it is NOT is an error state — a passing assertion is the normal
    case and should look calm. */
 .badge.failed { color: var(--signal-red); }
+.badge.skipped { color: var(--ink-faint); }
 
 .cell.assert { border-left: 2px solid var(--rule); padding-left: var(--sp-2); }
 .cell.assert.missed { border-left-color: var(--signal-red); }

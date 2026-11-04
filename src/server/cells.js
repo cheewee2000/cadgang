@@ -48,7 +48,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
   const fail = (res, err, code = 400) =>
     res.status(err instanceof GraphError ? code : 500).json({ error: err.message });
 
-  const state = () => doc.toJSON();
+  const state = () => ({ ...doc.toJSON(), checks: doc.checks !== false });
 
   /**
    * Evaluate up to the requested cell and hand the result to `body`.
@@ -84,7 +84,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
       // Walk the whole chain: a broken cell above the target only matters if the
       // target needed what it made. A box built from scratch under a half-drawn
       // sketch still has a topology to report.
-      const run = await evaluateCellsSettled(document, target, { stopOnError: false });
+      const run = await evaluateCellsSettled(document, target, { stopOnError: false, ...(requireAssertions && { checks: true }) });   // an export runs the checks whatever the switch says
       const shown = run.value ? target : partial ? run.lastGood : null;
       if (!shown) {
         const mine = run.report.find((c) => c.id === target && c.status !== 'ok');
@@ -340,6 +340,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
   });
 
   r.post('/document/clear', (req, res) => { doc.clear(); res.json(state()); });
+  r.post('/document/checks', (req, res) => { doc.setChecks(req.body?.on !== false); res.json(state()); });
 
   r.post('/undo', (req, res) => {
     try { res.json(doc.undo()); } catch (e) { fail(res, e); }

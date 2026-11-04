@@ -34,7 +34,7 @@ let session = null;
 const api = cellsRouter(doc, ROOT, { project: proj }), routes = express.Router();
 // The document rides along: the page draws the stack from it at once, since a build may be holding
 // this process for the next minute and a fetch would wait behind it.
-doc.onChange(() => broadcast({ type: 'cells_changed', revision: doc.revision, session, doc: doc.toJSON() }));
+doc.onChange(() => broadcast({ type: 'cells_changed', revision: doc.revision, session, doc: { ...doc.toJSON(), checks: doc.checks !== false } }));
 routes.use('/history', historyRouter(doc, { dirOf: () => path.join(path.dirname(doc.filePath || CELLS_PATH), 'history'), modelOf: api.modelOf, broadcast }));
 routes.use('/options', optionsRouter(doc, { modelOf: api.modelOf, broadcast }));
 routes.use(api);
