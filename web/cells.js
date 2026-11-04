@@ -251,7 +251,7 @@ window.addEventListener('pointermove', (e) => {
   }
 });
 attachOrbitInput(viewport, {
-  orbit, camera, THREE, yawSign: -1,
+  orbit, camera, THREE,   // same camera as the viewer, so the same turn direction
   scheme: () => { try { return JSON.parse(localStorage.getItem('cadgang-view'))?.scroll === 'mouse' ? 'mouse' : 'trackpad'; } catch { return 'trackpad'; } },   // the viewer's Trackpad / Mouse choice
   hitAt: (e) => {
     if (!meshObj) return null;
