@@ -45,7 +45,7 @@ final class PageBox: NSView {
 }
 func webIn(_ win: NSWindow?) -> DropWebView? { win?.contentView?.subviews.lazy.compactMap { $0 as? DropWebView }.first }
 
-final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
+final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, NSMenuDelegate {
     var web: DropWebView!            // the first window's page; files that arrive before it is ready wait for it
     var windows: [NSWindow] = []     // one per open file; each page has its own markups, the server tells them apart
     var titleWatch: [NSKeyValueObservation] = []
@@ -127,6 +127,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     func saveWindows() {
         if quitting { return }
         let urls = windows.compactMap { webIn($0)?.url }.filter { $0.query?.contains("open=") == true }
+        if urls.isEmpty { return }   // closing the last window quits: the next launch brings it back, like a crash does
         UserDefaults.standard.set(urls.map { $0.absoluteString }, forKey: Self.SESSION)
     }
     func savedWindows() -> [URL] {
@@ -197,6 +198,9 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         if ready { open(urls.map { $0.path }, in: keyWeb) } else { pending += urls.map { $0.path } }
     }
 
+    /// WebKit's content process died under the page (GPU memory, mostly): reload it; the address still names the files.
+    func webViewWebContentProcessDidTerminate(_ w: WKWebView) { w.reload() }
+
     func webView(_ w: WKWebView, didFinish nav: WKNavigation!) {
         guard w === web, !ready else { return }
         ready = true
@@ -211,6 +215,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         guard let body = m.body as? [String: Any], let cmd = body["cmd"] as? String else { return }
         if cmd == "defaultApp" { makeDefaultViewer() }
+        if cmd == "recent", let list = body["list"] as? [[String]] { UserDefaults.standard.set(list, forKey: Self.RECENT) }   // the page's RECENT list, mirrored for the File menu
         if cmd == "raise", let w = m.webView { w.window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }   // the window that already has the file asked for
         if cmd.hasPrefix("render"), let w = m.webView as? DropWebView { render(cmd, body, in: w) }
         // AirDrop the ?follow link: the sheet lists nearby devices; the iPad opens it in Safari.
@@ -274,6 +279,24 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     @objc func saveProject(_ s: Any?) { keyWeb.evaluateJavaScript("window.cadgangSave?.(false)") }
     @objc func saveProjectAs(_ s: Any?) { keyWeb.evaluateJavaScript("window.cadgangSave?.(true)") }
 
+    // File › Open Recent: the page's own list (view.js remember), sent over on every open.
+    static let RECENT = "cadgang.recent"
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let list = (UserDefaults.standard.array(forKey: Self.RECENT) as? [[String]]) ?? []
+        for paths in list {
+            let item = NSMenuItem(title: paths.map { ($0 as NSString).lastPathComponent }.joined(separator: " + "), action: #selector(openRecent(_:)), keyEquivalent: "")
+            item.representedObject = paths
+            item.toolTip = paths.joined(separator: "\n")
+            menu.addItem(item)
+        }
+        if list.isEmpty { menu.addItem(withTitle: "No Recent Files", action: nil, keyEquivalent: "") }
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Clear Menu", action: #selector(clearRecent(_:)), keyEquivalent: "")
+    }
+    @objc func openRecent(_ s: NSMenuItem) { if let paths = s.representedObject as? [String] { application(NSApp, open: paths.map { URL(fileURLWithPath: $0) }) } }
+    @objc func clearRecent(_ s: Any?) { UserDefaults.standard.removeObject(forKey: Self.RECENT); keyWeb.evaluateJavaScript("window.cadgangClearRecent?.()") }
+
     @objc func openDocument(_ s: Any?) {
         let p = NSOpenPanel()
         p.allowsMultipleSelection = true
@@ -327,6 +350,9 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "New Window", action: #selector(newWindow(_:)), keyEquivalent: "n")
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
+        let recent = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        recent.submenu = NSMenu(title: "Open Recent"); recent.submenu!.delegate = self
+        fileMenu.addItem(recent)
         fileMenu.addItem(withTitle: "Save Project", action: #selector(saveProject(_:)), keyEquivalent: "s")
         fileMenu.addItem(withTitle: "Save Project As…", action: #selector(saveProjectAs(_:)), keyEquivalent: "S")
         fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")

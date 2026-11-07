@@ -2610,7 +2610,9 @@ function remember(paths) {
   const k = paths.join('|');
   const list = [{ paths, at: new Date().toISOString() }, ...recentList().filter((r) => r.paths.join('|') !== k)].slice(0, 10);
   try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch {}
+  window.webkit?.messageHandlers?.cadgang?.postMessage({ cmd: 'recent', list: list.map((r) => r.paths) });   // File › Open Recent
 }
+window.cadgangClearRecent = () => { try { localStorage.removeItem(RECENT_KEY); } catch {} };
 const recentMenu = $('#recentMenu');
 function showRecent() {
   const list = recentList();
@@ -2624,7 +2626,7 @@ function showRecent() {
   }) : [Object.assign(document.createElement('div'), { className: 'recent-empty', textContent: 'No recent files yet' })]));
   if (list.length) {
     const clear = Object.assign(document.createElement('button'), { className: 'ghost recent-clear', textContent: 'Clear the list' });
-    clear.addEventListener('click', () => { try { localStorage.removeItem(RECENT_KEY); } catch {} showRecent(); });
+    clear.addEventListener('click', () => { window.cadgangClearRecent(); window.webkit?.messageHandlers?.cadgang?.postMessage({ cmd: 'recent', list: [] }); showRecent(); });
     recentMenu.append(document.createElement('hr'), clear);
   }
 }
