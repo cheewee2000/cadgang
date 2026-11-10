@@ -13,6 +13,7 @@
  */
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
 const BASE = (process.env.CADGANG_URL || 'http://localhost:4477').replace(/\/$/, '');
 
@@ -34,8 +35,11 @@ export async function ask(prompt, { cwd = process.cwd(), rest = [], out = () => 
   }).catch(() => {});   // the pane is cosmetic: Claude carries on without it
 
   // CADGANG_NO_ASK: the Claude in there gets the cell tools but not cadgang_cells_ask, so it cannot ask another.
-  const child = spawn('claude', ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--allowedTools', 'mcp__cadgang', ...rest],
-    { cwd, env: { ...process.env, CADGANG_NO_ASK: '1' }, stdio: ['ignore', 'pipe', 'ignore'] });
+  // Only the cadgang tools, loaded up front: connecting every other MCP server the user has, and a tool-search
+  // turn to find these, were most of the wait before the first cell appeared.
+  const mcp = JSON.stringify({ mcpServers: { cadgang: { command: process.execPath, args: [fileURLToPath(new URL('./mcp/index.js', import.meta.url))], env: { CADGANG_URL: BASE, CADGANG_NO_ASK: '1' } } } });
+  const child = spawn('claude', ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--allowedTools', 'mcp__cadgang', '--mcp-config', mcp, '--strict-mcp-config', ...rest],
+    { cwd, env: { ...process.env, CADGANG_NO_ASK: '1', ENABLE_TOOL_SEARCH: 'false' }, stdio: ['ignore', 'pipe', 'ignore'] });
   const blocks = new Map();   // content block index → { json } for a cadgang cell call being written
   let sentAt = 0, result = null;
   for await (const line of readline.createInterface({ input: child.stdout })) {
