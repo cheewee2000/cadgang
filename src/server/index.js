@@ -206,6 +206,17 @@ app.get('/api/cells/session', (req, res) => {
   }
   res.json({});
 });
+// What Claude is writing right now, before the call that carries it has landed: src/ask.js reads the code off
+// a headless Claude's stream as it is typed and posts it here; the pane shows it. Broadcast only, nothing kept.
+app.post('/api/cells/typing', json, (req, res) => {
+  const header = req.get('x-cadgang-project'), dir = header && path.resolve(header);
+  if (!dir || !fs.existsSync(dir)) return res.status(400).json({ error: 'Name the project folder (X-Cadgang-Project)' });
+  const session = dir === project.dir ? null : sessionFor(dir).key;
+  lastActive = { type: 'cells_project_active', session, name: path.basename(dir) };
+  broadcast(lastActive);
+  broadcast({ type: 'cells_typing', session, id: String(req.body?.id || '').slice(0, 80), code: String(req.body?.code || '').slice(-6000), done: !!req.body?.done });
+  res.json({ ok: true });
+});
 app.use('/api/cells', (req, res, next) => {
   // MCP alone names a filesystem folder. The browser follows with an opaque
   // key, so no local path appears in its URL or becomes a read primitive.

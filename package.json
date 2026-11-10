@@ -6,7 +6,8 @@
   "private": true,
   "main": "src/server/index.js",
   "bin": {
-    "cadgang-mcp-server": "src/mcp/index.js"
+    "cadgang-mcp-server": "src/mcp/index.js",
+    "cadgang-ask": "src/ask.js"
   },
   "scripts": {
     "start": "node src/server/supervise.js",

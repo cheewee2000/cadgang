@@ -51,6 +51,7 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
   transition: background var(--dur-fast) var(--ease);
 }
 .cell.selected { background: var(--paper-2); }
+.cell-ghost { border-bottom: var(--bw-hair) solid var(--rule); padding: var(--sp-3); }
 .cell.failed { background: color-mix(in srgb, var(--signal-red) 7%, transparent); }
 
 .cell-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: 6px; }

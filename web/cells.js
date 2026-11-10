@@ -1142,6 +1142,24 @@ function showDraft({ cell, op, kind }) {
   }).catch(() => {}).finally(() => { draftRun = null; });
 }
 
+/** Claude is still WRITING this cell (cadgang-ask streams it): the code appears as it is typed, before any call lands. */
+function showTyping({ id, code, done }) {
+  document.querySelectorAll('.cell-typing, .cell-ghost').forEach((n) => n.remove());
+  if (done || !id) { paintReport(); if (/^Claude is writing/.test($('#status').textContent)) $('#status').textContent = ''; return; }
+  let el = [...document.querySelectorAll('.cell')].find((e) => e.dataset.id === id);
+  if (!el) {   // a cell that does not exist yet
+    el = document.createElement('div'); el.className = 'cell-ghost';
+    el.innerHTML = '<div class="cell-head"><span class="cell-id"></span><span class="badge running">writing…</span></div>';
+    el.querySelector('.cell-id').textContent = id;
+    $('#stack').querySelector('.empty')?.remove();
+    $('#stack').append(el);
+  } else { const b = el.querySelector('.badge'); if (b) { b.className = 'badge running'; b.textContent = 'writing…'; } }
+  const pre = document.createElement('pre'); pre.className = 'cell-code cell-typing';
+  pre.textContent = code.split('\n').slice(-18).join('\n');
+  el.append(pre); el.scrollIntoView({ block: 'nearest' });
+  $('#status').textContent = `Claude is writing ${id}…`;
+}
+
 function connect() {
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.onmessage = (ev) => {
@@ -1155,6 +1173,7 @@ function connect() {
     if (msg.type === 'cells_project_active' && msg.session !== undefined) { lastActive = msg; if (!pinned) followProject(msg, `Following Claude in ${msg.name || 'the active project'}`); }
     if (msg.type === 'cells_changed' && sessionMatches(msg.session) && msg.revision !== doc.revision && !inFlight) { refresh({ structural: false }); if (msg.doc) showStack(msg.doc); }
     if (msg.type === 'cells_progress' && sessionMatches(msg.session)) showDraft(msg);
+    if (msg.type === 'cells_typing' && sessionMatches(msg.session)) showTyping(msg);
     if (msg.type === 'history_changed') renderHistory();
     if (msg.type === 'options_changed') renderOptions();
     if (msg.type === 'snapshot_request') postSnapshot();
