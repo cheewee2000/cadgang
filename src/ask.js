@@ -27,28 +27,27 @@ export function partialString(json, key) {
   return null;
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-  const prompt = args.find((a) => !a.startsWith('-'));
-  if (!prompt) { console.error('usage: cadgang-ask "<what to model or change>" [-c to continue the last ask] [claude flags]'); process.exit(2); }
-  const rest = args.filter((a) => a !== prompt);
+/** Run Claude headless in `cwd` on `prompt`, posting what it writes to the pane as it writes it. Resolves to its last words. */
+export async function ask(prompt, { cwd = process.cwd(), rest = [], out = () => {} } = {}) {
   const post = (body) => fetch(`${BASE}/api/cells/typing`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Cadgang-Project': process.cwd() }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Cadgang-Project': cwd }, body: JSON.stringify(body),
   }).catch(() => {});   // the pane is cosmetic: Claude carries on without it
 
-  const child = spawn('claude', ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--allowedTools', 'mcp__cadgang', ...rest], { stdio: ['ignore', 'pipe', 'inherit'] });
+  // CADGANG_NO_ASK: the Claude in there gets the cell tools but not cadgang_cells_ask, so it cannot ask another.
+  const child = spawn('claude', ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--allowedTools', 'mcp__cadgang', ...rest],
+    { cwd, env: { ...process.env, CADGANG_NO_ASK: '1' }, stdio: ['ignore', 'pipe', 'ignore'] });
   const blocks = new Map();   // content block index → { json } for a cadgang cell call being written
-  let sentAt = 0;
+  let sentAt = 0, result = null;
   for await (const line of readline.createInterface({ input: child.stdout })) {
     let m; try { m = JSON.parse(line); } catch { continue; }
-    if (m.type === 'result') { process.stdout.write('\n'); process.exitCode = m.is_error ? 1 : 0; continue; }
+    if (m.type === 'result') { result = m; continue; }
     const ev = m.type === 'stream_event' ? m.event : null;
     if (!ev) continue;
     if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
-      process.stdout.write(`\n· ${ev.content_block.name.replace(/^mcp__cadgang__cadgang_/, '')} `);
+      out(`\n· ${ev.content_block.name.replace(/^mcp__cadgang__cadgang_/, '')} `);
       if (/cadgang_cells_(add|update|compile)$/.test(ev.content_block.name)) blocks.set(ev.index, { json: '' });
     } else if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
-      process.stdout.write(ev.delta.text);
+      out(ev.delta.text);
     } else if (ev.type === 'content_block_delta' && ev.delta?.type === 'input_json_delta' && blocks.has(ev.index)) {
       const b = blocks.get(ev.index); b.json += ev.delta.partial_json;
       if (Date.now() - sentAt < 60) continue;   // ~16 a second is typing; more is traffic
@@ -58,6 +57,17 @@ async function main() {
       post({ done: true });
     }
   }
+  if (!result) throw new Error('Claude ended without a result (is the claude command on PATH?)');
+  if (result.is_error) throw new Error(result.result || 'Claude reported an error');
+  return { result: result.result, seconds: Math.round(result.duration_ms / 100) / 10, turns: result.num_turns };
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  const prompt = args.find((a) => !a.startsWith('-'));
+  if (!prompt) { console.error('usage: cadgang-ask "<what to model or change>" [-c to continue the last ask] [claude flags]'); process.exit(2); }
+  try { await ask(prompt, { rest: args.filter((a) => a !== prompt), out: (t) => process.stdout.write(t) }); process.stdout.write('\n'); }
+  catch (e) { console.error(`\n${e.message}`); process.exitCode = 1; }
 }
 
 if (process.argv[1] && import.meta.url.endsWith(encodeURI(process.argv[1].split('/').pop()))) main();

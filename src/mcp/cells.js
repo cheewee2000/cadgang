@@ -9,6 +9,7 @@
  */
 
 import { z } from 'zod';
+import { ask } from '../ask.js';
 
 const CELL_API = `A cell program is ES-module source with exactly two exports:
 
@@ -316,6 +317,28 @@ export function registerCellTools(server, { call, ok, fail, base, headers }) {
     })),
     constraints: z.array(z.object({ type: z.string() }).passthrough()),
   }).describe('A stored sketch the user can drag: points, entities and constraints. Read it back with sk.saved().');
+
+  // Not offered to the Claude that cadgang_cells_ask itself starts (src/ask.js sets CADGANG_NO_ASK).
+  if (!process.env.CADGANG_NO_ASK) server.registerTool(
+    'cadgang_cells_ask',
+    {
+      title: 'Model it where the user can watch the code being written',
+      description: `Hand a modelling job to a second Claude that the user can WATCH WRITE: the Cells pane shows each cell's code appearing character by character as it is generated, then the build, then the part. Your own cadgang_cells_add calls reach the pane only once you have finished writing them, so with those the user sees nothing while you type.
+
+Use it when the user wants to watch the work happen ("show me", "let me watch", "live", "realtime"), for a new part or a self-contained change. The other Claude knows nothing of this conversation and sees only the cell document: write the brief as a complete specification — dimensions, features, which existing cells to change, what to check. It answers with a short summary; read the result with cadgang_cells_get or look with cadgang_cells_render.
+
+It costs a few seconds of start-up, so for one small edit your own cadgang_cells_update with 'edits' is quicker.
+
+Args:
+  - brief: the whole job, in words
+  - continue: true to carry on the previous ask in this folder (it remembers what it built and why)`,
+      inputSchema: { brief: z.string().describe('The complete specification of what to model or change'), continue: z.boolean().optional() },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ brief, continue: more }) => {
+      try { return ok(await ask(brief, { rest: more ? ['-c'] : [] })); } catch (e) { return fail(e); }
+    }
+  );
 
   server.registerTool(
     'cadgang_cells_get',
