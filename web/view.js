@@ -487,8 +487,8 @@ function listBodies() {
         row.append(fold);
         for (const g of finishes) {
           const r2 = document.createElement('div'); r2.className = 'finish-row'; r2._body = m; r2._group = g;
-          const fn = Object.assign(document.createElement('span'), { className: 'fname', textContent: g.name || 'finish', title: `${g.name || 'finish'}\nClick: select its body · Shift-click: add it to the selection` });
-          fn.addEventListener('click', (e) => { e.preventDefault(); selectBodies([m], e.shiftKey || e.metaKey || e.ctrlKey ? 'toggle' : 'set'); });
+          const fn = Object.assign(document.createElement('span'), { className: 'fname', textContent: g.name || 'finish', title: `${g.name || 'finish'}\nClick: select this finish · Shift-click: add its body to the selection` });
+          fn.addEventListener('click', (e) => { e.preventDefault(); const add = e.shiftKey || e.metaKey || e.ctrlKey; selectBodies([m], add ? 'toggle' : 'set', add ? null : g); });
           r2.append(fn, matWord(m, g), Object.assign(document.createElement('span'), { className: 'bits' }));
           subs.append(r2);
         }
@@ -743,24 +743,29 @@ function isolate(members) {
 // show, isolate or give them a material together (the bar over the viewport; H hides, ⇧H shows all, Esc clears).
 // A plain click selects one part, a click on nothing clears. A window takes the parts it holds whole.
 const selected = new Set();
+let subSel = null;   // one finish of the one selected body (a second click on it, or its row): the bar's colour and material go to it alone
 const selOverlays = new Map();   // body → its tint
 function paintSelection() {
-  for (const [m, o] of selOverlays) if (!selected.has(m) || !model.children.includes(m)) { o.parent?.remove(o); o.material.dispose(); selOverlays.delete(m); }
+  if (subSel && !(selected.size === 1 && [...selected][0].userData.groups?.includes(subSel))) subSel = null;   // its body left the selection, or the file reloaded
+  for (const [m, o] of selOverlays) if (!selected.has(m) || !model.children.includes(m) || o._g !== subSel) { o.parent?.remove(o); [o.material].flat().forEach((x) => x.dispose()); selOverlays.delete(m); }
   for (const m of selected) {
     if (selOverlays.has(m) || !model.children.includes(m)) continue;
     const opts = { color: 0x1d6bff, transparent: true, opacity: m.isLine ? 1 : 0.32, depthTest: false, depthWrite: false, clippingPlanes: section.axis && bbox ? [section.plane] : [] };
     const o = m.isLine ? new THREE.LineSegments(m.geometry, new THREE.LineBasicMaterial(opts)) : new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ ...opts, side: THREE.DoubleSide }));
     o.renderOrder = 9; o.raycast = () => {};   // never a measure or markup target
+    o._g = subSel;
+    if (subSel) o.material = m.userData.groups.map((x) => (x === subSel ? o.material : new THREE.MeshBasicMaterial({ visible: false })));   // light that finish's faces only
     m.add(o); selOverlays.set(m, o);
   }
   for (const cb of bodyBoxes()) cb.closest('label')?.classList.toggle('sel', selected.has(cb._body));
+  for (const r of document.querySelectorAll('.bodies .finish-row')) r.classList.toggle('sel', r._group === subSel);
   const n = selected.size;
   $('#selBar').hidden = !n;
   const tools = $('#markupTools');   // under the Measure / markup row, right-aligned with it
   if (n && tools) $('#selBar').style.top = `${tools.offsetTop + tools.offsetHeight + 6}px`;
-  $('#selCount').textContent = n === 1 ? labelOf([...selected][0]) : `${n} selected`;   // one: its name; more: how many
+  $('#selCount').textContent = n === 1 ? labelOf([...selected][0]) + (subSel ? ` · ${subSel.name || 'finish'}` : '') : `${n} selected`;   // one: its name; more: how many
   $('#selCount').title = [...selected].map(labelOf).join('\n');
-  if (n) { const first = [...selected][0], c = $('#selColor'); if (c && !first.isLine) c.style.background = c.dataset.hex = hexOfRGB(finishFacts(first).color); }   // the colour they have, as the row shows it
+  if (n) { const first = [...selected][0], c = $('#selColor'); if (c && !first.isLine) c.style.background = c.dataset.hex = hexOfRGB(finishFacts(first, subSel ?? first.userData).color); }   // the colour they have, as the row shows it
   paintWeight();
 }
 /** mode: 'set' replaces the selection, 'add' joins it, 'toggle' flips each one. */
@@ -770,10 +775,11 @@ function selectPlane(id) {
   planes.select(id);
   if (id && planes.list().find((p) => p.id === id)?.kind === 'base') say(`${planes.list().find((p) => p.id === id).name} stays through the centre: the triad moves an offset plane or one of your own`);
 }
-function selectBodies(list, mode = 'set') {
+function selectBodies(list, mode = 'set', g = null) {
   if (list.length && planes.selected) planes.select(null);   // a part or a plane, not both
   if (mode === 'set') selected.clear();
   for (const m of list) { if (mode === 'toggle' && selected.has(m)) selected.delete(m); else selected.add(m); }
+  subSel = g && selected.size === 1 && [...selected][0].userData.groups?.includes(g) ? g : null;
   paintSelection();
 }
 // The parts in a window, seen from here: dragged left→right, those whose whole outline lies inside it; right→left
@@ -814,7 +820,7 @@ for (const [k, d] of Object.entries(MATERIALS)) $('#selMaterial').append(new Opt
 $('#selMaterial').addEventListener('change', (e) => {
   const key = e.target.value;
   if (!key) return;
-  for (const m of selected) pickMaterial(m, key);
+  for (const m of selected) pickMaterial(m, key, subSel);
   if (ui.look !== 'materials') { $('#look').value = 'materials'; $('#look').dispatchEvent(new Event('change', { bubbles: true })); }   // a material only shows under that look
   for (const m of selected) styleMesh(m);
   paintFinishes();
@@ -1020,8 +1026,8 @@ const BODY_CMDS = [
   const bar = $('#selBar'), clear = bar.querySelector('[data-sel="clear"]');
   const btn = (text, title, run) => { const b = Object.assign(document.createElement('button'), { className: 'ghost', textContent: text, title }); b.addEventListener('click', run); return b; };
   const color = Object.assign(document.createElement('button'), { type: 'button', id: 'selColor', className: 'sel-swatch', title: 'Give them a colour (every solid look)' });
-  color.addEventListener('click', () => openColorMenu(color, color.dataset.hex, (rgb) => { setTint(sel(), rgb); rerender(); paintFinishes(); color.style.background = color.dataset.hex = hexOfRGB(rgb); }, () => commit()));   // the rows' swatches and colour names follow
-  const reset = btn('↺', "Back to the file's colour", () => { setTint(sel(), null); rerender(); paintFinishes(); paintSelection(); commit(); });
+  color.addEventListener('click', () => openColorMenu(color, color.dataset.hex, (rgb) => { setTint(sel(), rgb, subSel); rerender(); paintFinishes(); color.style.background = color.dataset.hex = hexOfRGB(rgb); }, () => commit()));   // the rows' swatches and colour names follow
+  const reset = btn('↺', "Back to the file's colour", () => { setTint(sel(), null, subSel); rerender(); paintFinishes(); paintSelection(); commit(); });
   bar.insertBefore(btn('Transparent', 'Make them transparent (T)', ghostSelected), clear);
   const tb = btn('Triad', 'Move triad on the selection: arrows slide it along x, y, z, rings turn it (⇧ snaps). Q', () => setTriad(!triadOn)); tb.classList.add('triad-toggle');
   bar.insertBefore(tb, clear);
@@ -1764,7 +1770,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     const pl = !add && planes.pick(raycaster);   // partAt aimed the ray; a plane's square nearer than the part takes the click
     if (add) { if (p) selectBodies([p.body], 'toggle'); }
     else if (pl && (!p || pl.distance < p.point.distanceTo(raycaster.ray.origin))) selectPlane(pl.id);
-    else if (p) selectBodies([p.body], 'set');
+    else if (p) selectBodies([p.body], 'set', selected.size === 1 && selected.has(p.body) && subSel !== p.group ? p.group : null);   // a click on the part already selected goes in to the finish under it; again, back out
     else { selectBodies([], 'set'); planes.select(null); }
   }
   if (e.button === 2 && still) showMenu(e.clientX, e.clientY, partAt(e)?.body);
@@ -1806,7 +1812,7 @@ function partAt(e) {
   const h = raycaster.intersectObjects(model.children, true).find((h) => h.object.isMesh && h.object.visible && h.object.parent.visible && (!section.axis || section.plane.distanceToPoint(h.point) > -1e-6));
   if (!h) return null;
   const body = model.children.includes(h.object) ? h.object : h.object.parent;
-  return body.isMesh ? { body, point: h.point } : null;
+  return body.isMesh ? { body, point: h.point, group: (h.object === body && body.userData.groups?.[h.face?.materialIndex]) || null } : null;
 }
 // World units the plane moves per pixel of pointer travel in x and y: one unit
 // along the axis, projected to screen at the grabbed cap point, then inverted.

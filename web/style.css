@@ -221,6 +221,7 @@ select.ghost:hover { opacity: 0.55; }
 .bodies .mat-tag .bits, .bodies .finish-row { display: inline-flex; align-items: center; gap: 4px; }
 .bodies .mat-tag .fin::before, .bodies .mat-tag .swatch::before { content: none; }
 .bodies .swatch { width: 9px; height: 9px; border: var(--bw-hair) solid var(--rule); flex: none; }
+.bodies .finish-row.sel .fname { background: var(--ink); color: var(--paper); padding: 0 3px; }   /* the selected finish */
 .bodies .finish-rows { display: flex; flex-direction: column; gap: 1px; padding-left: 34px; }
 .bodies .finish-rows[hidden] { display: none; }
 .bodies .finish-row { font-size: 10px; color: var(--ink-faint); white-space: nowrap; }
