@@ -1469,7 +1469,10 @@ function tightBoundsOf(shape) {
   const faces = Array.isArray(shape.faces) ? shape.faces : [];
   const curvedFree = faces.every((f) => ['PLANE', 'CYLINDRE', 'CONE', 'SPHERE', 'TORUS'].includes(f.geomType));
   const box = new OC.Bnd_Box_1();
-  OC.BRepBndLib.AddOptimal(shape.wrapped, box, true, false);
+  // Never from a triangulation when the faces are analytic: a shape someone already meshed (the pane, a draft)
+  // came back grown by that mesh's deflection on every side, so a 60 mm plate measured 60.015 and failed its
+  // own fitsIn(60) — or passed, depending on who looked first. Below, the box only clips the mesh's extent.
+  OC.BRepBndLib.AddOptimal(shape.wrapped, box, !curvedFree, false);
   const lo = box.CornerMin();
   const hi = box.CornerMax();
   const out = { min: [lo.X(), lo.Y(), lo.Z()], max: [hi.X(), hi.Y(), hi.Z()] };

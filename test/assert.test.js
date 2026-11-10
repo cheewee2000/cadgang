@@ -345,3 +345,17 @@ test('an assertion cell that cannot run its claim does not count as passing', ()
   assert.equal(claim.status, 'failed');
   assert.equal(run.assertionsPass, false);
 });
+
+test('a part measures the same before and after someone meshes it', async () => {
+  const { initBrep, tessellate, tightBounds } = await import('../src/core/brep.js');
+  const { CellDocument, evaluateCells } = await import('../src/core/cells.js');
+  await initBrep();
+  const doc = new CellDocument();
+  doc.addCell({ id: 'plate', code: 'export default ({ brep }) => brep.box(60, 40, 8);' });
+  doc.addCell({ id: 'rounded', code: "export default ({ brep, q, input }) => brep.fillet(input, q.edges(input).linear().along('z').expect(4), 3);" });
+  const shape = evaluateCells(doc).value; shape.__key = undefined;   // no memo: measure twice for real
+  const size = () => { const b = tightBounds(shape); return b.max.map((v, i) => Math.round((v - b.min[i]) * 1e6) / 1e6); };
+  assert.deepEqual(size(), [60, 40, 8]);
+  tessellate(shape, { tolerance: 0.03 });
+  assert.deepEqual(size(), [60, 40, 8]);   // was 60.015 × 40.015 × 8.015: the mesh's deflection, added on every side
+});

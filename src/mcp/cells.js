@@ -262,7 +262,7 @@ export function registerCellTools(server, { call, ok, fail, base, headers }) {
   };
   async function after(result, id, { evaluate = true, look } = {}) {
     if (!evaluate && !look) return ok(result);
-    const out = { cell: result }, content = [];
+    const out = { cell: { id: result.id, status: result.status, params: result.params } }, content = [];   // not the code back again: Claude just wrote it
     if (evaluate) {
       try {
         let ev = await call('/cells/evaluate?stopOnError=0');
