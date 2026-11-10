@@ -3360,7 +3360,7 @@ function packBundle(extra = {}) {
   const head = new TextEncoder().encode(JSON.stringify({
     name: $('#fileName').textContent, files: sources.map((f) => ({ name: f.name, cad: f.cad, bytes: f.buffer.byteLength })),
     state: snap(), camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() },
-    theme: document.documentElement.dataset.bg, materials: model.children.map(materialOf), ...extra,
+    theme: document.documentElement.dataset.bg, materials: model.children.map(materialOf), subMaterials: model.children.map((m) => m.userData.groups?.map((g) => pickedMaterial(m, g) ?? null) ?? null), ...extra,
   }));
   return new Blob([new Uint8Array(new Uint32Array([head.length]).buffer), head, ...sources.map((f) => f.buffer)]);
 }
@@ -3382,6 +3382,7 @@ async function loadBundle(buf, { markupFromServer = false } = {}) {
   fromBundle = true;
   try { finishLoad(head.name, 0); } finally { fromBundle = false; }
   model.children.forEach((m, i) => head.materials?.[i] && pickMaterial(m, head.materials[i]));
+  model.children.forEach((m, i) => m.userData.groups?.forEach((g, j) => head.subMaterials?.[i]?.[j] && pickMaterial(m, head.subMaterials[i][j], g)));   // each finish's own, after its body's (which clears them)
   const st = JSON.parse(head.state);
   if (markupFromServer) {
     const marks = await api(`/markup?subject=${encodeURIComponent(subject)}`).then((d) => d.markups).catch(() => null);
@@ -3583,7 +3584,7 @@ const history = { list: [], i: -1 };
 function snap() {
   return JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, color: ui.color, ortho: ui.ortho,
     section: { axis: section.axis, pos: $('#sectPos').value, flip: section.flip }, explode: $('#explode').value, rot: rotArr(),
-    bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), finishes: model.children.map((m) => m.userData.finish ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3), null, m.userData.exTo?.toArray().map((v) => +v.toFixed(4)) ?? null, placeArr(m)]),
+    bodies: model.children.map((m) => m.visible), ghosts: model.children.map((m) => !!m.userData.ghost), tints: model.children.map((m) => m.userData.tint ?? null), finishes: model.children.map((m) => m.userData.finish ?? null), subs: model.children.map((m) => m.userData.groups?.map((g) => [g.tint ?? null, g.finish ?? null]) ?? null), parts: model.children.map((m) => [m.userData.axis ?? null, m.userData.pull == null ? null : +m.userData.pull.toFixed(3), null, m.userData.exTo?.toArray().map((v) => +v.toFixed(4)) ?? null, placeArr(m)]),
     markup: markup.items, dims: measure.dims, joints, states, names: namesOf(), planes: planes.state });
 }
 function commit() {
@@ -3625,6 +3626,11 @@ function apply(s) {
     if (JSON.stringify(m.userData.tint ?? null) !== JSON.stringify(t)) setTint([m], t);
     const fin = st.finishes?.[i] ?? null;
     if ((m.userData.finish ?? null) !== fin) setFinish([m], fin);
+    m.userData.groups?.forEach((g, j) => {   // each finish's own colour and finish word, after the body's (which clears them)
+      const [gt, gf] = st.subs?.[i]?.[j] ?? [null, null];
+      if (JSON.stringify(g.tint ?? null) !== JSON.stringify(gt)) setTint([m], gt, g);
+      if ((g.finish ?? null) !== gf) setFinish([m], gf, g);
+    });
   });
   syncRows();
   if (JSON.stringify(markup.items) !== JSON.stringify(st.markup)) { markup.load(st.markup); markupChanged(st.markup); }
