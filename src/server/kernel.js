@@ -51,11 +51,14 @@ const DRAFT_FILE = path.join(os.tmpdir(), `cadgang-draft-${process.pid}.bin`);
 // check cell, where the moved pose IS the test (the lid swung open, a caster turned). A render (what
 // Claude asked to see, with its mesh already made) always goes out.
 const PRIMITIVES = new Set(['box', 'cylinder', 'sphere', 'cone', 'torus', 'coil']), MOVES = new Set(['translate', 'rotate', 'scale', 'mirror']);
-let draftAt = 0, draftCost = 0;   // when the last draft was written, and what it cost
+let draftAt = 0, draftCost = 0, requestAt = 0;   // when the last draft was written, what it cost, and when this request began
 progress.fn = (op, shape, { cell = progress.cell, mesh = null, edges = null } = {}) => {
   if (DRAFT_MS < 0) return;
+  if (op === 'cell') { send({ type: 'draft', session, cell, op, kind: progress.asserting ? 'assert' : 'build', file: null }); return; }   // a cell began: no mesh, the pane lights it at once
   if (op === 'done') { send({ type: 'draft', session, cell: null, op, kind: 'done', file: null }); return; }
-  if (op !== 'render' && (PRIMITIVES.has(op) || (MOVES.has(op) && !progress.asserting) || performance.now() - draftAt < Math.max(DRAFT_MS, draftCost * 4))) return;   // a 2 s draft waits 8 s: drafting never takes the build over
+  // A check's poses cost as much as the check, so a check done in a few seconds is not drafted; a part being built shows from the first second.
+  const now = performance.now(), quiet = progress.asserting ? DRAFT_AFTER_MS : Math.min(DRAFT_AFTER_MS, DRAFT_MS);
+  if (op !== 'render' && (PRIMITIVES.has(op) || (MOVES.has(op) && !progress.asserting) || now - requestAt < quiet || now - draftAt < Math.max(DRAFT_MS, draftCost * 4))) return;   // a 2 s draft waits 8 s: drafting never takes the build over
   const kind = op === 'render' ? 'render' : progress.asserting ? 'assert' : 'build';
   const begun = performance.now();
   try {
@@ -76,7 +79,7 @@ let inflight = 0;
 const DRAFT_AFTER_MS = parseInt(process.env.CADGANG_DRAFT_AFTER_MS || '3000', 10);
 app.use('/api/cells', (req, res, next) => {
   inflight++; res.once('close', () => { inflight--; });
-  draftAt = performance.now() + DRAFT_AFTER_MS - DRAFT_MS;   // a request that is done in a few seconds is not worth drafting: its poses cost as much as its checks
+  requestAt = performance.now();
   proj.dir = req.get('x-cadgang-dir') || null;
   session = req.get('x-cadgang-session') || null;
   setImportRoot(proj.dir || process.cwd());

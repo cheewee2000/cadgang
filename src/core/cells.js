@@ -843,6 +843,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true, checks = doc.c
       yield;   // a settling driver collects here, before this cell builds on the last one's leftovers
       const compiled = compiledFor(cell);
       progress.cell = cell.id; progress.asserting = asserting;
+      try { progress.fn?.('cell', null); } catch { /* cosmetic: the pane lights the cell that is building */ }
       const value = compiled.run(cellApi({
         params: cell.params, input, inputs, selections: cell.selections, sketch: cell.sketch,
         checked: entry.checks, flats: entry.flats,

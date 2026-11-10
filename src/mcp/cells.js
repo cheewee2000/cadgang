@@ -218,15 +218,18 @@ ASSERTION CELLS — add a cell with kind: 'assert' and its program states claims
 
 The program runs in an isolated realm: no filesystem, network, timers, or process, and a wall-clock budget. Standard JS (Math, Array, loops, functions) is available, so arrays of holes, patterns and derived dimensions are ordinary code. console.log(...) works: each line lands in the cell's \`logs\` in cadgang_cells_evaluate — the way to inspect a plane object, a bbox, or a count while authoring.
 
-LIVE AUTHORING — the user watches the Cells page while you work. Build in visible, meaningful steps: one cell for each feature or part the user may want to review or steer (base form, shell, openings, bosses, pattern, fillets, checks). Add/evaluate/render each step before continuing. Never build a whole model in private code or one giant cell and reveal it only at the end. If a step will take time, add its cell first so its prompt appears before compiling it. The page automatically follows this session's project and refreshes after every committed cell change.
+LIVE AUTHORING — the user watches the Cells page while you work. Build in visible, meaningful steps: one cell for each feature or part the user may want to review or steer (base form, shell, openings, bosses, pattern, fillets, checks). Add each step (its answer carries the evaluation; look: true adds the picture) before continuing. Never build a whole model in private code or one giant cell and reveal it only at the end. If a step will take time, add its cell first so its prompt appears before compiling it. The page automatically follows this session's project and refreshes after every committed cell change.
 
-THE AUTHORING LOOP — you cannot see the model, so introspection replaces looking:
-  1. cadgang_cells_add with the prompt and a first draft of the code
-  2. cadgang_cells_topology — read the real faces and edges of what you built
-  3. cadgang_cells_query — confirm a query catches what you meant BEFORE applying it
-  4. cadgang_cells_add / _compile the operation that uses it
-  5. cadgang_cells_render — look at it
-  6. cadgang_cells_evaluate — confirm every cell is 'ok' AND 'assertionsPass' is true
+THE AUTHORING LOOP — ONE CALL PER STEP. cadgang_cells_add, _update and _compile answer with the evaluation
+(every broken cell, this cell's logs and checks, failing assertions, volume/area/bbox) and, with look: true, a
+rendered picture. Do NOT follow them with cadgang_cells_evaluate or cadgang_cells_render: that is two wasted
+turns the user sits through. To change existing code send 'edits' (find-and-replace), never the whole program again.
+  1. cadgang_cells_add with the prompt and the code; look: true when the shape is worth seeing
+  2. cadgang_cells_topology — read the real faces and edges, when the next step needs to pick some
+  3. cadgang_cells_query — confirm a query catches what you meant, when it is not obvious
+  4. cadgang_cells_add the next operation, or cadgang_cells_compile with edits to fix this one
+  5. (the answer already says whether every cell is 'ok' and 'assertionsPass' is true)
+  6. cadgang_cells_render only for another angle
   7. add an assertion cell for what the prompt promised, so the next parameter change re-checks it`;
 
 const CELL_STATUS = `Cell status: 'ok' (code matches prompt) | 'stale' (prompt edited past the code) | 'diverged' (code hand-edited past the prompt) | 'awaiting_pick' (needs a user selection). Evaluation failure is reported by cadgang_cells_evaluate, not stored on the cell — as is 'failed', which is an assertion cell whose claim missed, and 'skipped', an assertion cell not run because checks are off (the checks arg).`;
@@ -239,6 +242,63 @@ const CELL_STATUS = `Cell status: 'ok' (code matches prompt) | 'stale' (prompt e
  */
 export function registerCellTools(server, { call, ok, fail, base, headers }) {
   const paramValue = z.union([z.number(), z.string(), z.boolean()]);
+
+  /** A PNG route as base64. (`call` reads JSON only.) */
+  async function png(route) {
+    const res = await fetch(`${base}/api${route}`, { headers });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `CADgang API error (HTTP ${res.status})`);
+    return Buffer.from(await res.arrayBuffer()).toString('base64');
+  }
+
+  /**
+   * What an edit did, in the same answer as the edit: the stack evaluated (every broken cell, the
+   * edited cell's logs and checks, failing assertions, measures) and, with look, the picture. One
+   * round trip instead of edit → evaluate → render, each of which is a model turn.
+   */
+  const AFTER = {
+    evaluate: z.boolean().optional().describe('false: return at once without evaluating (default true: the answer carries the evaluation, so no cadgang_cells_evaluate call is needed)'),
+    look: z.union([z.boolean(), z.object({ yaw: z.number().optional(), pitch: z.number().optional() })]).optional()
+      .describe('true: also return a rendered picture of the result (no cadgang_cells_render call needed); {yaw, pitch} picks the view'),
+  };
+  async function after(result, id, { evaluate = true, look } = {}) {
+    if (!evaluate && !look) return ok(result);
+    const out = { cell: result }, content = [];
+    if (evaluate) {
+      try {
+        let ev = await call('/cells/evaluate?stopOnError=0');
+        if (id && !ev.order.includes(id)) ev = await call(`/cells/evaluate?stopOnError=0&cell=${encodeURIComponent(id)}`);   // off the output's chain: evaluate it itself
+        const tell = (c) => c.id === id || c.status !== 'ok' || c.logs?.length;
+        out.evaluation = {
+          shown: ev.shown,
+          ok: ev.cells.filter((c) => !tell(c)).map((c) => c.id),
+          cells: ev.cells.filter(tell).map((c) => ({ id: c.id, status: c.status, ms: c.ms, ...(c.error && { error: c.error }), ...(c.logs?.length && { logs: c.logs }), ...(c.checks?.length && { checks: c.checks }) })),
+          assertionsPass: ev.assertionsPass,
+          failing: ev.assertions.filter((a) => !a.ok),
+          measures: ev.measures,
+        };
+      } catch (e) { out.evaluation = { error: e.message }; }
+    }
+    if (look) {
+      const qs = new URLSearchParams({ yaw: String(look.yaw ?? -35), pitch: String(look.pitch ?? 25), width: '640', height: '480' });
+      try { content.push({ type: 'image', data: await png(`/cells/preview.png?${qs}`), mimeType: 'image/png' }); }
+      catch (e) { out.look = `No picture: ${e.message}`; }
+    }
+    return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }, ...content], structuredContent: out };
+  }
+
+  /** Find-and-replace edits on a cell's code: a one-line change costs one line of output, not the whole program again. */
+  const EDITS = z.array(z.object({ old: z.string(), new: z.string() })).optional()
+    .describe("Find-and-replace edits applied in order to the cell's CURRENT code, instead of resending the whole program in 'code'. Each 'old' must occur exactly once. Use this for any change smaller than a rewrite — it is much faster.");
+  async function editedCode(id, edits) {
+    let code = (await call('/cells/document')).cells.find((c) => c.id === id)?.code;
+    if (code == null) throw new Error(`Cell '${id}' has no code to edit`);
+    for (const e of edits) {
+      const n = code.split(e.old).length - 1;
+      if (n !== 1) throw new Error(`edit 'old' must occur exactly once in cell '${id}', found ${n}: ${JSON.stringify(e.old.slice(0, 80))}`);
+      code = code.replace(e.old, () => e.new);
+    }
+    return code;
+  }
 
   const sketchSchema = z.object({
     plane: z.union([
@@ -307,14 +367,15 @@ ${CELL_API}`,
           .describe("'assert' makes this a check that fails the document rather than a step that builds geometry"),
         at: z.number().int().optional().describe('Insert position'),
         compiledBy: z.string().optional().describe('Model that authored the code'),
+        ...AFTER,
         checks: z.boolean().optional().describe("false: skip the assertion cells (the clash checks) on every evaluate and render from now on — for a quick edit to one part (a fillet, a hole, a dimension) where the checks cost more than the edit. true runs them again. Exports always run them, and 'assertionsPass' is false while they are off."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ checks, ...args }) => {
+    async ({ checks, evaluate, look, ...args }) => {
       try {
         if (checks !== undefined) await call('/cells/document/checks', { method: 'POST', body: { on: checks } });
-        return ok(await call('/cells', { method: 'POST', body: args }));
+        return after(await call('/cells', { method: 'POST', body: args }), args.id, { evaluate, look });
       } catch (e) { return fail(e); }
     }
   );
@@ -335,6 +396,8 @@ ${CELL_STATUS}`,
         params: z.record(paramValue).optional().describe('Parameter values to change'),
         prompt: z.string().optional().describe('New prompt (marks the cell stale)'),
         code: z.string().optional().describe('New code (marks the cell diverged)'),
+        edits: EDITS,
+        ...AFTER,
         refs: z.array(z.string()).optional().describe('Cells consumed; must point backwards'),
         selections: z.record(z.enum(['face', 'edge'])).optional(),
         sketch: sketchSchema.optional(),
@@ -343,10 +406,11 @@ ${CELL_STATUS}`,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ id, checks, ...body }) => {
+    async ({ id, checks, evaluate, look, edits, ...body }) => {
       try {
         if (checks !== undefined) await call('/cells/document/checks', { method: 'POST', body: { on: checks } });
-        return ok(await call(`/cells/${encodeURIComponent(id)}`, { method: 'PATCH', body }));
+        if (edits?.length) body.code = await editedCode(id, edits);
+        return after(await call(`/cells/${encodeURIComponent(id)}`, { method: 'PATCH', body }), id, { evaluate, look });
       } catch (e) { return fail(e); }
     }
   );
@@ -364,16 +428,20 @@ Params the new program still declares keep whatever value the user had dialled i
 ${CELL_API}`,
       inputSchema: {
         id: z.string().describe('Cell id'),
-        code: z.string().describe('The recompiled program'),
+        code: z.string().optional().describe("The recompiled program, whole. For a small change send 'edits' instead."),
+        edits: EDITS,
+        ...AFTER,
         prompt: z.string().optional().describe('Prompt this code was compiled from'),
         params: z.record(paramValue).optional().describe('Values to carry over'),
         compiledBy: z.string().optional().describe("Model that authored it, e.g. 'claude-opus-5'"),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ id, ...body }) => {
+    async ({ id, evaluate, look, edits, ...body }) => {
       try {
-        return ok(await call(`/cells/${encodeURIComponent(id)}/compile`, { method: 'POST', body }));
+        if (edits?.length) body.code = await editedCode(id, edits);
+        if (body.code == null) throw new Error("cadgang_cells_compile needs 'code' or 'edits'");
+        return after(await call(`/cells/${encodeURIComponent(id)}/compile`, { method: 'POST', body }), id, { evaluate, look });
       } catch (e) { return fail(e); }
     }
   );
@@ -505,10 +573,9 @@ Args:
           yaw: String(yaw), pitch: String(pitch), width: String(width), height: String(height),
         });
         if (cell) qs.set('cell', cell);
-        const png = await call(`/cells/preview.png?${qs}`, { raw: true });
         return {
           content: [
-            { type: 'image', data: png.toString('base64'), mimeType: 'image/png' },
+            { type: 'image', data: await png(`/cells/preview.png?${qs}`), mimeType: 'image/png' },
             { type: 'text', text: `Rendered ${width}x${height} preview (yaw ${yaw}°, pitch ${pitch}°).` },
           ],
         };

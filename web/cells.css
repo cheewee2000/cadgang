@@ -80,6 +80,7 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
   padding: 2px 6px; border: var(--bw-hair) solid currentColor;
 }
 .badge.ok { color: var(--ink-faint); }
+.badge.running { background: var(--ink); color: var(--paper); }
 .badge.stale { color: #c98a1e; }
 .badge.diverged { color: #4a7fb5; }
 .badge.awaiting_pick { color: #8a5cb8; }

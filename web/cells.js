@@ -609,6 +609,7 @@ function paintReport() {
 
     const b = el.querySelector('.badge');
     if (b) { b.className = `badge ${status}`; b.textContent = status.replace('_', ' '); }
+    el.classList.remove('running');
     el.classList.toggle('failed', status === 'error');
     el.classList.toggle('missed', status === 'failed');
     el.querySelector('.cell-ms').textContent = entry?.ms ? `${entry.ms}ms` : '';
@@ -1121,6 +1122,17 @@ function showDraft({ cell, op, kind }) {
     if (/^Claude is looking/.test($('#status').textContent)) return;   // a render stays: it is what Claude asked to see
     if (/^(building |testing )/.test($('#status').textContent)) $('#status').textContent = '';
     if (lastMesh) setGeometry(lastMesh);
+    paintReport();   // no cell is building any more
+    return;
+  }
+  if (op === 'cell') {   // a cell began building: light it in the stack now, whatever the draft throttle does
+    paintReport();   // the cell that was building is done: back to what is known of it
+    for (const el of document.querySelectorAll('.cell')) {
+      const on = el.dataset.id === cell, b = el.querySelector('.badge');
+      el.classList.toggle('running', on);
+      if (on && b) { b.className = 'badge running'; b.textContent = kind === 'assert' ? 'testing…' : 'building…'; el.scrollIntoView({ block: 'nearest' }); }
+    }
+    $('#status').textContent = `${kind === 'assert' ? 'testing' : 'building'} ${cell}…`;
     return;
   }
   if (draftRun) return;
