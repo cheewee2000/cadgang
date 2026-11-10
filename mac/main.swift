@@ -73,6 +73,15 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     }
 
     /// A window around a page. The page sets its own title; files dropped on it open in it.
+    /// A tab is narrow: it shows the file's name alone, without the page's "CADgang · " or " · CADgang".
+    static func tabTitle(_ page: String?) -> String {
+        var t = page ?? ""
+        for affix in ["CADgang · ", " · CADgang"] {
+            if let r = t.range(of: affix, options: [.caseInsensitive, .anchored]) { t.removeSubrange(r) }
+            if let r = t.range(of: affix, options: [.caseInsensitive, .anchored, .backwards]) { t.removeSubrange(r) }
+        }
+        return (t.isEmpty || t == "view") ? "CADgang" : t   // "view" is the viewer with no file open
+    }
     func makeWindow(_ cfg: WKWebViewConfiguration) -> DropWebView {
         let w = DropWebView(frame: .zero, configuration: cfg)
         w.navigationDelegate = self
@@ -88,7 +97,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         w.setValue(false, forKey: "drawsBackground")   // the page paints its own paper; under RENDER its viewport is see-through
         box.addSubview(w)
         w.onFiles = { [weak self, weak w] urls in if let w = w { self?.open(urls.map { $0.path }, in: w) } }
-        titleWatch.append(w.observe(\.title, options: [.new]) { [weak win] w, _ in win?.title = (w.title?.isEmpty == false) ? w.title! : "CADgang" })
+        titleWatch.append(w.observe(\.title, options: [.new]) { [weak win] w, _ in win?.title = App.tabTitle(w.title) })
         titleWatch.append(w.observe(\.url, options: [.new]) { [weak self] _, _ in self?.saveWindows() })
         if let key = NSApp.keyWindow {
             win.cascadeTopLeft(from: NSPoint(x: key.frame.minX + 24, y: key.frame.maxY - 24))
