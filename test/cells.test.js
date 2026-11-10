@@ -567,3 +567,16 @@ test('a cell can assert its own intent', () => {
     assert.throws(() => evaluateCells(doc), /exceeds 40 × 40 × 40 on X/);
   });
 });
+
+test('a drilled hole\'s seam is not one of the corners: noSeams() drops it, and the miss says so', async () => {
+  const { initBrep } = await import('../src/core/brep.js');
+  const { CellDocument, evaluateCells } = await import('../src/core/cells.js');
+  await initBrep();
+  const doc = new CellDocument();
+  doc.addCell({ id: 'plate', code: 'export default ({ brep }) => brep.subtract(brep.box(30, 14, 10), brep.translate(brep.cylinder(2.1, 12), [10, 0, -1]));' });
+  doc.addCell({ id: 'corners', code: "export default ({ brep, q, input }) => brep.fillet(input, q.edges(input).linear().along('z').expect(4), 1);" });
+  const miss = evaluateCells(doc, 'corners', { stopOnError: false }).report.find((c) => c.id === 'corners');
+  assert.match(miss.error, /matched 5 edges, expected 4.*1 of these is the seam.*noSeams\(\)/s);
+  doc.updateCell('corners', { code: "export default ({ brep, q, input }) => brep.fillet(input, q.edges(input).linear().along('z').noSeams().expect(4), 1);" });
+  assert.equal(evaluateCells(doc, 'corners', { stopOnError: false }).report.find((c) => c.id === 'corners').status, 'ok');
+});

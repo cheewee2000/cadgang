@@ -95,6 +95,8 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
 q — q.faces(shape) / q.edges(shape), then chain filters. A revolved line reads as cylindrical/conical and a shelled
   cylinder's inner wall as cylindrical, whatever OCCT calls the surface underneath.
   kinds: planar() cylindrical() conical() spherical() toroidal() | linear() circular() elliptical() | ofKind('PLANE',...)
+  noSeams() for edges: a drilled hole (any round face) has a straight SEAM edge down its wall, which linear().along('z')
+    counts with the real corners. Write q.edges(s).linear().along('z').noSeams() whenever the body has, or may later get, holes.
   direction: along('z'|'+x'|[0,0,1]) for edges; facing('+z', toleranceDeg=5) for faces (sign matters: '+z' is the top,
     'z' is both) — a drafted wall is a few degrees off its axis, so pass a wider tolerance or use .atExtreme()
   measure: ofLength(v,tol) ofArea(v,tol) ofRadius(v,tol) ofDiameter(v,tol) largerThan(v) smallerThan(v)

@@ -240,10 +240,26 @@ export function enumerate(shape, type) {
   }
   const elements = type === 'face' ? shape.faces : shape.edges;
   const describe = type === 'face' ? describeFace : describeEdge;
-  return elements.map((element, i) => {
+  const out = elements.map((element, i) => {
     trackBrepShape(element);
     return { element, d: describe(element, i) };
   });
+  if (type === 'edge') markSeams(out);
+  return out;
+}
+
+/**
+ * A round face closes on itself along a SEAM: a straight edge down a drilled hole's wall, from the one
+ * vertex of its top circle to the one vertex of its bottom circle. It is topology, not a corner anyone can
+ * see, yet "the linear edges along z" counts it — the query for a plate's four corners finds five once a
+ * hole is drilled. A closed curve's single vertex exists only for its seam, so a line running between two
+ * of them is one. Flagged (seam: true) rather than dropped: documents already count them.
+ */
+function markSeams(edges) {
+  const ends = edges.filter((e) => e.d.closed).map((e) => e.d.start);
+  if (ends.length < 2) return;
+  const at = (p) => ends.some((q) => Math.abs(q[0] - p[0]) + Math.abs(q[1] - p[1]) + Math.abs(q[2] - p[2]) < 1e-3);
+  for (const e of edges) if (e.d.kind === 'LINE' && at(e.d.start) && at(e.d.end)) e.d.seam = true;
 }
 
 /**
@@ -462,6 +478,12 @@ export class Query {
     });
   }
 
+  /** Drop the seams of round faces (see markSeams): what is left are edges someone could point at. */
+  noSeams() {
+    if (this.type !== 'edge') throw new GraphError(`.noSeams() applies to edges, but this query selects ${this.type}s`);
+    return this._add({ kind: 'filter', label: 'noSeams()', fn: (e) => !e.d.seam });
+  }
+
   /** Drop everything a sub-query would have matched. */
   exclude(build) {
     const sub = build(new Query(this.shape, this.type, []));
@@ -643,7 +665,9 @@ function summarize(found) {
     return `${d.kind} (${measure}) at [${d.center.join(', ')}]`;
   });
   const tail = found.length > shown.length ? `, …${found.length - shown.length} more` : '';
-  return `. Found: ${shown.join('; ')}${tail}`;
+  const seams = found.filter((d) => d.seam).length;
+  const hint = seams ? ` — ${seams} of these ${seams === 1 ? 'is the seam' : 'are seams'} of a round face (a hole's wall closing on itself), not a real edge: add .noSeams()` : '';
+  return `. Found: ${shown.join('; ')}${tail}${hint}`;
 }
 
 // ------------------------------------------------------------------- anchors
