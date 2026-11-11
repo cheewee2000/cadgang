@@ -1747,7 +1747,11 @@ export function tessellate(shape, opts = {}) {
   requireSolid(shape, 'shape');
   const kids = compoundParts.of(shape);
   if (kids?.length) return cachedMesh(shape, tolerance, angularTolerance, () => mergeMeshes(kids.map((k) => tessellate(k, opts))));
-  return cachedMesh(shape, tolerance, angularTolerance, () => attempt('tessellation', () => {
+  return cachedMesh(shape, tolerance, angularTolerance, () => {
+    // A moved copy's mesh is its source's mesh, moved: a knob turn or an explode re-meshes nothing.
+    const mv = movedMesh.of(shape), src = mv?.from();
+    if (src) { const t = tessellate(src, opts), positions = Float32Array.from(t.positions), normals = Float32Array.from(t.normals); mv.apply(positions, false); mv.apply(normals, true); return { ...t, positions, normals }; }
+    return attempt('tessellation', () => {
     let mesh = shape.mesh({ tolerance: Math.max(tolerance, COARSE), angularTolerance });
     // Triangle count grows about linearly with 1/tolerance, so judge the budget
     // on the FINE count the coarse one predicts — judging the coarse count let a
@@ -1764,7 +1768,28 @@ export function tessellate(shape, opts = {}) {
       // picking in the viewport works the same for both.
       faces: groups.map((g) => ({ first: g.start / 3, count: g.count / 3, faceId: g.faceId })),
     };
-  }));
+    });
+  });
+}
+
+/**
+ * The mesh with its bodies, [{first, count, name}] in triangle order: what the viewer's body list needs.
+ * An assembly goes part by part (an unchanged part's mesh is a cache hit); anything else solid by solid.
+ */
+export function tessellateBodies(shape, opts = {}, name = 'body') {
+  const meshes = [], bodies = []; let first = 0;
+  const add = (s, label) => { const t = tessellate(s, opts), count = t.indices.length / 3; meshes.push(t); bodies.push({ first, count, name: label }); first += count; };
+  const kids = compoundParts.of(shape);
+  if (kids?.length) {
+    const names = partsOf(shape)?.flatMap((p) => Array(p.count).fill(p.name || name)) ?? [];
+    let solid = 0;
+    for (const k of kids) { add(k, names[solid] ?? name); solid += brepBodies(k); }
+  } else {
+    const solids = namedSolids(shape, name);
+    if (solids.length < 2) add(shape, solids[0]?.name ?? name);
+    else solids.forEach(({ solid, name: n }, i) => { const s = track(kernel().cast(solid)); if (shape.__key) s.__key = `${shape.__key}#${i}`; add(s, n); });   // keyed by its place in a keyed shape: the next look is a lookup
+  }
+  return { ...mergeMeshes(meshes), bodies };
 }
 
 /** Crisp B-rep edge polylines for the wireframe overlay. */
@@ -1779,6 +1804,8 @@ export function tessellateEdges(shape, opts = {}) {
     return { lines, groups };
   });
   return cachedMesh(shape, `edges ${tolerance}`, angularTolerance, () => {
+    const mv = movedMesh.of(shape), src = mv?.from(), from = src && tessellateEdges(src, opts);
+    if (from) { const lines = Float32Array.from(from.lines); mv.apply(lines, false); return { lines, groups: from.groups }; }
     try {
       const e = shape.meshEdges({ tolerance, angularTolerance, keepMesh: true });
       return { lines: Array.from(e.lines), groups: e.edgeGroups ?? [] };
@@ -1815,6 +1842,8 @@ export function brepBBox(shape) {
 /** A compound's parts, when something upstream (cellapi.js) recorded them: an assembly is meshed, boxed
  *  and measured part by part, each a cache hit when that part did not change. */
 export const compoundParts = { of: () => null };
+/** Set by cellapi.js: for a translated or rotated copy, { from() → the source shape or null, apply(xyz array, isDirection) }. */
+export const movedMesh = { of: () => null };
 // Bounds by shape key: a request meshes a part for its box, then meshes it for its mesh, then measures
 // it — and the history's look and Claude's render ask the same again. Keys are content hashes.
 const boundsCache = new Map();

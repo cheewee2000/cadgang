@@ -24,7 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { GraphError } from './errors.js';
 import { compileCell, normalizeParams } from './sandbox.js';
-import { cellApi, checkCellResult, clearMeasureMemo, clearShapeMemo, childKeys, adoptChildren } from './cellapi.js';
+import { cellApi, checkCellResult, clearMeasureMemo, clearShapeMemo, childKeys, adoptChildren, keptShape } from './cellapi.js';
 import { trackBrepShape, nameParts, partsOf, setParts, brepHeapBytes, BREP_ROOM_BYTES, beginBrepScope, settleBrep, progress, brepToBuffer, brepFromBuffer } from './brep.js';
 
 const CELL_ID = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
@@ -826,7 +826,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true, checks = doc.c
       entry.cached = true;
       results.set(cell.id, setParts(trackBrepShape(hit.shape.clone()), partsOf(hit.shape)));   // a clone keeps the part names
       results.get(cell.id).__key = key;   // the shape's identity for the measure memo (cellapi.js)
-      if (hit.kids) adoptChildren(results.get(cell.id), () => hit.kids.map((k) => resultCache.get(k)?.shape));   // and its parts, while they are cached
+      if (hit.kids) adoptChildren(results.get(cell.id), () => hit.kids.map((k) => resultCache.get(k)?.shape ?? keptShape(k)));   // and its parts, while they are cached
       keys.set(cell.id, key);
       previous = results.get(cell.id);
       previousKey = key;

@@ -16,7 +16,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as ops from './ops.js';
-import { looseBounds, compoundParts, trackBrepShape } from './brep.js';
+import { looseBounds, compoundParts, movedMesh, trackBrepShape, brepHeapBytes } from './brep.js';
 import { q as queryRoot, topology, Query } from './query.js';
 import { Sketch } from './sketch.js';
 import * as checks from './checks.js';
@@ -27,15 +27,23 @@ import { softNamespace } from './softgoods.js';
 /**
  * Shape keys. A cell's inputs carry their cell's cache key (cells.js), and every op here stamps its result
  * with a key made of the op and its arguments' keys, so two shapes with one key are the same geometry.
- * An argument that cannot be keyed (a query, whose steps are functions; a sketch; a callback) leaves the
+ * An argument that cannot be keyed (a query, whose steps are functions; a callback) leaves the
  * result unkeyed, and so is anything built from it — a part's result is keyed again by its cell.
  */
 const isShape = (v) => !!v && typeof v === 'object' && typeof v.clone === 'function' && 'wrapped' in v;
 let keyable = true;
+// A sketch is its points, lines and constraints, plus the parameters its dimensions name (it carries every one of
+// the cell's, and a knob no dimension reads must not make it a new drawing): the same drawing extrudes to the same solid.
+const sketchKey = (sk) => {
+  const sketch = sk.toJSON(), text = JSON.stringify(sketch.constraints);
+  const read = Object.entries(sk.params ?? {}).filter(([k]) => new RegExp(`\\b${k.replace(/[^\w]/g, '\\$&')}\\b`).test(text));
+  return { sketch, params: read.map(([k, x]) => [k, argKey(x)]) };
+};
 const argKey = (v) => {
   if (isShape(v)) { if (!v.__key) keyable = false; return v.__key; }
   if (v == null || typeof v !== 'object') { if (typeof v === 'function') keyable = false; return v; }
   if (Array.isArray(v)) return v.map(argKey);
+  if (v instanceof Sketch) return sketchKey(v);
   const proto = Object.getPrototypeOf(v);   // a cell's own {center: 'xy'} comes from the sandbox's realm, so its prototype is that realm's Object
   if (proto === null || proto === Object.prototype || proto.constructor?.name === 'Object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, argKey(x)]));
   keyable = false; return null;
@@ -44,7 +52,10 @@ const keyOf = (op, args) => { keyable = true; const s = JSON.stringify(args.map(
 // A keyed op's result is kept too (an untracked clone the memo owns; a hit hands out a tracked clone), so a
 // check cell's clips and poses, which re-run on every evaluate, are lookups once made. Primitives are
 // cheaper to redo than to keep, and a compound carries its parts, which a clone would not.
-const SHAPE_MEMO_MAX = 128, SHAPE_MEMO_SKIP = new Set(['box', 'cylinder', 'sphere', 'cone', 'torus', 'compound', 'plane', 'planeThrough', 'pivotPlane', 'midplane', 'axisOf']);   // a moved copy shares its geometry: cheap to keep, and a check's 86 poses cost 1 s to redo
+// ponytail: a count, not bytes — a kept copy shares its geometry with the part it was copied from, so most cost nothing;
+// one cell that builds a whole assembly (40 bodies, 900 moves) needs every step kept or an edit rebuilds them all.
+// Over 1 GB of heap the count drops to 256, so stale versions of big parts do not walk the kernel to its limit.
+const SHAPE_MEMO_MAX = 4096, SHAPE_MEMO_SKIP = new Set(['box', 'cylinder', 'sphere', 'cone', 'torus', 'compound', 'plane', 'planeThrough', 'pivotPlane', 'midplane', 'axisOf']);   // a moved copy shares its geometry: cheap to keep, and a check's 86 poses cost 1 s to redo
 const shapeMemo = new Map();
 export function clearShapeMemo() { for (const v of shapeMemo.values()) { try { v.delete(); } catch { /* gone */ } } shapeMemo.clear(); }
 const keyed = (op, fn) => (...args) => {
@@ -58,7 +69,7 @@ const keyed = (op, fn) => (...args) => {
   if (isShape(r) && k) {
     r.__key = k;
     if (!SHAPE_MEMO_SKIP.has(op)) {
-      if (shapeMemo.size >= SHAPE_MEMO_MAX) { const [old, v] = shapeMemo.entries().next().value; shapeMemo.delete(old); try { v.delete(); } catch { /* gone */ } }
+      if (shapeMemo.size >= (brepHeapBytes() > 2 ** 30 ? 256 : SHAPE_MEMO_MAX)) { const [old, v] = shapeMemo.entries().next().value; shapeMemo.delete(old); try { v.delete(); } catch { /* gone */ } }
       shapeMemo.set(k, r.clone());
     }
   }
@@ -118,9 +129,12 @@ const measured = (op, fn) => (...args) => {
 // made only when something asks (a thunk).
 const children = new WeakMap();
 function alive(s) { try { return !s.wrapped.isDeleted(); } catch { return false; } }
+/** A kept shape by its key (a tracked copy), or null: how a part made inside one cell outlives that cell's scope. */
+export const keptShape = (k) => { const kept = k && shapeMemo.get(k); return kept && alive(kept) ? Object.assign(trackBrepShape(kept.clone()), { __key: k }) : null; };
 const parts = (s) => {
   let kids = children.get(s);
   if (typeof kids === 'function') { kids = kids() ?? null; children.set(s, kids); }
+  if (kids?.some((k) => k?.__key && !alive(k))) { kids = kids.map((k) => (k?.__key && !alive(k) ? keptShape(k.__key) : k)); children.set(s, kids); }   // built in a cell whose scope has closed
   return kids && kids.every((k) => k?.__key && alive(k)) ? kids : null;
 };
 const compound = keyed('compound', (...shapes) => { const r = ops.compound(...shapes); children.set(r, shapes.flat().filter(Boolean)); return r; });
@@ -128,9 +142,32 @@ const moved = (op) => {
   const move = keyed(op, ops[op]);
   return (shape, ...rest) => {
     const r = move(shape, ...rest);   // kept or fresh: either way a moved compound's parts are the moved parts
+    if ((op === 'translate' || op === 'rotate') && shape?.__key && r?.__key && !moves.has(r.__key)) {
+      if (moves.size >= 20000) moves.delete(moves.keys().next().value);
+      moves.set(r.__key, { op, from: shape.__key, rest: rest.map((a) => (Array.isArray(a) ? [...a] : a)) });
+    }
     if (children.has(shape) && !children.has(r) && !(op === 'mirror' && rest[2]?.keep)) children.set(r, () => parts(shape)?.map((k) => brep[op](k, ...rest)));
     return r;
   };
+};
+// A translated or rotated copy remembers its source by key, so its mesh is the source's mesh moved (brep.js tessellate).
+const moves = new Map();   // moved shape's key → { op, from: the source's key, rest: the move's arguments }
+movedMesh.of = (shape) => {
+  const m = shape?.__key && moves.get(shape.__key);
+  if (!m) return null;
+  let apply;
+  if (m.op === 'translate') { const [x, y, z] = m.rest[0]; apply = (a, dir) => { if (!dir) for (let i = 0; i < a.length; i += 3) { a[i] += x; a[i + 1] += y; a[i + 2] += z; } }; }
+  else {
+    const [deg, axis = [0, 0, 1], o = [0, 0, 0]] = m.rest, n = Math.hypot(...axis), [kx, ky, kz] = axis.map((v) => v / n), c = Math.cos(deg * Math.PI / 180), s = Math.sin(deg * Math.PI / 180);
+    apply = (a, dir) => {   // Rodrigues, about the axis through o
+      const [ox, oy, oz] = dir ? [0, 0, 0] : o;
+      for (let i = 0; i < a.length; i += 3) {
+        const x = a[i] - ox, y = a[i + 1] - oy, z = a[i + 2] - oz, d = (kx * x + ky * y + kz * z) * (1 - c);
+        a[i] = ox + x * c + (ky * z - kz * y) * s + kx * d; a[i + 1] = oy + y * c + (kz * x - kx * z) * s + ky * d; a[i + 2] = oz + z * c + (kx * y - ky * x) * s + kz * d;
+      }
+    };
+  }
+  return { from: () => keptShape(m.from), apply };
 };
 compoundParts.of = parts;   // brep.js meshes, boxes and measures an assembly part by part
 /** A cached cell result is a clone (cells.js); its parts come back by their keys, looked up when asked. */

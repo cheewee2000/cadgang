@@ -188,6 +188,7 @@ function busy(dir, d) {
 }
 // The rough mesh of what a kernel is building right now (see kernel.js), answered here because that
 // kernel is blocked in the build. Routed before the proxy below.
+const liveOffered = new Set();   // project folders whose live window was offered this run
 const drafts = new Map();   // session key ('' = the app's project) → the kernel's draft file (packed binary mesh)
 app.get('/api/cells/draft', (req, res) => {
   const file = drafts.get(String(req.query.session || ''));
@@ -234,6 +235,16 @@ app.use('/api/cells', (req, res, next) => {
     if (!entry && known !== project.dir) return res.status(404).json({ error: 'That live authoring session is no longer available' });
   }
   if (header && dir && !req.query.wait) { busy(dir, +1); res.once('close', () => busy(dir, -1)); }
+  // Claude's first edit of a project's cells opens a window on its live model (view.js LIVE_EXT) unless one is
+  // showing, so the change is watched from the start. Once per project per run: a window the user closed stays closed.
+  if (header && req.method !== 'GET' && !liveOffered.has(dir)) res.once('close', () => {
+    const live = path.join(dir, 'cadgang', 'cells.json');
+    if (liveOffered.has(dir) || !fs.existsSync(live)) return;
+    liveOffered.add(dir);
+    if (tabs().some((t) => t.subject.split('|').includes(live))) return;
+    const page = active?.readyState === 1 ? active : [...wss.clients].find((c) => c.readyState === 1);   // one page opens it, not every window
+    page?.send(JSON.stringify({ type: 'open', paths: [live] }));
+  });
   const k = kernelFor(entry ? path.join(entry.dir, 'cadgang', 'cells.json') : cells.filePath);
   k.inflight++; res.once('close', () => { k.inflight--; });
   k.ready.then(() => proxy(k, req, res, { 'x-cadgang-dir': entry?.dir ?? project.dir ?? '', 'x-cadgang-session': entry?.key ?? '' }), (e) => res.status(502).json({ error: e.message }));

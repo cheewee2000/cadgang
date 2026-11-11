@@ -41,6 +41,7 @@ const ui = { edges: true, wire: false, grid: true, ruler: false, units: 'mm', lo
 const section = { plane: new THREE.Plane(new THREE.Vector3(0, 0, -1), 0), axis: '', flip: 1 };
 const PROJECT_EXT = /\.cadgang$/i;
 const CAD_EXT = /\.(step|stp|iges|igs|brep)$/i;
+const LIVE_EXT = /\/cadgang\/cells\.json$/;   // a project's cell document: the window shows the model live, and redraws on every change Claude commits
 
 let statusTimer = null;
 function say(text, isError = false, keep = false) {
@@ -2549,7 +2550,7 @@ async function openBuffers(files) {
 /** Open from absolute paths — the macOS shell calls this with what Finder handed it. */
 // A load in flight counts as a file on screen, and only the newest load may add parts: at launch a window still
 // fetching its restored file took a Finder or Claude open in place, and both loads landed in it (wrong file, wrong tab).
-let loadSeq = 0, loading = false;
+let loadSeq = 0, loading = false, liveKey;   // liveKey: the cell session this window shows live (null = the app's own project), undefined on a file
 window.cadgangOpen = async function cadgangOpen(paths, { keep = false } = {}) {
   paths = [].concat(paths);
   // Another file is on screen (or on its way): this one gets its own tab, or its own window in the Mac app (the
@@ -2570,7 +2571,9 @@ async function openPaths(paths, keep, mine) {
   }
   const sameFile = paths.join('|') === subject;   // the camera stays only for a reload of the file on screen
   const t0 = performance.now(), ticket = ++loadTicket;
-  clearModel();
+  let stale = keep && sameFile && model.children.length > 0;   // a reload in place: what is on screen stays until the new model has arrived
+  if (!stale) clearModel();
+  liveKey = undefined;
   subject = paths.join('|');   // markups attach to the file by path
   announce(); renderTabs(); syncCellsPane();
   // The address says what is open, from the first byte: a reload brings the file back, and the Mac app
@@ -2578,19 +2581,23 @@ async function openPaths(paths, keep, mine) {
   if (!follow) window.history.replaceState(null, '', `${location.pathname}?open=${encodeURIComponent(subject)}`);   // window.history: `history` here is the undo stack
   let shown = 0, label = '';
   for (const p of paths) {
-    const name = p.split('/').pop();
-    say(`loading ${name}…`); progressStart(name); const tf = performance.now();
+    const live = LIVE_EXT.test(p) && await fetch(`api/cells/session?subject=${encodeURIComponent(p)}`).then((r) => r.json()).catch(() => null);
+    const name = live?.name ? `${live.name} (live)` : p.split('/').pop();
+    if (!stale) { say(`loading ${name}…`); progressStart(name); }
+    const tf = performance.now();
     try {
       const q = `path=${encodeURIComponent(p)}`;
-      const cad = CAD_EXT.test(name);
-      const buf = await fetchBuffer(cad ? `api/view/tessellate?${q}` : `api/view/file?${q}`, cad ? { method: 'POST' } : undefined);
+      const cad = !!live || CAD_EXT.test(name);
+      if (live) liveKey = live.session ?? null;
+      const buf = await fetchBuffer(live ? `api/cells/live${live.session ? `?session=${encodeURIComponent(live.session)}` : ''}` : cad ? `api/view/tessellate?${q}` : `api/view/file?${q}`, cad && !live ? { method: 'POST' } : undefined);
       if (!mine()) return;   // a newer open took this window
       const parts = cad ? parseCad(buf) : await parseMesh(name.toLowerCase().split('.').pop(), buf, name);
       if (!mine() || ticket !== loadTicket) return;   // a newer open took this window, or a newer load the progress bar
+      if (stale) { clearModel(); stale = false; }
       sources.push({ name, cad, buffer: buf });
       for (const part of parts) addPart(part, name);
       shown++; label = name; progressEnd(name, performance.now() - tf);
-    } catch (e) { if (mine() && ticket === loadTicket) { progressEnd(); loadFailed(name, e); } return; }
+    } catch (e) { if (mine() && ticket === loadTicket) { progressEnd(); if (stale) say(`${name}: ${e.message}`, true); else loadFailed(name, e); } return; }   // a failed reload leaves the last good model up
   }
   if (shown) { finishLoad(shown === 1 ? label : `${shown} files`, Math.round(performance.now() - t0), keep && sameFile); remember(paths); }
 }
@@ -2901,6 +2908,8 @@ document.addEventListener('visibilitychange', focus);
     if (msg.type === 'subject') followTo(msg.subject);
     if (msg.type === 'tabs') setTabs(msg.tabs || []);
     if (msg.type === 'raise' && msg.subject === subject) { window.webkit?.messageHandlers?.cadgang?.postMessage({ cmd: 'raise' }); window.focus(); window.cadgangOpen(subject.split('|'), { keep: true }); }   // this window has the file another was asked to open: come forward, fresh
+    if (msg.type === 'cells_progress' && liveKey !== undefined && (msg.session ?? null) === liveKey && msg.cell) { const el = $('#busy'); if (!el.hidden) el.querySelector('span').textContent = `${msg.kind === 'assert' ? 'testing' : 'building'} ${msg.cell}${msg.op && msg.op !== 'cell' ? ` · ${msg.op}` : ''}…`; }   // which cell, and the step it is on
+    if (msg.type === 'cells_changed' && liveKey !== undefined && (msg.session ?? null) === liveKey) window.cadgangOpen(subject.split('|'), { keep: true });   // Claude committed a change: the model on screen follows
     if (msg.type === 'file_changed' && subject.split('|').includes(msg.path)) { say('file changed, reloading…'); window.cadgangOpen(subject.split('|'), { keep: true }); }
   };
   ws.onclose = () => setTimeout(connect, 1500);

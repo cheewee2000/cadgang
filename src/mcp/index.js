@@ -128,7 +128,7 @@ server.registerTool(
   'cadgang_open',
   {
     title: 'Open files in the viewer',
-    description: `Open one or more CAD files in the CADgang window: STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, GLB, FBX or DXF. Several files stack into one scene. Paths must be absolute and on the machine running CADgang.`,
+    description: `Open one or more CAD files in the CADgang window: STEP, IGES, BREP, STL, OBJ, PLY, 3MF, glTF, GLB, FBX or DXF. Several files stack into one scene. A project's <folder>/cadgang/cells.json opens its cells as a LIVE model that redraws on every change you commit (it opens by itself on your first edit; reopen it this way if the user closed it). Paths must be absolute and on the machine running CADgang.`,
     inputSchema: { paths: z.array(z.string()).min(1) },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },

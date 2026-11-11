@@ -35,9 +35,11 @@ function meshingBounds(bbox, padFraction = 0.05) {
 import { meshStats } from '../core/mesher.js';
 import { renderMesh } from '../core/render.js';
 import {
-  initBrep, beginBrepScope, tessellate, tessellateEdges, exportStep, tightBounds, progress,
+  initBrep, beginBrepScope, tessellate, tessellateBodies, tessellateEdges, exportStep, tightBounds, progress,
   brepDistance, brepBBox,
 } from '../core/brep.js';
+
+import { pack } from './view.js';
 
 /** A sketch with nothing in it yet — where drawing on an empty cell starts. */
 const emptySketch = () => ({ plane: 'XY', points: [], entities: [], constraints: [] });
@@ -544,6 +546,18 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
           indices: Array.from(t.indices),
           edges,
         });
+      }, { partial: true });
+    } catch (e) { fail(res, e); }
+  });
+
+  /**
+   * The model as the viewer window takes a CAD file (view.js pack): every body with its name, so a window
+   * on <project>/cadgang/cells.json shows the cells live, with the body list, materials and markup of any file.
+   */
+  r.get('/live', async (req, res) => {
+    try {
+      await withShape(req, ({ shape, shown }) => {
+        res.type('application/octet-stream').set('X-Cadgang-Revision', String(doc.revision)).send(pack(tessellateBodies(shape, { tolerance: tolerance(req, shape) }, shown)));
       }, { partial: true });
     } catch (e) { fail(res, e); }
   });
