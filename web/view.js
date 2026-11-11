@@ -2396,7 +2396,10 @@ function updateSection() {
   capPlane.lookAt(capPlane.position.clone().add(n));
   capPlane.scale.setScalar(bbox.getSize(new THREE.Vector3()).length() * 20);   // explode carries parts well past the box
 }
-for (const b of $('#sectAxis').querySelectorAll('[data-sect]')) b.addEventListener('click', () => setSectionAxis(b.dataset.sect));
+// Calling up a section (its button or key) starts on the default side: for X and Y that is the side Invert used to give, for Z as before.
+// Invert (I) holds while that axis is up. Saved views and links set their own side through setSectionAxis.
+function callSection(axis) { if (axis && axis !== section.axis) section.flip = axis === 'z' ? 1 : -1; setSectionAxis(axis); }
+for (const b of $('#sectAxis').querySelectorAll('[data-sect]')) b.addEventListener('click', () => callSection(b.dataset.sect));
 $('#sectPos').addEventListener('input', updateSection);
 $('#sectFlip').addEventListener('click', () => { section.flip *= -1; updateSection(); });
 
@@ -3515,7 +3518,7 @@ const CMDS = [
   { key: '[', label: 'Turn left 90°', run: () => { orbit.yaw -= Math.PI / 2; } },
   { key: ']', label: 'Turn right 90°', run: () => { orbit.yaw += Math.PI / 2; } },
   { sep: true },
-  ...['x', 'y', 'z'].map((a) => ({ key: a, label: `Section ${a.toUpperCase()}`, btn: `[data-sect="${a}"]`, run: () => setSectionAxis(section.axis === a ? '' : a), on: () => section.axis === a })),
+  ...['x', 'y', 'z'].map((a) => ({ key: a, label: `Section ${a.toUpperCase()}`, btn: `[data-sect="${a}"]`, run: () => callSection(section.axis === a ? '' : a), on: () => section.axis === a })),
   { key: 'i', label: 'Invert section', btn: '#sectFlip', run: () => { if (section.axis) { section.flip *= -1; updateSection(); } } },
   { sep: true },
   { key: 'j', label: 'New joint', btn: '#newJointBtn', run: () => startPickJoint() },
