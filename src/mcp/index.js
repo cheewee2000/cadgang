@@ -182,7 +182,7 @@ server.registerTool(
       dept: z.string().default('CW&T'), technicalRef: z.string().optional(), createdBy: z.string().optional(), drawnBy: z.string().optional().describe('alias of createdBy'),
       approvedBy: z.string().optional(), doctype: z.string().default('Fabrication drawing'), sheetTitle: z.string().optional().describe('appended to the document type, e.g. ULTRA TOP'),
       status: z.string().default('FOR FABRICATION'), date: z.string().optional().describe('date of issue, default today'),
-      sheetNo: z.number().int().positive().optional(), sheetCount: z.number().int().positive().optional(), source: z.string().optional(),
+      sheetNo: z.number().int().positive().optional(), sheetCount: z.number().int().positive().optional(), source: z.string().optional().describe('the model to draw: its absolute path (or file name). Set it whenever more than one CADgang window is open — the window showing this file renders the sheet; without it the active window of this project does'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },

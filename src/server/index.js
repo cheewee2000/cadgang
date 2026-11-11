@@ -16,7 +16,7 @@ import crypto from 'node:crypto';
 import { fork } from 'node:child_process';
 import express from 'express';
 import { WebSocketServer } from 'ws';
-import { viewRouter, mayReadLocal } from './view.js';
+import { viewRouter, mayReadLocal, pickDrawingPage } from './view.js';
 import { CellDocument } from '../core/cells.js';
 import { SoftgoodsDocument } from '../core/softgoods-document.js';
 import { softgoodsRouter } from './softgoods.js';
@@ -47,6 +47,7 @@ let active = null;
 const under = (subject, dir) => !!dir && String(subject || '').split('|').some((f) => (f + '/').startsWith(dir.replace(/\/+$/, '') + '/'));
 function broadcast(obj) {
   const msg = JSON.stringify(obj);
+  if (obj.type === 'drawing') return pickDrawingPage([...wss.clients].filter((c) => c.readyState === 1), active, { dir: obj.dir, source: obj.spec?.source })?.send(msg);   // one sheet, one page
   const mine = obj.type === 'snapshot_request' && obj.dir ? [...wss.clients].filter((c) => c.readyState === 1 && under(c.subject, obj.dir)) : [];
   const to = mine.length ? mine : (obj.type === 'open' || obj.type === 'snapshot_request') && active?.readyState === 1 ? [active] : wss.clients;
   for (const client of to) if (client.readyState === 1) client.send(msg);
@@ -273,7 +274,7 @@ wss.on('connection', (ws) => {
     try {
       const msg = JSON.parse(m);
       if (msg.type === 'focus' && active !== ws) { active = ws; broadcastTabs(); }
-      if (msg.type === 'open_subject') { ws.subject = String(msg.subject || ''); broadcastTabs(); }
+      if (msg.type === 'open_subject') { ws.subject = String(msg.subject || ''); ws.subjectAt = Date.now(); broadcastTabs(); }
       // a page was asked to open a file another page has: that page comes forward (and takes the next open)
       if (msg.type === 'raise') { for (const c of wss.clients) if (c.subject === msg.subject && c.readyState === 1) { c.send(JSON.stringify({ type: 'raise', subject: msg.subject })); active = c; } broadcastTabs(); }
     } catch {}

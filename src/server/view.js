@@ -105,6 +105,23 @@ export function pack(m) {
 const VERCEL_TOKEN_FILE = path.join(os.homedir(), '.cadgang', 'vercel_token');
 const vercelToken = () => { try { return fsSync.readFileSync(VERCEL_TOKEN_FILE, 'utf8').trim(); } catch { return ''; } };
 
+/** The ONE page that renders and saves a drawing: every page that got the message wrote a sheet next to its
+ *  own file, in whatever project it was showing. In order: the page showing the file the spec names (`source`,
+ *  a path or a file name), else among the pages showing a file in the asking session's folder (`dir`; all open
+ *  pages when none is) the active one, else the one that opened its file last. null when no page has a file. */
+export function pickDrawingPage(pages, active, { dir, source } = {}) {
+  const files = (c) => String(c.subject || '').split('|').filter(Boolean);
+  const open = pages.filter((c) => files(c).length);
+  const newest = (list) => [...list].sort((a, b) => (b.subjectAt || 0) - (a.subjectAt || 0))[0] ?? null;
+  const under = (c) => !!dir && files(c).some((f) => (f + '/').startsWith(String(dir).replace(/\/+$/, '') + '/'));
+  if (source) {
+    const named = open.filter((c) => files(c).some((f) => f === source || path.basename(f) === path.basename(String(source))));
+    if (named.length) return newest(named.some(under) ? named.filter(under) : named);
+  }
+  const mine = open.filter(under), pool = mine.length ? mine : open;
+  return pool.includes(active) ? active : newest(pool);
+}
+
 export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   const watch = fileWatcher(broadcast);
   const local = async (req) => { const f = await localFile(req); watch(f.path); return f; };
@@ -308,7 +325,7 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       const t = setTimeout(() => done({ error: 'The viewer did not answer in 90 s — is a file open in a CADgang window?' }), 90_000);
       drawingWaiters.push((r) => { clearTimeout(t); done(r); });
     });
-    broadcast({ type: 'drawing', spec });
+    broadcast({ type: 'drawing', spec, dir: req.get('x-cadgang-project') || null });
     const r2 = await result;
     if (r2.error) return res.status(500).json({ error: r2.error });
     res.json({ path: r2.path, url: '/api/view/drawing' });
