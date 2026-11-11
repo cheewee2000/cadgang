@@ -846,7 +846,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true, checks = doc.c
       try { progress.fn?.('cell', null); } catch { /* cosmetic: the pane lights the cell that is building */ }
       const value = compiled.run(cellApi({
         params: cell.params, input, inputs, selections: cell.selections, sketch: cell.sketch,
-        checked: entry.checks, flats: entry.flats,
+        checked: entry.checks, flats: entry.flats, logs: compiled.logs,
       }));
       entry.logs = compiled.logs.map((l) => ({ ...l }));
       // An assertion cell measures; it does not model. Its result is whatever

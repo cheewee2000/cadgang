@@ -259,7 +259,7 @@ function occtMessage(thrown) {
  * cause, and the kernel's phrase after it for the record.
  */
 const OCCT_MEANINGS = [
-  [/StartSol echec|PerformSurf|Failed processing|BRepFilletAPI|ChFi3d/i,
+  [/StartSol echec|PerformSurf|Failed processing|BRepFilletAPI|ChFi3d|ChFiDS|too big radiuses|no suitable edges/i,
     'the radius or distance is too large for the neighbouring faces — reduce it, or fillet/chamfer fewer edges at once'],
   [/hasn't gp_Pnt|TopoDS_Vertex/i,
     'the two bodies meet on coincident geometry too closely — move them apart by more than 0.01 mm, or overlap them'],
@@ -489,11 +489,46 @@ export function brepBoolean(op, base, tools) {
     bop.SetArguments(args);
     bop.SetTools(list);
     bop.Build(progress);
-    bop.SimplifyResult(true, true, 1e-3);   // as replicad does after each of its booleans
-    return track(kernel().cast(bop.Shape()));
+    return track(kernel().cast(unified(bop.Shape())));
   } finally {
     for (const o of [bop, progress, args, list]) o.delete();
   }
+}
+
+/** A shape passes the kernel's full check, geometry included: what a rescue's result must do before it is believed. */
+export function brepIsValid(shape) {
+  const check = new OC.BRepCheck_Analyzer(shape.wrapped, true, false);
+  try { return check.IsValid_2(); } finally { check.delete(); }
+}
+
+/** For each of `edges`, the set of faces of `shape` it borders (by face index). */
+export function brepEdgeFaces(shape, edges) {
+  const sets = edges.map(() => new Set()); let f = 0;
+  for (const face of kernel().iterTopo(shape.wrapped, 'face')) {
+    for (const e of kernel().iterTopo(face, 'edge')) edges.forEach((sel, i) => { if (e.IsSame(sel.wrapped)) sets[i].add(f); });
+    f++;
+  }
+  return sets;
+}
+
+/** Topology of a result is intact (cheap: no geometry controls). */
+function isSound(wrapped) {
+  const check = new OC.BRepCheck_Analyzer(wrapped, false, false);
+  try { return check.IsValid_2(); } finally { check.delete(); }
+}
+
+/**
+ * A boolean's result with coplanar faces and collinear edges merged, or the result as it was if merging broke it.
+ *
+ * This used to be the builder's own SimplifyResult(true, true, 1e-3), as replicad does. On a body with lofted
+ * faces (an imported horn: a bell lofted onto tubes) that call threw, or handed back a shape missing the bell,
+ * AND damaged the operand it was given, so every later operation on that body was wrong too. Any angular
+ * tolerance set by hand did the same (1e-3 down to 1e-7). The unifier on its own, at its default tolerance,
+ * merges what is exactly coplanar and leaves the operands alone.
+ */
+function unified(wrapped) {
+  const u = new OC.ShapeUpgrade_UnifySameDomain_2(wrapped, true, true, false);
+  try { u.Build(); const s = u.Shape(); return isSound(s) ? s : wrapped; } catch { return wrapped; } finally { u.delete(); }
 }
 
 /** The volume two shapes share, by one raw Common: no simplification of a result that is only measured, and
@@ -1095,6 +1130,345 @@ export function brepSimplify(shape) {
   });
 }
 
+// ------------------------------------------------------------ local fillet
+//
+// OCCT's fillet walks each seam to its end vertices and gives up when an end is complicated (several
+// faces meeting, a seam running into a bend): "PerformSurf: failed approximation", at any radius, although
+// the middle of the seam is easy. So when the whole-body fillet fails, each seam is filleted on its own
+// inside a tube cut out around it: the tube's flat caps are the only ends the fillet ever sees. The seam
+// stops `setback` short of its real ends and the radius runs out to almost nothing over `runout`, so the
+// fillet fades into the corner instead of stopping at a step. Then the tube is fused back.
+
+const EDGE_SAMPLES = 96;
+
+/** An edge as positions along its length: samples [[x,y,z]…] at even parameter steps, and its tangents at both ends. */
+function edgeTrack(edge) {
+  const c = new OC.BRepAdaptor_Curve_2(edge), p = new OC.gp_Pnt_1(), v = new OC.gp_Vec_1();
+  try {
+    const u0 = c.FirstParameter(), u1 = c.LastParameter(), pts = [];
+    for (let i = 0; i <= EDGE_SAMPLES; i++) { c.D1(u0 + (u1 - u0) * i / EDGE_SAMPLES, p, v); pts.push(pnt(p)); }
+    c.D1(u0, p, v); const t0 = unit3([v.X(), v.Y(), v.Z()]);
+    c.D1(u1, p, v); const t1 = unit3([v.X(), v.Y(), v.Z()]);
+    let length = 0; const at = [0];
+    for (let i = 1; i < pts.length; i++) { length += Math.hypot(...sub3(pts[i], pts[i - 1])); at.push(length); }
+    return { edge, u0, u1, pts, at, length, t0, t1 };
+  } finally { c.delete(); p.delete(); v.delete(); }
+}
+
+/** Selected edges joined end to end where they meet tangent: [{ links: [{ e, rev }], closed }]. */
+function tangentChains(tracks) {
+  const TOL = 1e-4, left = new Set(tracks), chains = [];
+  const end = (l, tail) => { const first = tail === l.rev; return { p: first ? l.e.pts[0] : l.e.pts[EDGE_SAMPLES], t: first ? l.e.t0 : l.e.t1 }; };
+  const joins = (a, b) => Math.hypot(...sub3(a.p, b.p)) < TOL && Math.abs(dot3(a.t, b.t)) > 0.999;
+  while (left.size) {
+    const first = left.values().next().value; left.delete(first);
+    const links = [{ e: first, rev: false }];
+    for (const grow of [true, false]) {             // forwards off the tail, then backwards off the head
+      for (let found = true; found;) {
+        found = false;
+        const here = grow ? end(links[links.length - 1], true) : end(links[0], false);
+        for (const e of left) {
+          for (const rev of [false, true]) {
+            const l = { e, rev };
+            if (!joins(here, end(l, !grow))) continue;
+            left.delete(e); if (grow) links.push(l); else links.unshift(l);
+            found = true; break;
+          }
+          if (found) break;
+        }
+      }
+    }
+    const closed = links.length > 0 && joins(end(links[links.length - 1], true), end(links[0], false))
+      && (links.length > 1 || Math.hypot(...sub3(first.pts[0], first.pts[EDGE_SAMPLES])) < TOL);
+    chains.push({ links, closed, length: links.reduce((n, l) => n + l.e.length, 0) });
+  }
+  return chains;
+}
+
+/** The stretch of a chain between two distances along it: its polyline, and the point and tangent at each end. */
+function chainStretch(chain, from, to, trash) {
+  const line = []; let base = 0, start = null, finish = null;
+  for (const { e, rev } of chain.links) {
+    const a = Math.max(from, base) - base, b = Math.min(to, base + e.length) - base; base += e.length;
+    if (b - a < 1e-7) continue;
+    // distance along the edge -> parameter, through the samples (a spline's parameter is not its length)
+    const param = (d) => {
+      const want = rev ? e.length - d : d; let i = 1;
+      while (i < EDGE_SAMPLES && e.at[i] < want) i++;
+      const f = (want - e.at[i - 1]) / Math.max(e.at[i] - e.at[i - 1], 1e-12);
+      return e.u0 + (e.u1 - e.u0) * (i - 1 + Math.min(Math.max(f, 0), 1)) / EDGE_SAMPLES;
+    };
+    const ua = param(a), ub = param(b), lo = Math.min(ua, ub), hi = Math.max(ua, ub);
+    const curve = OC.BRep_Tool.Curve_2(e.edge, { current: 0 }, { current: 0 }), mk = new OC.BRepBuilderAPI_MakeEdge_25(curve, lo, hi);
+    trash.push(curve, mk);
+    const piece = mk.Edge(), c = new OC.BRepAdaptor_Curve_2(piece), p = new OC.gp_Pnt_1(), v = new OC.gp_Vec_1();
+    trash.push(c, p, v);
+    const N = Math.max(16, Math.ceil((b - a) / 0.25)), seg = [];   // 0.25 mm steps: the chord error stays far under the on-the-seam test
+    for (let i = 0; i <= N; i++) seg.push(pnt(c.Value(lo + (hi - lo) * i / N)));
+    if (ua > ub) seg.reverse();
+    const way = ua > ub ? -1 : 1;   // tangents point the way the chain runs, which on a reversed edge is against its parameter
+    if (!start) { c.D1(ua, p, v); start = { p: pnt(p), t: unit3([v.X() * way, v.Y() * way, v.Z() * way]) }; }
+    c.D1(ub, p, v); finish = { p: pnt(p), t: unit3([v.X() * way, v.Y() * way, v.Z() * way]) };
+    line.push(...seg);
+  }
+  const at = [0];
+  for (let i = 1; i < line.length; i++) at.push(at[i - 1] + Math.hypot(...sub3(line[i], line[i - 1])));
+  return { start, finish, line, at };
+}
+
+/** Closest approach of a point to a polyline, and how far along the polyline that is. */
+function alongPolyline(line, at, p) {
+  let best = Infinity, where = 0;
+  for (let i = 1; i < line.length; i++) {
+    const ab = sub3(line[i], line[i - 1]), len2 = dot3(ab, ab);
+    const f = len2 > 0 ? Math.min(Math.max(dot3(sub3(p, line[i - 1]), ab) / len2, 0), 1) : 0;
+    const d = Math.hypot(...sub3(p, line[i - 1].map((c, k) => c + ab[k] * f)));
+    if (d < best) { best = d; where = at[i - 1] + (at[i] - at[i - 1]) * f; }
+  }
+  return { distance: best, where };
+}
+
+/** Degrees a chain has turned through by a distance along it: fn(distance). */
+function chainTurns(chain) {
+  const at = [0], deg = [0]; let prev = null;
+  for (const { e, rev } of chain.links) {
+    const pts = rev ? [...e.pts].reverse() : e.pts;
+    for (let i = 1; i < pts.length; i++) {
+      const d = sub3(pts[i], pts[i - 1]), len = Math.hypot(...d), t = unit3(d);
+      if (!t) continue;
+      const bend = prev ? Math.acos(Math.min(1, Math.max(-1, dot3(prev, t)))) * 180 / Math.PI : 0;
+      at.push(at[at.length - 1] + len); deg.push(deg[deg.length - 1] + bend); prev = t;
+    }
+  }
+  return (d) => { let i = 1; while (i < at.length - 1 && at[i] < d) i++; return deg[i]; };
+}
+
+/**
+ * The block a stretch of seam is filleted in: a cylinder along it, `reach` to every side, with flat ends square to
+ * the seam where the stretch starts and stops. Flat-sided on purpose: a tube swept along a curved seam took over a
+ * minute to cut out of a lofted body, planes take a fraction of a second.
+ */
+function stretchBlock(st, reach, trash, progress) {
+  // a cylinder along the stretch's chord, `reach` to every side (plus the stretch's own bulge): it hugs the seam,
+  // where an axis-aligned box around a diagonal stretch is fat enough to swallow a later part of a seam that curls back
+  const p0 = st.line[0], p1 = st.line[st.line.length - 1], chord = sub3(p1, p0), len = Math.hypot(...chord);
+  const n0 = unit3(chord) ?? st.start.t, x0 = unit3(cross3(n0, Math.abs(n0[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0])), y0 = cross3(n0, x0);
+  const bulge = Math.max(...st.line.map((q) => { const d = sub3(q, p0), along = dot3(d, n0); return Math.hypot(...d.map((c, k) => c - n0[k] * along)); }));
+  const half = reach + bulge, origin = p0.map((c, k) => c - half * n0[k]);
+  const o0 = new OC.gp_Pnt_3(...origin), nd0 = new OC.gp_Dir_4(...n0), xd0 = new OC.gp_Dir_4(...x0), ax0 = new OC.gp_Ax2_2(o0, nd0, xd0);
+  const box = new OC.BRepPrimAPI_MakeCylinder_3(ax0, half, len + 2 * half);   // round, not square: a cylinder cuts out of tube-shaped parts several times faster than flat sides do
+  trash.push(o0, nd0, xd0, ax0, box);
+  let block = box.Shape();
+  const S = 8 * (len + half);
+  for (const [end, sign] of [[st.start, -1], [st.finish, 1]]) block = sliceBeyond(block, end.p, end.t.map((c) => c * sign), S, trash, progress);
+  return block;
+}
+
+/** `block` without what lies beyond the plane through `p` with outward normal `n`. */
+function sliceBeyond(block, p, n, S, trash, progress) {
+  const x = unit3(cross3(n, Math.abs(n[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0])), y = cross3(n, x);
+  const corner = p.map((c, k) => c - S * x[k] - S * y[k]);
+  const o = new OC.gp_Pnt_3(...corner), nd = new OC.gp_Dir_4(...n), xd = new OC.gp_Dir_4(...x), ax = new OC.gp_Ax2_2(o, nd, xd);
+  const beyond = new OC.BRepPrimAPI_MakeBox_5(ax, 2 * S, 2 * S, 2 * S), cut = new OC.BRepAlgoAPI_Cut_3(block, beyond.Shape(), progress);
+  trash.push(o, nd, xd, ax, beyond, cut);
+  return cut.Shape();
+}
+
+/** A box from corner to corner: the block for a whole seam, or for a small closed loop filleted in one go. */
+function wholeBlock(lo, hi, trash) {
+  const a = new OC.gp_Pnt_3(...lo), b = new OC.gp_Pnt_3(...hi), box = new OC.BRepPrimAPI_MakeBox_4(a, b);
+  trash.push(a, b, box);
+  return box.Shape();
+}
+
+/**
+ * Fillet `edges` of `shape` one tangent chain at a time, each inside a tube cut out around it.
+ * `runout`: length over which the radius fades at each open end (default 3 × radius); `setback`: how far short of
+ * the seam's ends it stops (default 0.1 × radius, at least 0.2); `reach`: how far the block extends around the seam (default 3 × radius + 1).
+ */
+export function brepLocalFillet(shape, edges, radius, { runout = null, setback = null, reach = null } = {}) {
+  const progress = new OC.Message_ProgressRange_1();
+  const solidsIn = [...kernel().iterTopo(shape.wrapped, 'solid')].length;
+  const around = reach ?? radius * 3 + 1, back = setback ?? Math.max(0.2, radius * 0.1), tip = Math.max(radius * 0.05, 0.05);
+  const trace = process.env.CADGANG_FILLET_TRACE ? (m, t0) => console.error(`  [fillet] ${m} ${Date.now() - t0} ms`) : () => {};
+  let cur = shape.wrapped;
+  try {
+    for (const chain of tangentChains(edges.map((e) => edgeTrack(e.wrapped)))) {
+      const where = chain.links[0].e.pts[EDGE_SAMPLES / 2].map((c) => +c.toFixed(1));
+      const L = chain.length, turn = chainTurns(chain), all = chain.links.flatMap((l) => l.e.pts);
+      const lo = [0, 1, 2].map((k) => Math.min(...all.map((q) => q[k])) - around), hi = [0, 1, 2].map((k) => Math.max(...all.map((q) => q[k])) + around);
+      if (!chain.closed && L - 2 * back < radius) throw new GraphError(`fillet: the seam near [${where}] is too short (${L.toFixed(1)} mm) for a local R${radius} fillet`);
+      // Stretches of the chain, each with the radius at its two ends. The constant part goes in pieces that each
+      // turn under 60 degrees, so a piece's flat ends never slice the seam twice; a small closed loop goes whole.
+      const steady = (from, to, least = 1) => { const n = Math.max(least, Math.ceil((turn(to) - turn(from)) / 60)); return Array.from({ length: n }, (_, i) => [from + (to - from) * i / n, from + (to - from) * (i + 1) / n, radius, radius]); };
+      const whole = chain.closed && Math.max(...hi.map((h, k) => h - lo[k])) - 2 * around <= 6 * around;
+      const fade = chain.closed ? 0 : Math.min(runout ?? radius * 3, (L - 2 * back) * 0.45);
+      const stretches = whole ? [[0, L, radius, radius]] : chain.closed ? steady(0, L, 3)
+        : [[back, back + fade, tip, radius], ...steady(back + fade, L - back - fade), [L - back - fade, L - back, radius, tip]];
+
+      // One stretch at a time, each cut out of the body in a block that hugs it, filleted, and fused back. Every
+      // larger cut tried instead was worse on a body with lofted faces: a box around the whole seam reaches past
+      // its ends into the corners it was meant to avoid and came back EMPTY without an error (caught below: no
+      // seam edge in the piece); the union of the stretches' blocks took over ten minutes to cut out.
+      for (const [from, to, r0, r1] of stretches) {
+        if (to - from < 1e-6) continue;
+        const trash = []; let t0 = Date.now();
+        try {
+          const st = chainStretch(chain, from, to, trash);
+          const block = whole ? wholeBlock(lo, hi, trash) : stretchBlock(st, around, trash, progress);
+          // On a body with lofted faces the kernel sometimes answers a Common with nothing and no error: ask again
+          // the other way round, then with a hair of fuzz, before giving up.
+          const hasEdges = (sh) => !kernel().iterTopo(sh, 'edge').next().done;
+          let taken = new OC.BRepAlgoAPI_Common_3(cur, block, progress); trash.push(taken);
+          if (!hasEdges(taken.Shape())) { taken = new OC.BRepAlgoAPI_Common_3(block, cur, progress); trash.push(taken); if (process.env.CADGANG_FILLET_TRACE) console.error('  [fillet] empty piece, asked the other way round'); }
+          if (!hasEdges(taken.Shape())) {
+            const la = new OC.TopTools_ListOfShape_1(), lt = new OC.TopTools_ListOfShape_1(); taken = new OC.BRepAlgoAPI_Common_1(); trash.push(taken, la, lt);
+            la.Append_1(cur); lt.Append_1(block); taken.SetArguments(la); taken.SetTools(lt); taken.SetFuzzyValue(1e-3); taken.Build(progress);
+            if (process.env.CADGANG_FILLET_TRACE) console.error('  [fillet] empty piece, asked with fuzz');
+          }
+          const outside = new OC.BRepAlgoAPI_Cut_3(cur, block, progress);
+          trash.push(outside);
+          const fil = new OC.BRepFilletAPI_MakeFillet(taken.Shape(), OC.ChFi3d_FilletShape.ChFi3d_Rational); trash.push(fil);
+          let added = 0, seen = 0, nearest = Infinity;
+          for (const sub of kernel().iterTopo(taken.Shape(), 'edge')) {
+            const e = OC.TopoDS.Edge_1(sub), c = new OC.BRepAdaptor_Curve_2(e);
+            const u0 = c.FirstParameter(), u1 = c.LastParameter();
+            const on = [0, 0.25, 0.5, 0.75, 1].map((f) => alongPolyline(st.line, st.at, pnt(c.Value(u0 + (u1 - u0) * f))));
+            c.delete(); seen++; nearest = Math.min(nearest, Math.max(...on.map((h) => h.distance)));
+            if (on.some((h) => h.distance > 0.01) || Math.abs(on[4].where - on[0].where) < 1e-3) continue;   // not the seam
+            const span = st.at[st.at.length - 1], rAt = (h) => r0 + (r1 - r0) * (span > 0 ? h.where / span : 0);
+            try {
+              if (r0 === r1) fil.Add_2(radius, e); else fil.Add_3(rAt(on[0]), rAt(on[4]), e);
+              added++;
+            } catch { /* already part of a contour that an earlier edge started */ }
+          }
+          if (!added) {
+            const vol = (sh) => { const g = new OC.GProp_GProps_1(); try { OC.BRepGProp.VolumeProperties_1(sh, g, false, false, false); return g.Mass().toFixed(0); } catch { return '?'; } finally { g.delete(); } };
+            console.error(`  [fillet] block ${vol(block)} mm3, piece ${vol(taken.Shape())} mm3, ends ${JSON.stringify([st.start, st.finish].map((q) => [q.p.map((c) => +c.toFixed(1)), q.t.map((c) => +c.toFixed(2))]))}`);
+          }
+          if (!added) throw new GraphError(`fillet: lost the seam near [${where}] inside its block (stretch ${from.toFixed(1)}-${to.toFixed(1)} of ${L.toFixed(1)} mm; ${seen} edges there, the closest ${nearest.toFixed(3)} mm off the seam) — try a smaller reach`);
+          try { fil.Build(progress); } catch (e) { throw new GraphError(`fillet: the local fillet near [${where}] failed too (${occtMessage(e)}) — try a smaller radius or a longer setback`); }
+          if (!fil.IsDone()) throw new GraphError(`fillet: the local fillet near [${where}] failed too — try a smaller radius or a longer setback`);
+          // the two pieces only touch, on the block's flat faces: say so (glue) and the fuse skips looking for overlaps
+          const fuse = new OC.BRepAlgoAPI_Fuse_1(), fa = new OC.TopTools_ListOfShape_1(), ft = new OC.TopTools_ListOfShape_1(); trash.push(fuse, fa, ft);
+          fa.Append_1(outside.Shape()); ft.Append_1(fil.Shape()); fuse.SetArguments(fa); fuse.SetTools(ft);
+          fuse.SetGlue(OC.BOPAlgo_GlueEnum.BOPAlgo_GlueShift); fuse.Build(progress);
+          cur = unified(fuse.Shape());   // merges the faces the block's cuts split back together
+          trace(`near [${where}] stretch ${from.toFixed(1)}-${to.toFixed(1)} of ${L.toFixed(1)} mm`, t0);
+        } finally {
+          for (const o of trash) { try { o.delete(); } catch { /* a handle the kernel already released */ } }
+        }
+      }
+    }
+    const check = new OC.BRepCheck_Analyzer(cur, true, false);
+    const sound = check.IsValid_2(); check.delete();
+    const out = track(kernel().cast(cur));
+    if (!sound || [...kernel().iterTopo(cur, 'solid')].length !== solidsIn) throw new GraphError('fillet: the local fillet could not be fused back into one valid solid');
+    return out;
+  } finally {
+    progress.delete();
+  }
+}
+
+// ------------------------------------------------------------ the fillet itself
+//
+// The builder is driven here rather than through replicad so that a radius can vary along a seam, the result
+// is checked, and, when the whole selection will not build, each seam can be tried on its own.
+
+/** One build: every item's edge at its radius [a, b] (a at the seam's end nearer `from`, else its lower end) or by its law. The checked result. */
+function filletBuild(wrapped, items, from, trash, progress) {
+  const fil = new OC.BRepFilletAPI_MakeFillet(wrapped, OC.ChFi3d_FilletShape.ChFi3d_Rational); trash.push(fil);
+  const far = (q, o) => Math.hypot(...sub3(q, o));
+  for (const { edge, r, law } of items) {
+    const before = fil.NbContours(), constant = !law && r[0] === r[1];
+    try { if (constant) fil.Add_2(r[0], edge); else fil.Add_1(edge); } catch { continue; }
+    if (constant || fil.NbContours() === before) continue;   // constant, or already on a seam an earlier edge started
+    const ic = fil.NbContours(), closed = fil.Closed(ic);
+    const v0 = fil.FirstVertex(ic), v1 = fil.LastVertex(ic), p0 = pnt(OC.BRep_Tool.Pnt(v0)), p1 = pnt(OC.BRep_Tool.Pnt(v1));
+    const startsAtFirst = closed || (from ? far(p0, from) <= far(p1, from) : ((p0[2] - p1[2]) || (p0[1] - p1[1]) || (p0[0] - p1[0])) <= 0);
+    if (!law) {
+      if (closed) throw new GraphError('fillet: [start, end] needs a seam with two ends, and this one is a closed loop — give it one radius, or stops [[0, r], …, [1, r]]');
+      fil.SetRadius_6(startsAtFirst ? r[0] : r[1], ic, v0); fil.SetRadius_6(startsAtFirst ? r[1] : r[0], ic, v1);
+      continue;
+    }
+    // A law: the radius at 17 places along every edge of the seam, which the kernel interpolates. Each edge is
+    // walked the way the seam runs, whichever way its own parameter does.
+    const tracks = []; let run = p0, L = 0;
+    for (let j = 1; j <= fil.NbEdges(ic); j++) {
+      const tr = edgeTrack(fil.Edge(ic, j)), fwd = far(tr.pts[0], run) <= far(tr.pts[EDGE_SAMPLES], run);
+      run = fwd ? tr.pts[EDGE_SAMPLES] : tr.pts[0]; L += tr.length; tracks.push({ tr, fwd });
+    }
+    let cum = 0;
+    tracks.forEach(({ tr, fwd }, j) => {
+      const K = 16, arr = new OC.TColgp_Array1OfPnt2d_2(1, K + 1); trash.push(arr);
+      for (let k = 0; k <= K; k++) {
+        const i = Math.round(k / K * EDGE_SAMPLES), pi = fwd ? i : EDGE_SAMPLES - i;
+        const t = L > 0 ? (cum + (fwd ? tr.at[pi] : tr.length - tr.at[pi])) / L : 0;
+        const g = new OC.gp_Pnt2d_3(k / K, Math.max(law(tr.pts[pi], startsAtFirst ? t : 1 - t), 0.02));
+        arr.SetValue(k + 1, g); g.delete();
+      }
+      fil.SetRadius_4(arr, ic, j + 1); cum += tr.length;
+    });
+  }
+  if (!fil.NbContours()) throw new GraphError('fillet: none of the selected edges can be filleted');
+  fil.Build(progress);
+  if (!fil.IsDone()) throw new GraphError('fillet failed: the radius or distance is too large for the neighbouring faces — reduce it, or fillet/chamfer fewer edges at once');
+  const out = fil.Shape(), check = new OC.BRepCheck_Analyzer(out, true, false), sound = check.IsValid_2(); check.delete();
+  // The kernel also answers a radius that cannot fit with a broken shape and no error (a box filleted past half
+  // its height came back with more volume than the box).
+  if (!sound) throw new GraphError('fillet failed: the radius or distance is too large for the neighbouring faces — reduce it, or fillet/chamfer fewer edges at once (the kernel built a broken shape)');
+  return out;
+}
+
+const released = (trash) => { for (const o of trash) { try { o.delete(); } catch { /* a handle the kernel already released */ } } };
+
+/** Positions along an edge, and how far a point is from it: what a radius law is written with. */
+export function brepEdgePoints(edge) { return edgeTrack(edge).pts; }
+export function brepEdgeDistance(edge) { const tr = edgeTrack(edge); return (p) => alongPolyline(tr.pts, tr.at, p).distance; }
+
+/** Fillet every item of `shape` in one build: { edge, r: [a, b] }, or { edge, law: (point, t) => radius } with t 0…1 along the seam. */
+export function brepFillet(shape, items, { from = null } = {}) {
+  const progress = new OC.Message_ProgressRange_1(), trash = [progress];
+  try { return track(kernel().cast(filletBuild(shape.wrapped, items, from, trash, progress))); } finally { released(trash); }
+}
+
+/**
+ * Fillet the items one seam at a time, for a selection that will not build at once: a seam that fails at its
+ * radius is tried at a half and a quarter, then left sharp, and the others still get theirs.
+ * Returns { shape (null when no seam took a fillet), reduced: [{ at, r, to }], skipped: [{ at, r }] }.
+ */
+export function brepFilletEach(shape, items, { from = null, budgetMs = 30000 } = {}) {
+  const progress = new OC.Message_ProgressRange_1(), trash = [progress], started = Date.now(), reduced = [], skipped = [];
+  const solids = (w) => [...kernel().iterTopo(w, 'solid')].length, solidsIn = solids(shape.wrapped);
+  let cur = shape.wrapped, done = 0;
+  try {
+    for (const it of items) {
+      // What is left of this edge on the body as it now stands: an earlier seam's fillet may have trimmed it, or run through it.
+      const tr = edgeTrack(it.edge), tol = 0.01 + 0.01 * tr.length / EDGE_SAMPLES, live = [];
+      for (const sub of kernel().iterTopo(cur, 'edge')) {
+        const e = OC.TopoDS.Edge_1(sub), c = new OC.BRepAdaptor_Curve_2(e), u0 = c.FirstParameter(), u1 = c.LastParameter();
+        const on = [0, 0.25, 0.5, 0.75, 1].map((f) => alongPolyline(tr.pts, tr.at, pnt(c.Value(u0 + (u1 - u0) * f))));
+        c.delete();
+        if (on.every((h) => h.distance < tol) && Math.abs(on[4].where - on[0].where) > 1e-3) live.push(e);
+      }
+      if (!live.length) continue;
+      // ponytail: every seam is a build of the whole body; past the budget the rest stay sharp and are reported
+      let took = false;
+      for (const k of Date.now() - started > budgetMs ? [] : [1, 0.5, 0.25]) {
+        try {
+          const out = filletBuild(cur, live.map((edge) => ({ edge, r: it.r.map((v) => v * k) })), from, trash, progress);
+          if (solids(out) !== solidsIn) continue;
+          cur = out; took = true; done++;
+          if (k < 1) reduced.push({ at: it.at, r: it.r, to: it.r.map((v) => v * k) });
+          break;
+        } catch (e) { if (e instanceof GraphError && /closed loop/.test(e.message)) throw e; }
+      }
+      if (!took) skipped.push({ at: it.at, r: it.r });
+    }
+    return { shape: done ? track(kernel().cast(cur)) : null, reduced, skipped };
+  } finally { released(trash); }
+}
+
 export function brepEdgeLength(edge) {
   return attempt('length', () => kernel().measureLength(edge));
 }
@@ -1129,7 +1503,10 @@ export function brepOffset(shape, distance) {
   if (!distance) throw new GraphError('Offset distance cannot be zero');
   return attempt('offset', () => {
     try {
-      return track(kernel().makeOffset(shape, distance));
+      const out = track(kernel().makeOffset(shape, distance));
+      // A body with fillets meeting at a corner comes back as a bare shell, which no boolean accepts
+      // ("This shape has not type, it is null"): close it into the solid it bounds.
+      return kernel().iterTopo(out.wrapped, 'solid').next().done ? track(kernel().makeSolid([out])) : out;
     } catch (e) {
       if (distance < 0 && /null|not type/i.test(String(e?.message))) {
         throw new GraphError(

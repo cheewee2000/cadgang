@@ -46,6 +46,13 @@ import {
   brepAxisOfFace,
   brepSimplify,
   brepEdgeLength,
+  brepLocalFillet,
+  brepFillet,
+  brepFilletEach,
+  brepEdgeDistance,
+  brepEdgePoints,
+  brepIsValid,
+  brepEdgeFaces,
   brepTwistedSolid,
   brepBodies,
   tightBounds,
@@ -120,7 +127,7 @@ function finderFor(query, shape, opName) {
     );
   }
   const elements = matched.map((e) => e.element);
-  return { finder: (f) => f.inList(elements), count: elements.length, elements };
+  return { finder: (f) => f.inList(elements), count: elements.length, elements, matched };
 }
 
 // ------------------------------------------------------------------ primitives
@@ -231,15 +238,124 @@ export const name = (shape, label) => setParts(shape, [{ name: String(label), co
  * fillet ("bigger on the long edges") is one expression rather than four
  * separate operations.
  */
-export function fillet(shape, query, radius) {
-  if (typeof radius === 'number' && radius <= 0) {
-    throw new GraphError('Fillet radius must be greater than zero');
+export function fillet(shape, query, radius, { local = 'auto', runout = null, setback = null, reach = null, from = null, strict = false } = {}) {
+  // A radius is a number, [start, end], or stops [[t, r], …] with t from 0 to 1 along the seam: all become { r: [a, b], law? }.
+  const spec = (r) => {
+    const ok = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+    if (ok(r)) return { r: [r, r] };
+    if (Array.isArray(r) && r.length === 2 && r.every(ok)) return { r };
+    if (Array.isArray(r) && r.length >= 2 && r.every((p, i) => Array.isArray(p) && p.length === 2 && p[0] >= 0 && p[0] <= 1 && ok(p[1]) && (!i || p[0] > r[i - 1][0]))) {
+      const top = Math.max(...r.map((p) => p[1]));
+      const law = (_, t) => { let i = 1; while (i < r.length - 1 && r[i][0] < t) i++; const [t0, r0] = r[i - 1], [t1, r1] = r[i]; return r0 + (r1 - r0) * Math.min(Math.max((t - t0) / (t1 - t0), 0), 1); };
+      return { r: [top, top], law };
+    }
+    return null;
+  };
+  if (typeof radius !== 'function' && !spec(radius)) {
+    throw new GraphError('Fillet radius must be greater than zero: a number, [start, end] for a radius that runs from one to the other along the seam, stops [[0, r], [0.5, r], [1, r]] (places from 0 to 1 along the seam, in order), or a function of the edge');
   }
   return attempt('fillet', () => {
     const s = borrow(shape, 'shape');
-    const { finder } = finderFor(query, s, 'fillet');
-    return track(s.fillet(radius, finder));
+    const { elements, matched } = finderFor(query, s, 'fillet');
+    // local: each seam in its own cut-out tube, for seams whose ends the whole-body fillet cannot resolve
+    const locally = () => brepLocalFillet(borrow(shape, 'shape'), elements, radius, { runout, setback, reach });
+    if (local === true) {
+      if (typeof radius !== 'number') throw new GraphError('fillet: a local fillet takes one radius, not a function of the edge');
+      return locally();
+    }
+    const items = matched.map((m) => ({ edge: m.element.wrapped, at: m.d.center, element: m.element, ...spec(typeof radius === 'function' ? radius(m.element) : radius) })).filter((it) => it.r);
+    if (!items.length) throw new GraphError('fillet: the radius function gave no edge a radius');
+    const scaled = (k) => items.map((it, i) => {
+      const f = typeof k === 'number' ? k : k[i], law = it.law;
+      return { ...it, r: it.r.map((v) => v * f), ...(law && { law: (p, t) => law(p, t) * f }) };
+    });
+    try {
+      return brepFillet(s, items, { from });
+    } catch (failed) {
+      if (failed instanceof GraphError && /closed loop/.test(failed.message)) throw failed;
+      const why = crowdedEdges(s, items), stop = () => (why ? new GraphError(`fillet failed: ${why.message}`) : failed);
+      // A radius of exactly half a thickness (a full round) leaves the kernel a face of zero width and it
+      // refuses; a hair under builds.
+      if (!why || why.tangent) { try { return brepFillet(s, scaled(1 - 1e-4), { from }); } catch { /* not a tangent radius */ } }
+      if (strict) throw stop();
+      // From here on the fillet is fitted: every seam gets the radius asked for where it fits, less where it
+      // does not, and the result carries a note saying which (the cell's log shows it).
+      const n = (v) => +v.toFixed(2), R = (r) => (r[0] === r[1] ? `R${n(r[0])}` : `R${n(r[0])}–${n(r[1])}`), at = (p) => `[${(p ?? []).map((c) => +c.toFixed(1))}]`;
+      const noted = (out, lines) => {
+        out.__note = `fillet: not every edge took its radius — ${lines.slice(0, 6).join('; ')}${lines.length > 6 ? `; and ${lines.length - 6} more` : ''}. Pass { strict: true } to make this an error instead.`;
+        return out;
+      };
+      let fitted = items;
+      if (why && !why.tangent) {
+        // Two edges too close for both radii. First PINCH: each keeps its radius along the seam and narrows only
+        // where the other is near, by a law of the distance between them (0.9 of the room, for the interpolation's overshoot).
+        const near = items.map((it) => brepEdgeDistance(it.edge)), top = items.map((it) => Math.max(...it.r));
+        const pinched = items.map((it, i) => {
+          const others = why.pairs.flatMap(([a, b]) => (a === i ? [b] : b === i ? [a] : []));
+          if (!others.length) return it;
+          const capped = { ...it, r: it.r.map((v) => v * why.scale[i] * 0.98), ...(it.law && { law: (p, t) => it.law(p, t) * why.scale[i] * 0.98 }) };
+          if (it.law || it.r[0] !== it.r[1]) return capped;
+          const law = (p) => Math.min(top[i], ...others.map((j) => 0.9 * near[j](p) * top[i] / (top[i] + top[j])));
+          const along = brepEdgePoints(it.edge).map(law);
+          if (Math.max(...along) - Math.min(...along) < 0.05 * top[i]) return capped;   // as tight all the way along: one radius
+          const pts = brepEdgePoints(it.edge), loop = Math.hypot(...pts[0].map((c, k) => c - pts[pts.length - 1][k])) < 1e-6;
+          return { ...it, law, least: Math.min(...along), loop, capped };
+        });
+        // The kernel refuses some closed seams with a law beside another fillet (a boss next to a wall), so the
+        // second try pinches the open seams only and gives the loops the one radius the gap allows.
+        const tries = [pinched, ...(pinched.some((it) => it.loop) && pinched.some((it) => it.least && !it.loop) ? [pinched.map((it) => (it.loop ? it.capped : it))] : [])];
+        for (const tried of tries) {
+          try {
+            const out = brepFillet(s, tried, { from });
+            return noted(out, tried.flatMap((it, i) => (it === items[i] ? []
+              : [`${at(it.at)} ${R(items[i].r)} ${it.least ? `narrows to R${n(it.least)} where the next edge is near` : `built ${R(it.r)}`}`])));
+          } catch (e) { if (process.env.CADGANG_FILLET_TRACE) console.error(`  [fillet] pinch failed: ${e?.message ?? e}`); }
+        }
+        // Then the plain way: those edges at the one radius the gap allows.
+        fitted = scaled(why.scale.map((k) => (k < 1 ? k * 0.98 : 1)));
+        try {
+          return noted(brepFillet(s, fitted, { from }), items.flatMap((it, i) => (why.scale[i] < 1 ? [`${at(it.at)} ${R(it.r)} built ${R(fitted[i].r)}`] : [])).concat(why.message));
+        } catch { /* something else is in the way too */ }
+      } else if (local !== false && typeof radius === 'number') {
+        try { return locally(); } catch { /* seam by seam, then */ }
+      }
+      const fit = brepFilletEach(s, fitted, { from });
+      if (!fit.shape) throw stop();
+      const was = (p) => items.find((it) => it.at === p)?.r;
+      const lines = [
+        ...items.flatMap((it, i) => (fitted[i].r[0] < it.r[0] && !fit.reduced.some((x) => x.at === it.at) && !fit.skipped.some((x) => x.at === it.at) ? [`${at(it.at)} ${R(it.r)} built ${R(fitted[i].r)}`] : [])),
+        ...fit.reduced.map((x) => `${at(x.at)} ${R(was(x.at))} built ${R(x.to)}`),
+        ...fit.skipped.map((x) => `${at(x.at)} ${R(was(x.at))} left sharp`),
+      ];
+      return lines.length ? noted(fit.shape, lines) : fit.shape;
+    }
   });
+}
+
+/**
+ * Why a fillet could not fit, when the reason is two selected edges too close together across a face they
+ * share (a thin wall, a short step, two bosses side by side): their fillets would overlap. Null when it is not that;
+ * `tangent` when the two fillets would exactly touch; `scale[i]` is what edge i's radius must shrink by to fit, `pairs` the [i, j] too close together.
+ */
+function crowdedEdges(shape, items) {
+  if (items.length > 80) return null;   // ponytail: every pair is measured; past 80 edges the kernel's own words stand
+  const matched = items.map((it) => ({ element: it.element, d: { center: it.at } }));
+  const faces = brepEdgeFaces(shape, matched.map((m) => m.element)), r = items.map((it) => Math.max(...it.r)), scale = items.map(() => 1), pairs = [];
+  let worst = null;
+  for (let i = 0; i < matched.length; i++) for (let j = i + 1; j < matched.length; j++) {
+    if (!r[i] || !r[j] || ![...faces[i]].some((f) => faces[j].has(f))) continue;
+    let gap; try { gap = brepDistanceBetween(matched[i].element, matched[j].element); } catch { continue; }
+    const need = r[i] + r[j];
+    if (gap < 1e-6 || gap > need + 1e-9) continue;   // they meet at a corner, or there is room
+    scale[i] = Math.min(scale[i], gap / need); scale[j] = Math.min(scale[j], gap / need); pairs.push([i, j]);
+    if (!worst || gap / need < worst.gap / worst.need) worst = { gap, need, i, j };
+  }
+  if (!worst) return null;
+  const at = (m) => `[${(m.d.center ?? []).map((c) => +c.toFixed(1))}]`, n = (v) => +v.toFixed(3);
+  const tangent = worst.gap >= worst.need - 1e-9;
+  return { tangent, scale, pairs, message: `the edges at ${at(matched[worst.i])} and ${at(matched[worst.j])} are ${n(worst.gap)} mm apart across the face between them, ` +
+    `and their fillets need ${tangent ? 'more than ' : ''}${n(worst.need)} mm — ` +
+    (r[worst.i] === r[worst.j] ? `use a radius under ${n(worst.gap / 2)}` : 'reduce one of the two radii') + ', or leave one of the two edges out' };
 }
 
 /**

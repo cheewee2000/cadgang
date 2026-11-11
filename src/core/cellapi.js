@@ -66,6 +66,19 @@ const keyed = (op, fn) => (...args) => {
 };
 
 /**
+ * A fillet that had to be fitted (a radius reduced, an edge left sharp) says so in the cell's log, as a warning.
+ * The note is kept by the shape's key, because a remembered shape comes back as a copy without it.
+ */
+const fitNotes = new Map();
+const notedFillet = (logs) => (...args) => {
+  const r = brep.fillet(...args), k = r?.__key;
+  if (r?.__note && k) { if (fitNotes.size >= 1000) fitNotes.clear(); fitNotes.set(k, r.__note); }
+  const note = r?.__note ?? (k ? fitNotes.get(k) : null);
+  if (note) logs.push({ level: 'warn', text: note });
+  return r;
+};
+
+/**
  * Measures (a clash volume, a bounding box) of a keyed shape are remembered, so a check of two parts
  * that did not change is a lookup. This is what makes an assertion cell over a whole assembly cost only
  * the pairs the edit touched: the cell itself re-runs, the kernel work does not.
@@ -333,11 +346,11 @@ const assert = assertions([]);
  * name what it means.
  */
 export function cellApi({
-  params = {}, input = null, inputs = {}, selections = {}, sketch = null, checked = [], flats = [],
+  params = {}, input = null, inputs = {}, selections = {}, sketch = null, checked = [], flats = [], logs = null,
 }) {
   return Object.freeze({
     p: Object.freeze({ ...params }),
-    brep,
+    brep: logs ? Object.freeze({ ...brep, fillet: notedFillet(logs) }) : brep,
     q,
     sk: sketchNamespace(params, sketch),
     assert: assertions(checked),

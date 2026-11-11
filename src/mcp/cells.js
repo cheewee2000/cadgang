@@ -67,7 +67,22 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     from the face, and a hollow boss keeps its bore. Fast on solid geometry (~0.1 s); on a SHELLED part every boolean
     is slow (5–15 s), and any boolean AFTER the thread that touches it is slow too — so thread LAST, after patterns and
     decorations, and shell before threading or use length to keep the thread clear of curved inner surfaces.
-  modifiers: fillet(shape, edgeQuery, radius|fn(edge)); chamfer(shape, edgeQuery, distance | {distances:[a,b], face:faceQuery}
+  modifiers: fillet(shape, edgeQuery, radius | [start, end] | stops | fn(edge), {from, strict, local, runout, setback, reach}) —
+    a radius can VARY along each seam (a seam = the edge plus the edges tangent to it): [start, end] runs from one to the
+    other, and stops [[0, 2], [0.5, 6], [1, 2]] set it at places from 0 to 1 along the seam (in order; the kernel
+    interpolates smoothly, so it can overshoot a little between far-apart stops). 0 / start is the seam's end nearer the
+    point from (default: its lower end). A closed loop takes one radius or stops, not [start, end]. fn(edge) may return
+    any of these. A FILLET FITS RATHER THAN FAILS: a radius of exactly half a thickness (a full round) builds; when two
+    selected edges are too close for both radii, each keeps its radius and NARROWS only where the other is near (a wall
+    fillet past a boss), or, where it is as tight all the way along, is built at what the gap allows; when the
+    selection still will not build, each seam is filleted on
+    its own, at half or a quarter of its radius if need be, or left sharp. Whenever an edge did not take the radius asked
+    for, the cell's log carries a warning naming each such edge and what it got — READ IT, and change the radius or the
+    selection if the fitted result is not what was meant. strict: true makes any of that an error instead (use it when
+    the exact radius matters). Only when no edge can be filleted at all is it an error. On an imported body whose seams
+    run into complicated corners there is also a LOCAL fillet (tried by itself; local: true goes straight there, local:
+    false never does): each seam is filleted inside a tube cut out around it and fused back, stopping setback short of
+    the seam's ends and fading to nothing over runout (default 3 × radius); one radius only; chamfer(shape, edgeQuery, distance | {distances:[a,b], face:faceQuery}
     | {distance, angle, face}); shell(shape, faceQuery|null, thickness) — POSITIVE hollows INWARD, negative grows outward,
     null query seals a void; shell BEFORE filleting whenever a fillet radius is under the wall thickness (the inward offset
     collapses such a fillet and the shell fails); lofts and other cornered curved bodies shell by whole-body offset, which can only OPEN planar faces; offset(shape, distance) grows every face (negative shrinks);
