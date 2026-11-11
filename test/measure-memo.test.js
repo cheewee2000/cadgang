@@ -88,3 +88,39 @@ test('a check cell\'s clips and poses are kept: the second evaluate makes no boo
   assert.equal(run.report.find((e) => e.id === 'check').checks[0].label, 'piece 160');
   assert.equal(brepOperationStats().intersect?.count, 1, 'the clip came from the memo');
 });
+
+test('two parts moved together are the same pair: one clash measure for every pose', async () => {
+  await initBrep(); clearCellCache();
+  const doc = new CellDocument();
+  doc.addCell({ id: 'a', prompt: 'a', code: 'export default ({ brep }) => brep.box(10, 10, 10)' });
+  doc.addCell({ id: 'b', prompt: 'b', code: 'export default ({ brep }) => brep.translate(brep.cylinder(3, 20), [4, 1, 0])' });
+  doc.addCell({ id: 'check', kind: 'assert', refs: ['a', 'b'], prompt: 'poses', code: `export default ({ brep, inputs, assert }) => {
+    const pose = (s, d) => brep.translate(brep.rotate(s, d, [0, 0, 1], [30, -4, 0]), [d, 2, 1]);
+    const v = [0, 17, 143.5, 270].map((d) => brep.interference(pose(inputs.a, d), pose(inputs.b, d)));
+    const apart = brep.interference(pose(inputs.a, 17), pose(inputs.b, 18));   // not together: a new measure
+    assert.ok(v.every((x) => Math.abs(x - v[0]) < 1e-6) && v[0] > 1 && Math.abs(apart - v[0]) > 1e-3, v.join(' ') + ' / ' + apart);
+    return inputs.a;
+  }` });
+  resetBrepOperationStats();
+  const run = evaluateCells(doc, 'check', { stopOnError: false });
+  assert.equal(run.report.find((e) => e.id === 'check').status, 'ok', JSON.stringify(run.report.find((e) => e.id === 'check')));
+  assert.equal(count('interference'), 2, 'four poses moved together, one measure; the fifth is its own');
+});
+
+test('a clash volume: clear, touching, crossing, and one part wholly inside another', async () => {
+  await initBrep();
+  const ops = await import('../src/core/ops.js'), { beginBrepScope } = await import('../src/core/brep.js');
+  const scope = beginBrepScope();
+  try {
+    const a = ops.box(10, 10, 10), at = (s, v) => ops.translate(s, v), near = (v, want, what) => assert.ok(Math.abs(v - want) < 1e-6, `${what}: ${v}`);
+    near(ops.interference(a, at(a, [30, 0, 0])), 0, 'apart');
+    near(ops.interference(a, at(a, [10, 0, 0])), 0, 'face to face');
+    near(ops.interference(a, at(a, [5, 0, 0])), 500, 'crossing');
+    near(ops.interference(a, at(ops.box(2, 2, 2), [0, 0, 4])), 8, 'a small box inside, touching nothing');
+    near(ops.interference(at(ops.box(2, 2, 2), [0, 0, 4]), a), 8, 'and the other way round');
+    const pair = ops.compound(at(ops.box(2, 2, 2), [0, 0, 4]), at(ops.box(2, 2, 2), [40, 0, 0]));
+    near(ops.interference(a, pair), 8, 'one of two bodies inside');
+    const tube = ops.subtract(ops.cylinder(8, 5), ops.cylinder(3.2, 5));
+    near(ops.interference(ops.cylinder(3, 30, { center: 'z' }), tube), 0, 'a shaft through a loose bore');
+  } finally { scope.dispose(); }
+});

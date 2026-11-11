@@ -532,7 +532,9 @@ function unified(wrapped) {
 }
 
 /** The volume two shapes share, by one raw Common: no simplification of a result that is only measured, and
- *  OCCT's oriented boxes (SetUseOBB) to pass over the sub-shapes that cannot meet. */
+ *  OCCT's oriented boxes (SetUseOBB) to pass over the sub-shapes that cannot meet.
+ *  Tried 2026-11-11 and dropped: a BRepAlgoAPI_Section first (no edges and neither inside the other = 0). Half the cost
+ *  on gears (many plane and cylinder faces), but up to 10× the Common on spline faces that are clear of each other. */
 export function brepCommonVolume(a, b) {
   const args = new OC.TopTools_ListOfShape_1(), list = new OC.TopTools_ListOfShape_1();
   const bop = new OC.BRepAlgoAPI_Common_1(), progress = new OC.Message_ProgressRange_1();
@@ -1867,6 +1869,34 @@ export function looseBounds(shape) {
     lo.delete(); hi.delete(); box.delete();
     return out;
   });
+}
+// The same box in nine more frames, the part turned 22.5° at a time about each axis. A round part's box has corners the
+// part is nowhere near, and a neighbour standing in one (a pin beside a gear) is clear of it in one of these frames.
+let turnLocs = null;
+const turnFrames = () => turnLocs ??= [0, 1, 2].flatMap((ax) => [1, 2, 3].map((n) => {
+  const o = new OC.gp_Pnt_3(0, 0, 0), d = new OC.gp_Dir_4(+(ax === 0), +(ax === 1), +(ax === 2)), a = new OC.gp_Ax1_2(o, d), t = new OC.gp_Trsf_1();
+  t.SetRotation_1(a, n * Math.PI / 8);
+  const loc = new OC.TopLoc_Location_2(t);
+  for (const x of [o, d, a, t]) x.delete();
+  return loc;
+}));
+const turnedCache = new Map();
+/** looseBounds, then the same in each turned frame: ten boxes, and two parts apart in any one of them are apart. */
+export function turnedBounds(shape) {
+  const k = shape?.__key;
+  if (k && turnedCache.has(k)) return turnedCache.get(k);
+  const kids = compoundParts.of(shape);
+  let out;
+  if (kids?.length) { const all = kids.map(turnedBounds); out = all[0].map((_, i) => unionBounds(all.map((b) => b[i]))); }
+  else out = [looseBounds(shape), ...turnFrames().map((loc) => {
+    const turned = shape.wrapped.Moved(loc, false), box = new OC.Bnd_Box_1();
+    OC.BRepBndLib.Add(turned, box, true);
+    const lo = box.CornerMin(), hi = box.CornerMax(), b = { min: [lo.X(), lo.Y(), lo.Z()], max: [hi.X(), hi.Y(), hi.Z()] };
+    lo.delete(); hi.delete(); box.delete(); turned.delete();
+    return b;
+  })];
+  if (k) { if (turnedCache.size >= 4096) turnedCache.delete(turnedCache.keys().next().value); turnedCache.set(k, out); }
+  return out;
 }
 export function tightBounds(shape) { return keyedBounds(shape, 'tight', () => { const kids = compoundParts.of(shape); return kids?.length ? unionBounds(kids.map(tightBounds)) : tightBoundsOf(shape); }); }
 function tightBoundsOf(shape) {

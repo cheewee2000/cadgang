@@ -16,7 +16,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as ops from './ops.js';
-import { looseBounds, compoundParts, movedMesh, trackBrepShape, brepHeapBytes } from './brep.js';
+import { turnedBounds, compoundParts, movedMesh, trackBrepShape, brepHeapBytes } from './brep.js';
 import { q as queryRoot, topology, Query } from './query.js';
 import { Sketch } from './sketch.js';
 import * as checks from './checks.js';
@@ -111,16 +111,19 @@ export function saveMeasureMemo() {
   try { fs.mkdirSync(path.dirname(memoFile), { recursive: true }); fs.writeFileSync(memoFile, JSON.stringify([...memo])); } catch (e) { console.error(`memo: not saved: ${e.message}`); }
 }
 const memoSave = () => { if (memoFile && !memoTimer) memoTimer = setTimeout(saveMeasureMemo, 2000).unref(); };
-const measured = (op, fn) => (...args) => {
-  const k = keyOf(op, args);
-  if (k == null) { if (process.env.CADGANG_MEMO_DEBUG) console.error(`memo: ${op} unkeyed (${args.map((a) => isShape(a) ? a.__key ?? 'shape?' : typeof a).join(', ')})`); return fn(...args); }
-  if (process.env.CADGANG_MEMO_DEBUG && !memo.has(k)) console.error(`memo: ${op} miss ${k} (${args.map((a) => isShape(a) ? a.__key : JSON.stringify(a)).join(', ')})`);
+const remembered = (k, make) => {
   if (memo.has(k)) { const v = memo.get(k); memo.delete(k); memo.set(k, v); return structuredClone(v); }   // re-insert: Map order is the LRU order
-  const v = fn(...args);
+  const t = performance.now(), v = make();
+  if (process.env.CADGANG_MEMO_DEBUG) console.error(`memo: miss ${k} ${(performance.now() - t).toFixed(1)} ms = ${JSON.stringify(v).slice(0, 40)}`);
   if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value);
   memo.set(k, v);
   memoSave();
   return structuredClone(v);
+};
+const measured = (op, fn) => (...args) => {
+  const k = keyOf(op, args);
+  if (k == null) { if (process.env.CADGANG_MEMO_DEBUG) console.error(`memo: ${op} unkeyed (${args.map((a) => isShape(a) ? a.__key ?? 'shape?' : typeof a).join(', ')})`); return fn(...args); }
+  return remembered(k, () => fn(...args));
 };
 
 // A compound remembers what went into it, so its box is the union of its parts' boxes (each a memo hit
@@ -183,14 +186,41 @@ const bbox = (shape) => {
 };
 // Interference with a compound is the sum over its parts (the same number when the parts are clear of
 // each other, which is what a clash check asserts), so an edit to one part re-measures its pairs only.
-// Boxes a part apart (padded past the coarse mesh's shortfall on a curved extreme) skip the boolean.
+// Where a moved copy sits: the part it was moved from (down the whole chain of moves) and the 3×4 rigid motion from there.
+const IDENT = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
+const mul = (a, b) => { const r = new Array(12); for (let i = 0; i < 3; i++) for (let j = 0; j < 4; j++) r[i * 4 + j] = a[i * 4] * b[j] + a[i * 4 + 1] * b[4 + j] + a[i * 4 + 2] * b[8 + j] + (j === 3 ? a[i * 4 + 3] : 0); return r; };
+const inv = (m) => { const r = [m[0], m[4], m[8], 0, m[1], m[5], m[9], 0, m[2], m[6], m[10], 0]; for (let i = 0; i < 3; i++) r[i * 4 + 3] = -(r[i * 4] * m[3] + r[i * 4 + 1] * m[7] + r[i * 4 + 2] * m[11]); return r; };
+const moveMatrix = ({ op, rest }) => {
+  if (op === 'translate') { const [x, y, z] = rest[0]; return [1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z]; }
+  const [deg, axis = [0, 0, 1], o = [0, 0, 0]] = rest, n = Math.hypot(...axis), [x, y, z] = axis.map((v) => v / n), c = Math.cos(deg * Math.PI / 180), s = Math.sin(deg * Math.PI / 180), t = 1 - c;
+  const R = [t * x * x + c, t * x * y - s * z, t * x * z + s * y, 0, t * x * y + s * z, t * y * y + c, t * y * z - s * x, 0, t * x * z - s * y, t * y * z + s * x, t * z * z + c, 0];
+  for (let i = 0; i < 3; i++) R[i * 4 + 3] = o[i] - (R[i * 4] * o[0] + R[i * 4 + 1] * o[1] + R[i * 4 + 2] * o[2]);   // about the axis through o
+  return R;
+};
+const poseOf = (key) => {
+  let m = IDENT;
+  for (let e; (e = moves.get(key)); key = e.from) m = mul(m, e.m ??= moveMatrix(e));   // the latest move is applied last: outermost on the left
+  return { base: key, m };
+};
+// The volume two parts share depends only on how one sits relative to the other, so the pair is remembered by the two
+// parts as first made and that relative placement: a hammer and its screw swung together through every pose of a
+// check are measured once, as are two parts each moved the same way.
+const interferenceOfOne = (a, b) => {
+  let A = poseOf(a.__key), B = poseOf(b.__key);
+  if (A.base > B.base) [A, B, a, b] = [B, A, b, a];
+  const rel = (P, Q) => mul(inv(P.m), Q.m).map((v) => Math.round(v * 1e6) / 1e6 + 0).join(',');   // to a nanometre; + 0 turns -0 into 0
+  let r = rel(A, B);
+  if (A.base === B.base) { const back = rel(B, A); if (back < r) r = back; }   // two copies of one part: either may be the first
+  return remembered(`interference|${A.base}|${B.base}|${r}`, () => ops.interference(a, b));
+};
+// Boxes a part apart skip the boolean: the analytic boxes (a tight one meshes an imported caster for 1.5 s), in ten
+// frames, since a pin beside a gear is inside the gear's own box. The pad made no difference to what is skipped (1 to 0.01 mm).
 const BOX_PAD = 1;
-const interferenceOfOne = measured('interference', ops.interference);
-const loose = measured('loosebox', looseBounds);   // the analytic box: a tight one meshes an imported caster for 1.5 s
+const turned = measured('turnedbox', turnedBounds);
 const apart = (a, b) => {
   if (!isShape(a) || !isShape(b) || !a.__key || !b.__key) return false;
-  const p = loose(a), q = loose(b);
-  return [0, 1, 2].some((k) => p.min[k] > q.max[k] + BOX_PAD || q.min[k] > p.max[k] + BOX_PAD);
+  const P = turned(a), Q = turned(b);
+  return P.some((p, i) => [0, 1, 2].some((k) => p.min[k] > Q[i].max[k] + BOX_PAD || Q[i].min[k] > p.max[k] + BOX_PAD));
 };
 const volumeOfOne = measured('volume', ops.volume), areaOfOne = measured('area', ops.area), bodiesOfOne = measured('bodies', ops.bodies);
 const summed = (one, self) => (shape) => { const kids = parts(shape); return kids ? kids.reduce((n, k) => n + self(k), 0) : one(shape); };
@@ -199,7 +229,7 @@ const volume = summed(volumeOfOne, (k) => volume(k)), area = summed(areaOfOne, (
 export const measuresOf = (shape) => ({ volume: volume(shape), area: area(shape), bbox: bbox(shape), bodies: bodies(shape) });
 const interference = (a, b) => {
   const A = parts(a), B = parts(b);
-  if (!A && !B) return apart(a, b) ? 0 : a?.__key > b?.__key ? interferenceOfOne(b, a) : interferenceOfOne(a, b);   // symmetric: one memo entry per pair
+  if (!A && !B) return apart(a, b) ? 0 : a?.__key && b?.__key ? interferenceOfOne(a, b) : ops.interference(a, b);   // symmetric: one memo entry per pair
   let v = 0;
   for (const x of A ?? [a]) for (const y of B ?? [b]) v += interference(x, y);
   return v;
