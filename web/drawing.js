@@ -151,7 +151,11 @@ function lineArt(renderer, scene, model, cam, pw, ph, k) {
   const r = Math.max(1, 0.35 * k / 2);                      // silhouette dilated by r px, then its inside cleared: an outline ring
   g.globalCompositeOperation = 'multiply';
   for (let i = 0; i < 8; i++) g.drawImage(sil, r * Math.cos(i * Math.PI / 4), r * Math.sin(i * Math.PI / 4));
-  g.globalCompositeOperation = 'screen'; g.filter = 'invert(1)'; g.drawImage(sil, 0, 0); g.filter = 'none';
+  // The inverted silhouette is made with a 'difference' fill: WebKit (the Mac app) has no canvas `filter`, so
+  // `invert(1)` was ignored there and every view came out a solid black shape.
+  const inv = document.createElement('canvas'); inv.width = pw; inv.height = ph;
+  const ig = inv.getContext('2d'); ig.drawImage(sil, 0, 0); ig.globalCompositeOperation = 'difference'; ig.fillStyle = '#fff'; ig.fillRect(0, 0, pw, ph);
+  g.globalCompositeOperation = 'screen'; g.drawImage(inv, 0, 0);
   g.globalCompositeOperation = 'multiply';
   for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) g.drawImage(edg, dx, dy);
   return out;
