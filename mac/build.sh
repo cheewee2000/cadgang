@@ -30,7 +30,7 @@ if [ -d mac/AppIcon.icon ]; then
 elif [ -d mac/AppIcon.iconset ]; then
   iconutil -c icns mac/AppIcon.iconset -o "$RES/AppIcon.icns"
 fi
-rsync -a package.json src web vercel "$RES/app/"
+rsync -a --exclude .cache --exclude __pycache__ package.json src web vercel stepdraw templates "$RES/app/"
 # three.js is a devDependency only because web/vendor carries its own copy.
 rsync -a --exclude three node_modules "$RES/app/"
 # Native STEP/IGES/BREP import with its OCCT dylibs (src/core/step.js falls back to WASM without it).

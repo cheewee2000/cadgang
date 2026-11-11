@@ -17,3 +17,7 @@ A macOS viewer + markup app for CAD files (Swift shell in `mac/`, node server in
 - **Buttons:** a button that is on is drawn inverted. In the header, Open / Save / New sit at the left and the right-hand group stays right-justified.
 - **Bodies panel:** the grip on the column's edge sets the width, and that width beats the name-fit minimum. Material and finish are right-justified. The panel stops above the bottom-left buttons.
 - **Releases** are cut by Che-Wei only, always with user-facing notes (`npm run release -- "<html notes>"`). Sparkle shows the notes.
+
+## Drawings
+
+A drawing for a shop is made with stepdraw: `stepdraw/README.md` is the process (STEP + Python spec → multi-sheet PDF with measured dimensions, sections and detail views) and the MCP tool `cadgang_drawing_process` hands it to a session. The title block carries the user's own company and name from `~/.config/cadgang/identity.json`; nothing defaults to CW&T. `cadgang_drawing_make` (web/drawing.js) is only the quick one-sheet viewer drawing.

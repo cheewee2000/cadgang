@@ -12,3 +12,4 @@ mac/Sparkle/
 bin/
 .playwright-cli/
 __pycache__/
+stepdraw/.cache/

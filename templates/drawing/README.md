@@ -17,11 +17,11 @@ A3 landscape, 420 × 297 mm, in the Fusion ISO A3 drawing-template style. All po
 
   | Cell | x | y | Label | Value |
   |---|---|---|---|---|
-  | Dept. | 0–30 | 33–45 | 1.8 mm | `CW&T` |
+  | Dept. | 0–30 | 33–45 | 1.8 mm | the user's company |
   | Technical reference | 30–60 | 33–45 | | optional |
-  | Created by | 60–125 | 33–45 | | author |
+  | Created by | 60–125 | 33–45 | | the user's name |
   | Approved by | 125–180 | 33–45 | | date (or an approver) |
-  | Wordmark | 0–60 | 0–33 | | `CW&T`, 9 mm, centred |
+  | Wordmark | 0–60 | 0–33 | | the user's company, 9 mm (shrunk to fit 56 mm), centred |
   | Document type | 60–125 | 22–33 | | `Fabrication drawing - <SHEET TITLE>` (shrinks to fit 62 mm) |
   | Document status | 125–180 | 22–33 | | `FOR FABRICATION` |
   | Title | 60–125 | 11–22 | | 4.5 mm |
@@ -73,7 +73,13 @@ Then one or two sheets per fabricated part (orthographic views, then sections), 
 
 ## In CADgang
 
-`web/drawing.js` renders one sheet per `cadgang_drawing_make` call in this template: the viewer draws the views
-as line art, the user's Measure dimensions become dimension lines and leaders, the spec's material / finish /
-tolerances become the first notes, `parts` draws the parts list, `sheetNo` / `sheetCount` number a set.
-Print each sheet with ⌘P (Letter and A3 sheets print at the stated scale) and merge the PDFs for a set.
+Drawings are made with **stepdraw** (`stepdraw/README.md` is the process; `cadgang_drawing_process` hands it to
+Claude): the STEP plus a Python spec become the PDF set, with measured dimensions, section views and detail
+views. Templates here: `pocket_time_capsule_spec.py` → `Pocket Time Capsule Drawing v1.pdf` (turned parts,
+details) and `ultra_bench_t_spec.py` → `Ultra Bench T Drawing v4.pdf` (milled parts, schedules).
+
+The company and author in the title block are the user's own, from `~/.config/cadgang/identity.json`
+(`{"company", "author"}`); nothing defaults to CW&T.
+
+`web/drawing.js` still renders a quick single sheet per `cadgang_drawing_make` call in this template (line-art
+views, the user's Measure dimensions, notes, parts list): for a look, not for a shop.

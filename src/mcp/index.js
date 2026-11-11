@@ -16,9 +16,11 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { registerCellTools } from './cells.js';
 import { registerSoftgoodsTools } from './softgoods.js';
+import { identity, identityFile } from './identity.js';
 
 const BASE = (process.env.CADGANG_URL || 'http://localhost:4477').replace(/\/$/, '');
-const VERSION = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../package.json'), 'utf8')).version;
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
 // Which project this session works in: the server keeps a cell document per folder (exports and history land there).
 const HEADERS = { 'X-Cadgang-Project': process.cwd() };
@@ -134,10 +136,33 @@ server.registerTool(
 );
 
 server.registerTool(
+  'cadgang_drawing_process',
+  {
+    title: 'How a drawing is made — read this first',
+    description: 'Call this FIRST whenever the user asks for a drawing, drawings, a drawing set, fabrication drawings or an RFQ package. It returns the process every CADgang drawing is made with (stepdraw: the STEP plus a short Python spec become a multi-sheet A3 PDF with dimensions measured from the model, section views, detail views, a parts list and notes), the paths of the renderer, the template specs and the reference sets, and the identity (company, author) the title block will carry. Follow the process as written, including rasterising and reading every sheet. If identity.set is false, ask the user for their company and their name and write {"company", "author"} to identityFile before rendering: a sheet never carries somebody else\'s name.',
+    inputSchema: {},
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async () => {
+    try {
+      const at = (...p) => path.join(ROOT, ...p);
+      return ok({
+        process: fs.readFileSync(at('stepdraw', 'README.md'), 'utf8'),
+        render: `python3 "${at('stepdraw', 'stepdraw.py')}" <spec.py> "<Name> Drawing v1.pdf"`,
+        templates: [at('templates', 'drawing', 'pocket_time_capsule_spec.py'), at('templates', 'drawing', 'ultra_bench_t_spec.py')],
+        references: [at('templates', 'drawing', 'Pocket Time Capsule Drawing v1.pdf'), at('templates', 'drawing', 'Ultra Bench T Drawing v4.pdf')],
+        sheetTemplate: at('templates', 'drawing', 'README.md'),
+        identity: identity(), identityFile: identityFile(),
+      });
+    } catch (e) { return fail(e); }
+  }
+);
+
+server.registerTool(
   'cadgang_drawing_request',
   {
     title: 'What drawing the user asked for, and what to ask them',
-    description: `The user pressed DRAWING in CADgang. Returns what is open (file, size in mm, bodies, how many dimensions they placed) and the questions a drawing needs answered. Ask them ONE AT A TIME, with AskUserQuestion where there are options, accepting defaults when the user says "default" or "whatever"; then call cadgang_drawing_make with the answers. The viewer renders the views itself; you only collect the spec.`,
+    description: `The user pressed DRAWING in CADgang. Returns what is open (file, size in mm, bodies, how many dimensions they placed) and the questions a drawing needs answered. A drawing for a shop is made with the stepdraw process: call cadgang_drawing_process and follow it (measured dimensions, sections, details). Only when the user wants the quick one-sheet viewer drawing: ask the questions ONE AT A TIME, with AskUserQuestion where there are options, accepting defaults when the user says "default" or "whatever"; then call cadgang_drawing_make with the answers. The viewer renders the views itself; you only collect the spec.`,
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -166,7 +191,7 @@ server.registerTool(
   'cadgang_drawing_make',
   {
     title: 'Render the drawing sheet',
-    description: 'Send the collected spec to the CADgang window: it renders the views with the dimensions drawn on, lays out the sheet, saves <model>.drawing.html next to the model and opens it in a new window (⌘P prints it to PDF at the stated scale). The sheet follows the CW&T drawing template (templates/drawing/README.md). Returns the file path.',
+    description: 'The quick one-sheet viewer drawing (no sections, no detail views, only the dimensions placed with Measure). A drawing for a shop is made with cadgang_drawing_process instead. Sends the collected spec to the CADgang window: it renders the views with the dimensions drawn on, lays out the sheet, saves <model>.drawing.html next to the model and opens it in a new window (⌘P prints it to PDF at the stated scale). The sheet follows the drawing template (templates/drawing/README.md); its company and Created by cells default to the user\'s identity (cadgang_drawing_process says where that is set). Returns the file path.',
     inputSchema: {
       sheet: z.enum(['A4', 'A3', 'A2', 'Letter', 'Tabloid']).default('A3'),
       landscape: z.boolean().default(true),
@@ -179,14 +204,19 @@ server.registerTool(
       title: z.string().optional(), dwg: z.string().optional().describe('DWG no. / part number'), part: z.string().optional().describe('alias of dwg'), rev: z.string().default('A'),
       material: z.string().optional(), finish: z.string().optional(), tolerances: z.string().optional(), notes: z.array(z.string()).optional(),
       parts: z.array(z.object({ item: z.union([z.string(), z.number()]), qty: z.union([z.string(), z.number()]), part: z.string(), material: z.string().optional() })).optional().describe('parts list, top right'),
-      dept: z.string().default('CW&T'), technicalRef: z.string().optional(), createdBy: z.string().optional(), drawnBy: z.string().optional().describe('alias of createdBy'),
+      dept: z.string().optional().describe('default: the company in the user\'s identity'), technicalRef: z.string().optional(), createdBy: z.string().optional(), drawnBy: z.string().optional().describe('alias of createdBy'),
       approvedBy: z.string().optional(), doctype: z.string().default('Fabrication drawing'), sheetTitle: z.string().optional().describe('appended to the document type, e.g. ULTRA TOP'),
       status: z.string().default('FOR FABRICATION'), date: z.string().optional().describe('date of issue, default today'),
       sheetNo: z.number().int().positive().optional(), sheetCount: z.number().int().positive().optional(), source: z.string().optional().describe('the model to draw: its absolute path (or file name). Set it whenever more than one CADgang window is open — the window showing this file renders the sheet; without it the active window of this project does'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
-  async (spec) => { try { return ok(await call('/view/drawing/make', { method: 'POST', body: { spec } })); } catch (e) { return fail(e); } }
+  async (spec) => {
+    try {
+      const who = identity();   // whose sheet it is: never a built-in name
+      return ok(await call('/view/drawing/make', { method: 'POST', body: { spec: { company: who.company, ...spec, createdBy: spec.createdBy ?? spec.drawnBy ?? who.author } } }));
+    } catch (e) { return fail(e); }
+  }
 );
 
 // ---- joints: bodies that move on an axis (a screw that turns and advances, a hinge, a drawer)
