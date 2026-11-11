@@ -31,8 +31,8 @@ elif [ -d mac/AppIcon.iconset ]; then
   iconutil -c icns mac/AppIcon.iconset -o "$RES/AppIcon.icns"
 fi
 rsync -a --exclude .cache --exclude __pycache__ package.json src web vercel stepdraw templates "$RES/app/"
-# three.js is a devDependency only because web/vendor carries its own copy.
-rsync -a --exclude three node_modules "$RES/app/"
+# three.js: the page has its own copy in web/vendor; the kernel's clash checks (src/core/cellapi.js) need the build only.
+rsync -a --exclude /node_modules/three/examples --exclude /node_modules/three/src node_modules "$RES/app/"
 # Native STEP/IGES/BREP import with its OCCT dylibs (src/core/step.js falls back to WASM without it).
 bash mac/occt/build.sh "$RES/app/bin" >/dev/null 2>&1 || echo "warning: no native OCCT importer (brew install opencascade); the app falls back to WASM"
 # A Dock-less way in from a shell: `dist/cadgang.app/Contents/MacOS/cadgang-open file.step`.

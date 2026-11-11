@@ -28,11 +28,9 @@
     "occt-import-js": "^0.0.23",
     "replicad": "^0.23.1",
     "replicad-opencascadejs": "^0.23.0",
+    "three": "^0.165.0",
+    "three-mesh-bvh": "^0.8.3",
     "ws": "^8.18.0",
     "zod": "^3.23.8"
-  },
-  "devDependencies": {
-    "three": "^0.165.0",
-    "three-mesh-bvh": "^0.8.3"
   }
 }
