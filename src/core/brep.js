@@ -1754,12 +1754,12 @@ export function tessellate(shape, opts = {}) {
     const mv = movedMesh.of(shape), src = mv?.from();
     if (src) { const t = tessellate(src, opts), positions = Float32Array.from(t.positions), normals = Float32Array.from(t.normals); mv.apply(positions, false); mv.apply(normals, true); return { ...t, positions, normals }; }
     return attempt('tessellation', () => {
-    let mesh = shape.mesh({ tolerance: Math.max(tolerance, COARSE), angularTolerance });
+    let mesh = shape.mesh({ tolerance: Math.max(tolerance, COARSE), angularTolerance }), used = Math.max(tolerance, COARSE);
     // Triangle count grows about linearly with 1/tolerance, so judge the budget
     // on the FINE count the coarse one predicts — judging the coarse count let a
     // 21k-triangle thread refine into 259k triangles and 9 s.
     if (tolerance < COARSE && (mesh.triangles.length / 3) * (COARSE / tolerance) <= MESH_BUDGET) {
-      mesh = shape.mesh({ tolerance, angularTolerance });
+      mesh = shape.mesh({ tolerance, angularTolerance }); used = tolerance;
     }
     const groups = mesh.faceGroups ?? [];
     return {
@@ -1769,6 +1769,7 @@ export function tessellate(shape, opts = {}) {
       // Match the {first, count} shape imported assets already use, so face
       // picking in the viewport works the same for both.
       faces: groups.map((g) => ({ first: g.start / 3, count: g.count / 3, faceId: g.faceId })),
+      tolerance: used,   // the chord deviation this mesh was made to (the coarse pass's when the fine one was over budget)
     };
     });
   });
