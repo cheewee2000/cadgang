@@ -134,6 +134,9 @@ input[type="range"] { accent-color: var(--ink); }
 /* ------------------------------------------------------------ viewer */
 main { display: flex; flex: 1 1 auto; min-height: 0; }
 #viewport { flex: 1 1 auto; position: relative; min-width: 0; }
+/* CAPTURE's receipt: the picture shrinks to the corner, and a note names the file */
+.captured { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 2000; pointer-events: none; box-sizing: border-box; border: var(--bw-hair) solid var(--ink); background: var(--paper); transform-origin: center; }
+.captured-note { position: fixed; top: var(--sp-4); left: 50%; transform: translateX(-50%); z-index: 2001; pointer-events: none; padding: var(--sp-2) var(--sp-4); border: var(--bw-hair) solid var(--ink); background: var(--paper); color: var(--ink); font-size: var(--fs-12); text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
 #viewport.capture { position: fixed; inset: 0; z-index: 1000; }   /* CAPTURE: the view at the window's size for the one frame it is read */
 #viewport canvas { display: block; touch-action: none; }   /* fingers and a pencil reach the page, not Safari's scroll/zoom */
 footer {

@@ -196,6 +196,20 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     } catch (e) { next(e); }
   });
 
+  // CAPTURE: the page's clean picture, written straight to the Desktop with no dialog. A name already there gets -2, -3…
+  r.post('/capture', express.raw({ type: 'image/png', limit: '200mb' }), async (req, res, next) => {
+    try {
+      const png = req.body;
+      if (!Buffer.isBuffer(png) || png.subarray(0, 8).toString('latin1') !== '\x89PNG\r\n\x1a\n') throw Object.assign(new Error('Send the picture as the raw image/png body'), { status: 400 });
+      const base = path.basename(String(req.query.name || '')).replace(/\.png$/i, '').replace(/[^\w.-]+/g, '_').replace(/^\.+/, '') || 'cadgang';
+      const dir = process.env.CADGANG_CAPTURE_DIR || path.join(os.homedir(), 'Desktop');   // the env is for tests
+      for (let n = 1; ; n++) {
+        const file = path.join(dir, `${base}${n > 1 ? `-${n}` : ''}.png`);
+        try { await fs.writeFile(file, png, { flag: 'wx' }); return res.json({ path: file, name: path.basename(file) }); } catch (e) { if (e.code !== 'EEXIST' || n > 99) throw e; }
+      }
+    } catch (e) { next(e); }
+  });
+
   r.post('/snapshot', express.json({ limit: '40mb' }), (req, res, next) => {
     try {
       const m = /^data:image\/png;base64,(.+)$/.exec(String(req.body?.png || ''));

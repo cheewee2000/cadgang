@@ -3369,16 +3369,34 @@ async function savePng(url, note = '') {
   say(`saved ${name}${note ? ` (${note})` : ''}`);
 }
 window.cadgangSaved = (path) => say(`saved ${path}`);
-// CAPTURE: the 3D view as it is drawn now (grid, markups and notes if they are on) with none of the buttons or
-// panels, the size of the whole window. The view fills the window for one frame that is never painted, is drawn
-// and read at that size, and goes back.
+// CAPTURE (⇧C): the 3D view as it is drawn now (grid, markups and notes if they are on) with none of the buttons or
+// panels, the size of the whole window, saved straight to the Desktop. The view fills the window for one frame that
+// is never painted, is drawn and read at that size, and goes back. The picture then flies off to the corner: it is saved.
 // ponytail: with Render on this is the plain shaded view; the ray-traced picture is not in this canvas.
-$('#captureBtn').addEventListener('click', async () => {
+async function capture() {
   if (!bbox) return say('open a file first', true);
   viewport.classList.add('capture'); frame();
   let url, size; try { url = markup.snapshot(); size = `${renderer.domElement.width} × ${renderer.domElement.height}`; } finally { viewport.classList.remove('capture'); frame(); }
-  savePng(url, size);
-});
+  if (follow || window.cadgangServerless) return savePng(url, size);   // no Mac of the viewer's own behind this page: a download
+  try {
+    const r = await fetch(`api/view/capture?name=${encodeURIComponent(shotName())}`, { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: await (await fetch(url)).blob() });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    say(`saved to Desktop: ${d.name} (${size})`);
+    captured(url, d.name);
+  } catch (e) { say(`capture not saved: ${e.message}`, true); }
+}
+/** The picture just saved shrinks away to the top right corner, and a note names the file. */
+function captured(url, name) {
+  const img = Object.assign(new Image(), { src: url, className: 'captured' });
+  const note = Object.assign(document.createElement('div'), { className: 'captured-note', textContent: `Saved to Desktop · ${name}` });
+  document.body.append(img, note);
+  const at = 'translate(41vw, -41vh) scale(0.16)';
+  img.animate([{ transform: 'none' }, { transform: at, offset: 0.4 }, { transform: at, opacity: 1, offset: 0.85 }, { transform: at, opacity: 0 }],
+    { duration: 1600, easing: 'cubic-bezier(.3,.7,.2,1)' }).finished.finally(() => img.remove());
+  note.animate([{ opacity: 0 }, { opacity: 1, offset: 0.15 }, { opacity: 1, offset: 0.85 }, { opacity: 0 }], { duration: 2600 }).finished.finally(() => note.remove());
+}
+$('#captureBtn').addEventListener('click', capture);
 $('#shareShotSave').addEventListener('click', async () => {
   shareMenu.hidden = true;
   if (!bbox) return say('open a file first', true);
@@ -3567,6 +3585,7 @@ const CMDS = [
   { key: 'k', label: 'Render (global illumination)', run: () => setRender(!rt.on), btn: '#renderBtn', on: () => rt.on },
   { key: 'o', label: 'Orthographic', run: () => setOrtho(!ui.ortho), btn: '#orthoBtn', on: () => ui.ortho },
   { key: 'l', label: 'Next look', btn: '#look', run: () => { const s = $('#look'); s.selectedIndex = (s.selectedIndex + 1) % s.options.length; s.dispatchEvent(new Event('change', { bubbles: true })); } },
+  { key: 'c', shift: true, label: 'Capture to Desktop', run: capture, btn: '#captureBtn' },
   { key: 'm', label: 'Measure', run: () => setMeasure(!measure.on), btn: '#measureBtn', on: () => measure.on },
   { sep: true },
   ...BODY_CMDS.map((c) => ({ ...c, label: { h: 'Hide selected', t: 'Selected transparent', s: 'Show only selected' }[c.shift ? '' : c.key] ?? c.label })),
