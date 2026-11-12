@@ -24,6 +24,8 @@ test('material words in the name win', () => {
     ['blue PCB', [], 'pcb_blue'],
     ['LG 86UH5Q-E display, black gloss glass', [], 'gloss_black'],
     ['UR controller, steel, white powder coat', [], 'powder_white'],
+    ['cap, titanium', [], 'titanium'],
+    ['plug Ti-6Al-4V grade 5', [], 'titanium'],
   ]) assert.equal(guessMaterial(name, path), want, name);
 });
 

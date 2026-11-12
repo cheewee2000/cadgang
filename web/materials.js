@@ -16,6 +16,7 @@ export const MATERIALS = {
   black_al: { label: 'Black anodized', density: 2.7, color: 0x2b2b2e, metal: 1, rough: 0.38 },
   anodized: { label: 'Anodized (file colour)', density: 2.7, color: 0xd2d4d7, metal: 1, rough: 0.38, fileColor: true },
   steel: { label: 'Steel', density: 7.85, color: 0xc6c7c8, metal: 1, rough: 0.22 },
+  titanium: { label: 'Titanium', density: 4.43, color: 0xa9a59f, metal: 1, rough: 0.38 },   // Ti-6Al-4V: darker and warmer than steel
   tin: { label: 'Tin plate', density: 7.85, color: 0xc9cbcd, metal: 1, rough: 0.35 },
   zinc: { label: 'Zinc plate', density: 7.85, color: 0xbcc0c2, metal: 1, rough: 0.42 },
   gold: { label: 'Gold plate', density: 8.9, color: 0xe8c36a, metal: 1, rough: 0.2 },
@@ -51,6 +52,7 @@ const GUESS = [
   [/gold|\benig\b/i, 'gold'],
   [/\btin\b|tin.?plat/i, 'tin'],
   [/zinc|galvani/i, 'zinc'],
+  [/titanium|6al.?4v/i, 'titanium'],
   [/steel|stainless/i, 'steel'],
   [/brass/i, 'brass'],
   [/copper/i, 'copper'],
