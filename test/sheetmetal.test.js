@@ -163,3 +163,21 @@ test('a flange run past its parent edge bends only along the parent (no bend-str
     assert.ok(bend.width < 100.01, `bend strip ${bend.width} mm long on a 100 mm edge`);
   } finally { scope.dispose(); }
 });
+
+test('an inset flange: a return folded off the straight side of a notch, inside the panel', () => {
+  const scope = beginBrepScope();
+  try {
+    const checked = [], sm = sheetMetalNamespace(checked, []);
+    // 200 x 100 plate with its top-right corner notched away from u 140, v 40; a 15 mm return along the notch's bottom side (u 140..200 at v 40)
+    const p = sm.part('notched', g).base(200, 100).cut('base', sm.rect(140, 40, 201, 101)).flange('base.t', 15, { inset: 60, from: 145, to: 200 });
+    const s = p.make();
+    assert.equal(ops.bodies(s), 1, 'one piece');
+    const bb = ops.bbox(s);
+    assert.ok(Math.abs(bb.max[2] - 15) < 0.01, `return stands 15 up: ${bb.max}`);
+    // above the plate, past u 140, everything is the return: it sits on the notch's side (y 40 - t .. 40), not at the plate's edge
+    const up = ops.bbox(ops.intersect(s, ops.translate(ops.box(100, 200, 50, { center: '' }), [141, -50, 5])));
+    assert.ok(Math.abs(up.max[1] - 40) < 0.01 && Math.abs(up.min[1] - (40 - g.t)) < 0.01 && up.max[2] > 14.9, `return at ${JSON.stringify(up)}`);
+    assert.ok(checked.every((c) => c.ok), JSON.stringify(checked.filter((c) => !c.ok)));
+    assert.throws(() => sm.part('bad', g).base(100, 100).flange('base.t', 10, { inset: -1 }), /inset -1/);
+  } finally { scope.dispose(); }
+});

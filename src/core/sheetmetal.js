@@ -47,7 +47,11 @@ const SCS_5052 = [
 ];
 // PEM hardware SendCutSend presses into aluminium (their hardware catalog, read 2026-10-22), as PEM_304. ponytail: the M5 flush stud only, add rows when used
 const PEM_ALU = { 'FH-M5-10': ['stud', 5, 0.198, 0.283, 0.384, 0.393, [0.040, 0.268]],
-  'CLA-M4-1': ['nut', 4, 0.234, 0.280, 0.5, 0.118, [0.040, 0.500]] };   // aluminium nut pressed in house (PEM catalog via Zygology, read 2026-10-29: hole 5.94, edge 7.10, sheet from 1.0 mm, T 3.0); ponytail: spacing and top of range guessed
+  'FH-M5-12': ['stud', 5, 0.198, 0.283, 0.384, 0.472, [0.040, 0.268]],  // the .472 in length (catalog read 2026-11-02, same price)
+  'CLA-M4-1': ['nut', 4, 0.234, 0.280, 0.5, 0.118, [0.040, 0.500]],
+  // zinc-plated steel nuts SendCutSend presses into aluminium (their hardware catalog, read 2026-10-31; the page prints the M5 SKU as SS-M5-0)
+  'S-M4-0': ['nut', 4, 0.212, 0.272, 0.379, 0.079, [0.040, 0.500]], 'S-M5-0': ['nut', 5, 0.251, 0.280, 0.407, 0.079, [0.040, 0.500]],
+  'S-M6-0': ['nut', 6, 0.345, 0.339, 0.513, 0.161, [0.063, 0.500]] };   // aluminium nut pressed in house (PEM catalog via Zygology, read 2026-10-29: hole 5.94, edge 7.10, sheet from 1.0 mm, T 3.0); ponytail: spacing and top of range guessed
 
 // PEM hardware SendCutSend presses into 304 (their hardware catalog, sendcutsend.com/guidelines/hardware/catalog, read 2026-10-22), metric only.
 // inches: [kind, thread mm, H hole in sheet, K = N least hole centre to a cut edge or to the bend allowance area, M least centre to centre
@@ -144,9 +148,12 @@ function drawShape(s, map) {
 }
 
 function region(shapes, map) {  // shapes[0] the outline, the rest cut out of it
-  let d = drawShape(shapes[0], map);
-  for (const s of shapes.slice(1)) d = d.cut(drawShape(s, map));
-  return d;
+  const run = (cuts) => { let d = drawShape(shapes[0], map); for (const s of cuts) d = d.cut(drawShape(s, map)); return d; };
+  const empty = (d) => { try { return d.toSVGPaths().length === 0; } catch { return true; } };
+  // the 2D boolean can drop the whole region on a cut whose edge passes close to an earlier cut's vertex (a round corner relief over
+  // the square one, with any hole in the panel); the other order goes through
+  const d = run(shapes.slice(1));
+  return empty(d) ? run(shapes.slice(1).reverse()) : d;
 }
 
 /**
@@ -210,8 +217,10 @@ class Part {
    * length then measured from the parent's inside face. angle: the bend in degrees (default 90; 45 leans the flange in at a
    * chamfer), lengths still measured from the mold corner where the outer faces would meet. Returns the part; the new panel is `${at}`.
    * Several flanges on one edge (tabs): tag each but the first, 'base.l#2', and hold them apart and off the corners with from / to.
+   * inset: the bend line sits that far in from the edge, on the straight side of a notch you cut away beyond it (a return along a
+   * cut edge); it never closes a corner with a neighbour, so hold it off the notch's corners with from / to.
    */
-  flange(at, length, { from = null, to = null, reverse = false, angle = 90 } = {}) {
+  flange(at, length, { from = null, to = null, reverse = false, angle = 90, inset = 0 } = {}) {
     if (!Number.isFinite(this.g.r)) throw new GraphError(`sm part '${this.name}': ${this.g.name} has no bend table here, so it is cut flat only`);
     const i = at.lastIndexOf('.'), pid = at.slice(0, i), tag = at.slice(i + 1), edge = tag[0], P = this.panels.get(pid);
     if (!P) throw new GraphError(`sm part '${this.name}': no panel '${pid}' for flange '${at}'`);
@@ -219,7 +228,8 @@ class Part {
     if (pid !== 'base' && edge === 'b') throw new GraphError(`sm part '${this.name}': '${at}' is the bend of '${pid}', not a free edge`);
     if (this.panels.has(at)) throw new GraphError(`sm part '${this.name}': '${at}' already has a flange`);
     if (!(angle > 0 && angle < 180)) throw new GraphError(`sm part '${this.name}': flange '${at}' bend angle ${angle}° must be between 0 and 180`);
-    const k = { id: at, parent: pid, edge, L: length, from, to, reverse, angle, cuts: [], kids: [] };  // null ends: to the corner, settled in _layout
+    if (!(inset >= 0)) throw new GraphError(`sm part '${this.name}': flange '${at}' inset ${inset} must be 0 or more`);
+    const k = { id: at, parent: pid, edge, L: length, from, to, reverse, angle, inset, cuts: [], kids: [] };  // null ends: to the corner, settled in _layout
     if (from != null && to != null && !(to > from)) throw new GraphError(`sm part '${this.name}': flange '${at}' runs from ${k.from} to ${k.to}`);
     P.kids.push(k); this.panels.set(at, k);
     return this;
@@ -285,14 +295,15 @@ class Part {
       for (const h of this.pems) if (h.panel === P.id) cuts.push(h.hole = circle(...h.at, (h.spec[2] * IN) / 2));
       for (const h of this.sinks) if (h.panel === P.id) cuts.push(circle(...h.at, CSK_METRIC[h.size][1] / 2));
       const ends = (k) => [k.from ?? 0, k.to ?? EDGES[k.edge](P).len], reach = (k, end) => end ? ends(k)[1] >= EDGES[k.edge](P).len - 1e-6 : ends(k)[0] <= 1e-6;
-      const on = (edge, end) => P.kids.find((k) => k.edge === edge && reach(k, end));
+      const on = (edge, end) => P.kids.find((k) => k.edge === edge && !k.inset && reach(k, end));
       for (const k of P.kids) {
-        const E = EDGES[k.edge](P), { sb: sbK } = bendOf(g, k.angle ?? 90);
+        const E0 = EDGES[k.edge](P), { sb: sbK } = bendOf(g, k.angle ?? 90);
+        const E = k.inset ? { ...E0, p: (s) => add(E0.p(s), mul(E0.o, -k.inset)) } : E0;  // an inset bend line, on a notch's side
         let [f0, f1] = ends(k), [b0, b1] = [f0, f1];
         k._mitre = [0, 0];  // per end: slope of the mitre line (u per v) where it meets a leaning neighbour
         for (const end of [0, 1]) {
           const s = ends(k)[end], [nEdge, nEnd] = NEIGHBOUR[k.edge][end];
-          const atCorner = reach(k, end), closed = atCorner && on(nEdge, nEnd) && !(P.id !== 'base' && nEdge === 'b');
+          const atCorner = !k.inset && reach(k, end), closed = atCorner && on(nEdge, nEnd) && !(P.id !== 'base' && nEdge === 'b');
           if (closed && (k.reverse || on(nEdge, nEnd).reverse)) throw new GraphError(`sm part '${this.name}': reverse flange ${k.reverse ? k.id : on(nEdge, nEnd).id} meets another at a corner; stop it short with from / to`);
           const sg = end ? -1 : 1;
           if (closed) {  // flanges meet: flats stop t + gap short of the corner, bends r + t + relief, the corner square goes
