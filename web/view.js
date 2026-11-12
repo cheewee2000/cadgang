@@ -21,6 +21,7 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { attachOrbitInput } from './orbitinput.js';
 import { createMarkup } from './markup.js';
 import { parseDxf } from './dxf.js';
+import { creaseEdges } from './edges.js';
 import { explodeOffsets, radialOffsets, cylinders } from './explode.js';
 import { normalizeJoint, solvePoses, sweepJoints, valueRange, clampValue, pitchFor, turns, eulerOf, planeAxes, JOINT_LABEL } from './joints.js';
 import { renderDrawing } from './drawing.js';
@@ -287,7 +288,8 @@ function addMesh(geo, { edgeLines, faces, flat = false, name = '', file = '', pa
   // guess costs seconds and reads as noise, so skip it there.
   // ponytail: no edge LOD — a budget cut-off, add decimation if assemblies need outlines.
   const tris = (geo.index ? geo.index.count : geo.getAttribute('position').count) / 3;
-  const lines = edgeLines ?? (tris < 1_000_000 ? new THREE.EdgesGeometry(geo, 25).getAttribute('position').array : null);
+  const at = geo.getAttribute('position'), plain = at.array instanceof Float32Array && !at.isInterleavedBufferAttribute && !at.normalized && at.itemSize === 3;   // creaseEdges reads the numbers themselves
+  const lines = edgeLines ?? (tris >= 1_000_000 ? null : plain ? creaseEdges(at.array, geo.index?.array ?? null, 25) : new THREE.EdgesGeometry(geo, 25).getAttribute('position').array);
   if (lines?.length) {
     const eg = new THREE.BufferGeometry();
     eg.setAttribute('position', new THREE.BufferAttribute(lines, 3));
@@ -2477,7 +2479,7 @@ async function parseMesh(ext, buffer, name, beside = '') {   // beside: where a 
   if (ext === 'obj') return collectGeometries(loader.parse(new TextDecoder().decode(buffer)));
   if (ext === '3mf' || ext === 'fbx') {
     const parts = collectGeometries(loader.parse(buffer, ''));
-    if (ext === '3mf' && !parts.length) throw new Error('no model in it: a sliced file (.gcode.3mf) holds the print, not the part');
+    if (ext === '3mf' && !parts.length) throw new Error('no model in it: a sliced 3MF holds the print (the G-code), not the part');
     return parts;
   }
   const gltf = await new Promise((ok, bad) => loader.parse(buffer, beside, ok, bad));
