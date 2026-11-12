@@ -70,16 +70,20 @@ const native = () => process.env.CADGANG_OCCT || BUILT;   // the variable is for
 const hasNative = () => process.env.CADGANG_WASM !== '1' && fs.existsSync(native());
 
 /** Run cadgang-occt on the buffer; returns what occt-import-js's Read*File returns. */
-async function readNative(buffer, name, linearDeflection, angularDeflection) {
+async function readNative(buffer, name, linearDeflection, angularDeflection, timeoutMs) {
   const ext = String(name).toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
   const fmt = ext === 'igs' || ext === 'iges' ? 'iges' : ext === 'brep' ? 'brep' : 'step';
   const tmp = path.join(os.tmpdir(), `cadgang-${process.pid}-${Date.now()}.${fmt}`);
   await fs.promises.writeFile(tmp, buffer);
   try {
     const out = await new Promise((resolve, reject) => execFile(native(), [fmt, tmp, String(linearDeflection), String(angularDeflection)],
-      { encoding: 'buffer', maxBuffer: 2 ** 32 }, (e, stdout) => e ? reject(e) : resolve(stdout)));
+      { encoding: 'buffer', maxBuffer: 2 ** 32, timeout: timeoutMs, killSignal: 'SIGKILL' }, (e, stdout) => e ? reject(e) : resolve(stdout)));
     return { success: true, ...parseNative(out) };
-  } catch (e) { return { success: false, died: !!e.signal }; }   // died: killed by a signal (an OCCT exception nothing caught), not a refusal
+  } catch (e) {
+    // Stopped here, by the clock: the worker's own timeout only ends the worker, and the importer went on for as long as OCCT's healing took (a core, for an hour)
+    if (e.killed) throw new Error(`Gave up reading '${name}' (${(buffer.byteLength / 1048576).toFixed(0)} MB) after ${Math.round(timeoutMs / 1000)} s`);
+    return { success: false, died: !!e.signal };   // died: killed by a signal (an OCCT exception nothing caught), not a refusal
+  }
   finally { fs.promises.rm(tmp, { force: true }); }
 }
 /** main.cpp's stream → what occt-import-js returns: { meshes, root } (root is null from an older binary). */
@@ -119,10 +123,10 @@ const hasFaces = (buf) => ['ADVANCED_FACE', 'FACE_SURFACE', 'FACE_BOUND', 'FACE_
  *           vertexCount, triangleCount, faceCount, timings }. Geometry stays in
  * typed arrays; metadata is plain JavaScript.
  */
-export async function importCadFile(buffer, { name = 'import.step', linearDeflection = 0.001, angularDeflection = 0.5 } = {}) {
+export async function importCadFile(buffer, { name = 'import.step', linearDeflection = 0.001, angularDeflection = 0.5, timeoutMs = 590_000 } = {}) {
   const started = performance.now();
   const readStarted = performance.now();
-  let result = hasNative() ? await readNative(buffer, name, linearDeflection, angularDeflection) : null;
+  let result = hasNative() ? await readNative(buffer, name, linearDeflection, angularDeflection, timeoutMs) : null;
   // The native importer died on the file (1 of 2,573 on one Mac: Standard_OutOfRange); the WASM build of the
   // same importer reads it. A file it merely refuses, the WASM one refuses too, so that is not tried twice.
   const importer = result && !(result.died && buffer.byteLength < 150 * 1048576) ? 'native' : 'wasm';

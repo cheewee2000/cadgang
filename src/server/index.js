@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 import crypto from 'node:crypto';
-import { fork } from 'node:child_process';
+import { fork, execFileSync } from 'node:child_process';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { viewRouter, mayReadLocal, pickDrawingPage } from './view.js';
@@ -264,6 +264,9 @@ app.use('/api', (err, req, res, next) => {
   res.status(err?.status || 500).json({ error: err?.message || String(err) });
 });
 // A stray rejection must not take the open window down with it: log it and keep serving.
+// An import under way is a child of this process and would outlive it: quit the app in the middle of a file
+// OCCT takes an hour over, and a core stayed busy for the hour.
+for (const sig of ['SIGINT', 'SIGTERM']) process.once(sig, () => { try { execFileSync('pkill', ['-P', String(process.pid)]); } catch { /* no children */ } process.exit(0); });
 process.on('unhandledRejection', (e) => console.error('unhandled rejection:', e?.stack || e));
 process.on('uncaughtException', (e) => console.error('uncaught exception:', e?.stack || e));
 

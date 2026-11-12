@@ -107,6 +107,11 @@ test('a file the native importer dies on is read by the WASM one; a file it refu
     assert.ok(m.triangleCount > 0);
     fs.writeFileSync(fake, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
     await assert.rejects(importCadFile(fs.readFileSync(fixture), { name: 'asm.step' }), /Could not read/);
+    // one that never finishes is stopped by the clock, and says so
+    const pidFile = path.join(dir, 'pid');
+    fs.writeFileSync(fake, `#!/bin/sh\necho $$ > '${pidFile}'\nexec sleep 30\n`, { mode: 0o755 });
+    await assert.rejects(importCadFile(fs.readFileSync(fixture), { name: 'asm.step', timeoutMs: 400 }), /Gave up reading 'asm.step'/);
+    assert.throws(() => process.kill(+fs.readFileSync(pidFile, 'utf8'), 0), 'the importer is gone, not left running');
   } finally { delete process.env.CADGANG_OCCT; fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
