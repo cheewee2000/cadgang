@@ -238,6 +238,13 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         if cmd == "recent", let list = body["list"] as? [[String]] { UserDefaults.standard.set(list, forKey: Self.RECENT) }   // the page's RECENT list, mirrored for the File menu
         if cmd == "raise", let w = m.webView { w.window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }   // the window that already has the file asked for
         if cmd.hasPrefix("render"), let w = m.webView as? DropWebView { render(cmd, body, in: w) }
+        // Full scale: how many millimetres a point of this window's screen is, by the display's own word (0 when it has none).
+        if cmd == "fullScale", let w = m.webView {
+            let s = w.window?.screen ?? NSScreen.main
+            let id = s?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? CGMainDisplayID()
+            let pt = s?.frame.width ?? 0
+            w.evaluateJavaScript("window.cadgangFullScale?.(\(pt > 0 ? CGDisplayScreenSize(id).width / pt : 0))")
+        }
         // AirDrop the ?follow link: the sheet lists nearby devices; the iPad opens it in Safari.
         if cmd == "airdrop", let s = body["url"] as? String, let u = URL(string: s) { NSSharingService(named: .sendViaAirDrop)?.perform(withItems: [u]) }
         // The page's clipboard API refuses after an await (the click's activation is spent), so the shell copies.

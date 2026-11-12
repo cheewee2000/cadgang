@@ -1561,7 +1561,24 @@ function placeGrid() {
 // ------------------------------------------------------------------- camera
 
 const orbit = { yaw: -0.6, pitch: 0.5, dist: 160, target: new THREE.Vector3() };
+
+// Full scale: 1 mm of the model is 1 mm on the glass. Only the Mac shell knows how big a point of this screen is, so the
+// button asks it and it answers cadgangFullScale(mm per point). Ortho goes on: in perspective only one depth could be true.
+// ponytail: the display's own word for its size is trusted; a ruler calibration when a monitor turns out to lie.
+const fullBtn = $('#fullBtn');
+let fullMm = 0;   // mm per CSS px of the screen the window was on when 1:1 was last asked for
+const fullDist = () => viewport.clientHeight * fullMm / (2 * Math.tan(THREE.MathUtils.degToRad(persp.fov / 2)));
+const isFull = () => ui.ortho && fullMm > 0 && Math.abs(orbit.dist / fullDist() - 1) < 1e-3;   // a zoom or a resize ends it
+const fullScale = () => window.webkit?.messageHandlers?.cadgang?.postMessage({ cmd: 'fullScale' });
+window.cadgangFullScale = (mmPerPx) => {
+  if (!(mmPerPx > 0)) return say('this screen does not say how big it is', true);
+  fullMm = mmPerPx; setOrtho(true); orbit.dist = fullDist();
+};
+fullBtn.hidden = !window.webkit?.messageHandlers?.cadgang;
+fullBtn.addEventListener('click', fullScale);
+
 function applyCamera() {
+  fullBtn.classList.toggle('on', isFull());
   const cp = Math.cos(orbit.pitch), sp = Math.sin(orbit.pitch);
   camera.position.set(
     orbit.target.x + orbit.dist * cp * Math.sin(orbit.yaw),
@@ -3607,6 +3624,7 @@ const CMDS = [
   { key: 'c', label: 'Color parts', run: () => toggle('color', '#colorBtn'), btn: '#colorBtn', on: () => ui.color },
   { key: 'k', label: 'Render (global illumination)', run: () => setRender(!rt.on), btn: '#renderBtn', on: () => rt.on },
   { key: 'o', label: 'Orthographic', run: () => setOrtho(!ui.ortho), btn: '#orthoBtn', on: () => ui.ortho },
+  { key: 'f', shift: true, label: 'Full scale (1:1)', run: fullScale, btn: '#fullBtn', on: isFull },
   { key: 'l', label: 'Next look', btn: '#look', run: () => { const s = $('#look'); s.selectedIndex = (s.selectedIndex + 1) % s.options.length; s.dispatchEvent(new Event('change', { bubbles: true })); } },
   { key: 'c', shift: true, label: 'Capture to Desktop', run: capture, btn: '#captureBtn' },
   { key: 'm', label: 'Measure', run: () => setMeasure(!measure.on), btn: '#measureBtn', on: () => measure.on },
