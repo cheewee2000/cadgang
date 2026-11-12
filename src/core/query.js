@@ -321,6 +321,12 @@ export class Query {
     return new Query(this.shape, this.type, [...this.steps, step]);
   }
 
+  /** What this query is, as plain data: its entity type and each step's name and arguments. Null when a step has
+   *  none (where(), whose function cannot be compared). With the shape's key it names the same pick every time. */
+  get key() {
+    return this.steps.every((st) => st.key) ? [this.type, this.steps.map((st) => st.key)] : null;
+  }
+
   /** Filter on the descriptor directly. The escape hatch for anything the
    *  named filters below do not cover. */
   where(fn) {
@@ -490,6 +496,7 @@ export class Query {
     return this._add({
       kind: 'reduce',
       label: `exclude(${sub._chainLabel()})`,
+      key: sub.key && ['exclude', sub.key],
       fn: (list) => {
         const dropped = new Set(sub._run(list).map((e) => e.d.i));
         return list.filter((e) => !dropped.has(e.d.i));
@@ -563,6 +570,7 @@ export class Query {
     return this._add({
       kind: 'reduce',
       label: `either(${subs.map((s) => s._chainLabel()).join(' | ')})`,
+      key: subs.every((s) => s.key) && ['either', subs.map((s) => s.key)],
       fn: (list) => {
         const keep = new Set();
         for (const sub of subs) for (const e of sub._run(list)) keep.add(e.d.i);
@@ -874,6 +882,14 @@ function anchorCost(d, anchor, box) {
 }
 
 /** Entry point handed to cell programs as `q`. */
+// Each named step keeps the name and arguments it was called with (see Query.key). The labels above are for
+// reading and leave tolerances out, so they cannot stand in for this.
+for (const name of ['ofKind', 'planar', 'cylindrical', 'conical', 'spherical', 'toroidal', 'linear', 'circular', 'elliptical', 'along', 'facing',
+  'ofLength', 'ofArea', 'ofRadius', 'ofDiameter', 'largerThan', 'smallerThan', 'near', 'inBox', 'atExtreme', 'noSeams', 'nearestTo']) {
+  const step = Query.prototype[name];
+  Query.prototype[name] = function (...args) { const r = step.apply(this, args); if (r.steps.length > this.steps.length) r.steps[r.steps.length - 1].key = [name, args]; return r; };
+}
+
 export const q = {
   faces: (shape) => new Query(shape, 'face'),
   edges: (shape) => new Query(shape, 'edge'),

@@ -46,6 +46,7 @@ const argKey = (v) => {
   if (v == null || typeof v !== 'object') { if (typeof v === 'function') keyable = false; return v; }
   if (Array.isArray(v)) return v.map(argKey);
   if (v instanceof Sketch) return sketchKey(v);
+  if (v instanceof Query) { const k = v.key; if (!k) { keyable = false; return null; } return { query: argKey(k), of: argKey(v.shape) }; }   // a pick by named steps: the same edges of the same shape every time
   const proto = Object.getPrototypeOf(v);   // a cell's own {center: 'xy'} comes from the sandbox's realm, so its prototype is that realm's Object
   if (proto === null || proto === Object.prototype || proto.constructor?.name === 'Object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, argKey(x)]));
   keyable = false; return null;

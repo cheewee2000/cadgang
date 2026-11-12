@@ -1838,14 +1838,17 @@ export function tessellate(shape, opts = {}) {
     // A moved copy's mesh is its source's mesh, moved: a knob turn or an explode re-meshes nothing.
     const mv = movedMesh.of(shape), src = mv?.from();
     if (src) { const t = tessellate(src, opts), positions = Float32Array.from(t.positions), normals = Float32Array.from(t.normals); mv.apply(positions, false); mv.apply(normals, true); return { ...t, positions, normals }; }
-    return meshOnDisk(shape, tolerance, angularTolerance, () => attempt('tessellation', () => {
-    let mesh = shape.mesh({ tolerance: Math.max(tolerance, COARSE), angularTolerance });
     // Triangle count grows about linearly with 1/tolerance, so judge the budget
     // on the FINE count the coarse one predicts — judging the coarse count let a
     // 21k-triangle thread refine into 259k triangles and 9 s.
-    if (tolerance < COARSE && (mesh.triangles.length / 3) * (COARSE / tolerance) <= MESH_BUDGET) {
-      mesh = shape.mesh({ tolerance, angularTolerance });
+    // The coarse mesh is asked for as a mesh of its own, so it is kept: a part over the budget is the same mesh at
+    // every finer tolerance, and the viewer (diag/2000) and the clash checks (0.05) each meshed an engraved cap for half a second.
+    if (tolerance < COARSE) {
+      const coarse = tessellate(shape, { tolerance: COARSE, angularTolerance });
+      if ((coarse.indices.length / 3) * (COARSE / tolerance) > MESH_BUDGET) return coarse;
     }
+    return meshOnDisk(shape, tolerance, angularTolerance, () => attempt('tessellation', () => {
+    const mesh = shape.mesh({ tolerance, angularTolerance });
     const groups = mesh.faceGroups ?? [];
     return {
       positions: Float32Array.from(mesh.vertices),
