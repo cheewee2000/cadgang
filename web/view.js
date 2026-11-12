@@ -63,7 +63,11 @@ function progressStart(name, label = `loading ${name}…`) {
   el.querySelector('span').textContent = label;
   el.hidden = false; el.classList.toggle('guess', !est); bar.style.width = '0%';
   clearInterval(progressTimer);
-  if (est) progressTimer = setInterval(() => { bar.style.width = `${Math.min(95, 100 * (performance.now() - t0) / est)}%`; }, 100);
+  progressTimer = setInterval(() => {
+    const ms = performance.now() - t0;
+    if (est) bar.style.width = `${Math.min(95, 100 * ms / est)}%`;
+    if (ms >= 3000) el.querySelector('span').textContent = `${label} ${Math.floor(ms / 1000)} s`;   // a long import (healing a hard STEP takes a minute) counts up, so it does not look stuck
+  }, 100);
 }
 function progressEnd(name, ms) {
   clearInterval(progressTimer);
