@@ -2500,6 +2500,12 @@ async function parseMesh(ext, buffer, name, beside = '') {   // beside: where a 
     return parts;
   }
   const gltf = await new Promise((ok, bad) => loader.parse(buffer, beside, ok, bad));
+  // glTF is in metres by its spec and the viewer is in millimetres (Measure, the ruler, 1:1 and the lamps' falloff all
+  // count on it). Some exporters write millimetres anyway (Blender, from a scene drawn in mm), so the size decides.
+  // ponytail: under 10 units across is metres. A part under 10 mm in a mm file, or a thing over 10 m, is misread:
+  // a per-file choice when one turns up.
+  const across = new THREE.Box3().setFromObject(gltf.scene).getSize(new THREE.Vector3()).length();
+  if (across > 0 && across < 10) gltf.scene.scale.multiplyScalar(1000);
   gltf.scene.updateMatrixWorld(true);
   gltf.scene.traverse((o) => {   // point lights and spots; three aims a glTF spot down its node's -z (its target)
     if (!o.isPointLight && !o.isSpotLight) return;
