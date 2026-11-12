@@ -31,7 +31,7 @@ cat > dist/cadgang.xml <<EOF
       <pubDate>$(date -R)</pubDate>
       <sparkle:version>$VERSION</sparkle:version>
       <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumSystemVersion>$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' mac/Info.plist)</sparkle:minimumSystemVersion>
       <description><![CDATA[$NOTES]]></description>
       <enclosure url="$URL/cadgang-$VERSION.zip" type="application/octet-stream" $SIG/>
     </item>

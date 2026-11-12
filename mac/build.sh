@@ -16,7 +16,10 @@ if [ ! -d "$SPARKLE/Sparkle.framework" ]; then
   tar -xf "$SPARKLE/sparkle.tar.xz" -C "$SPARKLE"; rm "$SPARKLE/sparkle.tar.xz"
 fi
 mkdir -p "$APP/Contents/Frameworks"; cp -R "$SPARKLE/Sparkle.framework" "$APP/Contents/Frameworks/"
-swiftc -O -o "$APP/Contents/MacOS/cadgang" mac/main.swift mac/render.swift -framework Cocoa -framework WebKit -framework Metal -framework MetalKit -framework MetalFX \
+# The oldest macOS the app runs on is written once, in Info.plist: swiftc otherwise builds for the build Mac's own macOS,
+# and the app then refuses to open on anything older while the plist and the update feed say it will.
+MIN=$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' mac/Info.plist)
+swiftc -O -target "$(uname -m)-apple-macos$MIN" -o "$APP/Contents/MacOS/cadgang" mac/main.swift mac/render.swift -framework Cocoa -framework WebKit -framework Metal -framework MetalKit -framework MetalFX \
   -F "$SPARKLE" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 sed "s/__VERSION__/$VERSION/g" mac/Info.plist > "$APP/Contents/Info.plist"
 cp "$(command -v node)" "$RES/node"
@@ -24,7 +27,7 @@ cp "$(command -v node)" "$RES/node"
 # the iconset-built icns is the fallback for older macOS. Both come from mac/icon/make.mjs.
 if [ -d mac/AppIcon.icon ]; then
   ICONS=$(mktemp -d)
-  xcrun actool mac/AppIcon.icon --compile "$ICONS" --platform macosx --minimum-deployment-target 13.0 \
+  xcrun actool mac/AppIcon.icon --compile "$ICONS" --platform macosx --minimum-deployment-target "$MIN" \
     --app-icon AppIcon --output-partial-info-plist "$ICONS/p.plist" >/dev/null
   cp "$ICONS/Assets.car" "$RES/Assets.car"; cp "$ICONS/AppIcon.icns" "$RES/AppIcon.icns"; rm -rf "$ICONS"
 elif [ -d mac/AppIcon.iconset ]; then
