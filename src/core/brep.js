@@ -533,8 +533,8 @@ function unified(wrapped) {
 
 /** The volume two shapes share, by one raw Common: no simplification of a result that is only measured, and
  *  OCCT's oriented boxes (SetUseOBB) to pass over the sub-shapes that cannot meet.
- *  Tried 2026-11-11 and dropped: a BRepAlgoAPI_Section first (no edges and neither inside the other = 0). Half the cost
- *  on gears (many plane and cylinder faces), but up to 10× the Common on spline faces that are clear of each other. */
+ *  brepSurfacesMeet (below) spares most pairs this: a Section of whole shapes was tried first and dropped, half the
+ *  cost on gears but up to 10× the Common on spline faces that are clear of each other. */
 export function brepCommonVolume(a, b) {
   const args = new OC.TopTools_ListOfShape_1(), list = new OC.TopTools_ListOfShape_1();
   const bop = new OC.BRepAlgoAPI_Common_1(), progress = new OC.Message_ProgressRange_1();
@@ -549,6 +549,57 @@ export function brepCommonVolume(a, b) {
     try { common?.delete(); } catch { /* gone */ }
     for (const o of [bop, progress, args, list]) o.delete();
   }
+}
+
+// Each face's box, in the order the explorer walks them; kept by key, since a gear's 250 faces are asked for per neighbour.
+const faceBoxCache = new Map();
+const eachFace = (wrapped, fn) => {
+  const ex = new OC.TopExp_Explorer_2(wrapped, OC.TopAbs_ShapeEnum.TopAbs_FACE, OC.TopAbs_ShapeEnum.TopAbs_SHAPE);
+  try { for (let i = 0; ex.More(); ex.Next(), i++) { const f = ex.Current(); try { fn(f, i); } finally { f.delete(); } } } finally { ex.delete(); }
+};
+const faceBoxes = (shape) => {
+  const k = shape.__key;
+  if (k && faceBoxCache.has(k)) return faceBoxCache.get(k);
+  const out = [], ga = OC.GeomAbs_SurfaceType, easy = new Set([ga.GeomAbs_Plane, ga.GeomAbs_Cylinder, ga.GeomAbs_Cone, ga.GeomAbs_Sphere, ga.GeomAbs_Torus, ga.GeomAbs_SurfaceOfExtrusion]);
+  out.hard = [];   // per face: a surface whose intersections are slow to find (splines, offsets, revolutions)
+  eachFace(shape.wrapped, (f) => {
+    const face = OC.TopoDS.Face_1(f), ad = new OC.BRepAdaptor_Surface_2(face, false);
+    out.hard.push(!easy.has(ad.GetType())); ad.delete(); face.delete();
+    const box = new OC.Bnd_Box_1(); OC.BRepBndLib.Add(f, box, true);
+    const lo = box.CornerMin(), hi = box.CornerMax();
+    out.push(lo.X(), lo.Y(), lo.Z(), hi.X(), hi.Y(), hi.Z());
+    lo.delete(); hi.delete(); box.delete();
+  });
+  if (k) { if (faceBoxCache.size >= 1024) faceBoxCache.delete(faceBoxCache.keys().next().value); faceBoxCache.set(k, out); }
+  return out;
+};
+/**
+ * Do the surfaces of two shapes cross or touch? Only the faces whose boxes come within `pad` of a face of the other
+ * are intersected, so a 60-tooth gear on a pin costs its bore and the pin, not every tooth. False means no face of
+ * one meets a face of the other: the shapes share volume only if one lies wholly inside the other (the caller's to rule out).
+ * True also when it was not worth finding out (spline faces): the caller measures.
+ */
+export function brepSurfacesMeet(a, b, pad = 0.01) {
+  const A = faceBoxes(a), B = faceBoxes(b), keepA = new Set(), keepB = new Set();
+  for (let i = 0; i < A.length; i += 6) for (let j = 0; j < B.length; j += 6) {
+    if (A[i] - pad > B[j + 3] || B[j] - pad > A[i + 3] || A[i + 1] - pad > B[j + 4] || B[j + 1] - pad > A[i + 4] || A[i + 2] - pad > B[j + 5] || B[j + 2] - pad > A[i + 5]) continue;
+    keepA.add(i / 6); keepB.add(j / 6);
+  }
+  if (!keepA.size) return false;
+  // ponytail: one spline face near the other part sends the pair to the boolean. Intersecting two spline faces that
+  // are clear of each other took up to ten times the boolean (Attention Object).
+  if ([...keepA].some((i) => A.hard[i]) || [...keepB].some((j) => B.hard[j])) return true;
+  const builder = new OC.TopoDS_Builder(), ca = new OC.TopoDS_Compound(), cb = new OC.TopoDS_Compound(), progress = new OC.Message_ProgressRange_1();
+  let sec = null, ex = null;
+  try {
+    builder.MakeCompound(ca); builder.MakeCompound(cb);
+    eachFace(a.wrapped, (f, i) => { if (keepA.has(i)) builder.Add(ca, f); });
+    eachFace(b.wrapped, (f, i) => { if (keepB.has(i)) builder.Add(cb, f); });
+    sec = new OC.BRepAlgoAPI_Section_3(ca, cb, false); sec.Build(progress);
+    if (!sec.IsDone()) return true;
+    ex = new OC.TopExp_Explorer_2(sec.Shape(), OC.TopAbs_ShapeEnum.TopAbs_VERTEX, OC.TopAbs_ShapeEnum.TopAbs_SHAPE);
+    return ex.More();
+  } finally { for (const o of [ex, sec, progress, ca, cb, builder]) try { o?.delete(); } catch { /* gone */ } }
 }
 
 /** A shape as OCCT's binary BRep, and back (UNTRACKED: the caller owns the shape). The on-disk cell cache (cells.js). */
@@ -1754,12 +1805,12 @@ export function tessellate(shape, opts = {}) {
     const mv = movedMesh.of(shape), src = mv?.from();
     if (src) { const t = tessellate(src, opts), positions = Float32Array.from(t.positions), normals = Float32Array.from(t.normals); mv.apply(positions, false); mv.apply(normals, true); return { ...t, positions, normals }; }
     return attempt('tessellation', () => {
-    let mesh = shape.mesh({ tolerance: Math.max(tolerance, COARSE), angularTolerance }), used = Math.max(tolerance, COARSE);
+    let mesh = shape.mesh({ tolerance: Math.max(tolerance, COARSE), angularTolerance });
     // Triangle count grows about linearly with 1/tolerance, so judge the budget
     // on the FINE count the coarse one predicts — judging the coarse count let a
     // 21k-triangle thread refine into 259k triangles and 9 s.
     if (tolerance < COARSE && (mesh.triangles.length / 3) * (COARSE / tolerance) <= MESH_BUDGET) {
-      mesh = shape.mesh({ tolerance, angularTolerance }); used = tolerance;
+      mesh = shape.mesh({ tolerance, angularTolerance });
     }
     const groups = mesh.faceGroups ?? [];
     return {
@@ -1769,7 +1820,6 @@ export function tessellate(shape, opts = {}) {
       // Match the {first, count} shape imported assets already use, so face
       // picking in the viewport works the same for both.
       faces: groups.map((g) => ({ first: g.start / 3, count: g.count / 3, faceId: g.faceId })),
-      tolerance: used,   // the chord deviation this mesh was made to (the coarse pass's when the fine one was over budget)
     };
     });
   });

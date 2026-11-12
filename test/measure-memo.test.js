@@ -125,7 +125,7 @@ test('a clash volume: clear, touching, crossing, and one part wholly inside anot
   } finally { scope.dispose(); }
 });
 
-test('a part checked pose after pose is told clear by its mesh, and a body inside another still goes to the kernel', async () => {
+test('parts whose faces do not meet are clear without a boolean, and a body inside another still goes to the kernel', async () => {
   await initBrep(); clearCellCache();
   const doc = new CellDocument();
   doc.addCell({ id: 'ring', prompt: 'ring', code: 'export default ({ brep }) => brep.subtract(brep.cylinder(40, 10), brep.cylinder(20, 10))' });
@@ -133,13 +133,16 @@ test('a part checked pose after pose is told clear by its mesh, and a body insid
   doc.addCell({ id: 'check', kind: 'assert', refs: ['ring', 'nub'], prompt: 'poses', code: `export default ({ brep, inputs, assert }) => {
     const hole = Array.from({ length: 14 }, (_, i) => brep.interference(inputs.ring, brep.rotate(inputs.nub, 7 * i)));   // in every frame the nub is inside the ring's box
     const wall = brep.interference(inputs.ring, brep.translate(brep.rotate(inputs.nub, 33), [16.8, 10.9, 0]));   // moved out into the wall's metal, touching no face
-    assert.ok(hole.every((v) => v === 0) && Math.abs(wall - 8) < 1e-6, hole.join(' ') + ' / ' + wall);
+    const shaft = brep.interference(inputs.ring, brep.cylinder(19.9, 6, { center: 'z' }));   // in the bore, 0.1 mm clear all round, its box inside the ring's
+    const seated = brep.interference(inputs.ring, brep.translate(brep.box(5, 5, 5), [30, 0, 10]));   // standing on the ring's top face
+    const sunk = brep.interference(inputs.ring, brep.translate(brep.box(5, 5, 5), [30, 0, 9]));   // 1 mm into it
+    assert.ok(hole.every((v) => v === 0) && Math.abs(wall - 8) < 1e-6 && shaft === 0 && Math.abs(seated) < 1e-6 && Math.abs(sunk - 25) < 1e-6, [...hole, wall, shaft, seated, sunk].join(' '));
     return inputs.ring;
   }` });
   resetBrepOperationStats();
   const run = evaluateCells(doc, 'check', { stopOnError: false });
   assert.equal(run.report.find((e) => e.id === 'check').status, 'ok', JSON.stringify(run.report.find((e) => e.id === 'check')));
-  assert.equal(count('interference'), 9, 'eight poses by the kernel, six by the meshes, and the one in the wall by the kernel');
+  assert.equal(count('interference'), 3, 'the nub in the wall, the box seated on a face and the box sunk into it');
 });
 
 test('a quick run is the geometry without its clash measures, and the checked run still measures them', async () => {

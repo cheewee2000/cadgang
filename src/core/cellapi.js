@@ -18,7 +18,7 @@ import path from 'node:path';
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 import * as ops from './ops.js';
-import { turnedBounds, tessellate, compoundParts, movedMesh, trackBrepShape, brepHeapBytes } from './brep.js';
+import { turnedBounds, brepSurfacesMeet, tessellate, compoundParts, movedMesh, trackBrepShape, brepHeapBytes } from './brep.js';
 import { q as queryRoot, topology, Query } from './query.js';
 import { Sketch } from './sketch.js';
 import * as checks from './checks.js';
@@ -204,17 +204,15 @@ const poseOf = (key) => {
   for (let e; (e = moves.get(key)); key = e.from) m = mul(m, e.m ??= moveMatrix(e));   // the latest move is applied last: outermost on the left
   return { base: key, m };
 };
-// Two parts whose meshes are well apart, neither inside the other, share nothing: no boolean. Most pairs a clash
-// check asks about are like that (a gear turning beside a bridge, pose after pose), and a boolean with a 60-tooth
-// gear is 40 ms whatever it finds. "Well apart" is three times the two meshes' chord tolerances (0.3 mm for the
-// 0.05 mm meshes made here); anything nearer goes to the kernel, so a real overlap is missed only where the mesher
-// was off by three times what it was asked for. CADGANG_MESH_CLEAR=0 sends every pair to the kernel.
-// A part's mesh and its BVH are kept in the frame the part was first made in, so every pose of it is one mesh.
-// ponytail: a part is meshed for this only once it has been in MESH_AFTER booleans — a mesh nobody else uses costs
-// a spline part 0.3 s, lost on a project of eight checks; a per-part cost estimate if that count ever suits nobody.
-const MESH_TOL = 0.05, MESH_SLACK = 3, MESH_KEEP = 256, MESH_AFTER = 8;
-const asked = new Map();   // base key → booleans it has been in
-const busy = (k) => { if (asked.size > 20000) asked.clear(); const n = (asked.get(k) ?? 0) + 1; asked.set(k, n); return n > MESH_AFTER; };
+// Two parts share nothing when no face of one meets a face of the other and neither is inside the other. Most pairs a
+// clash check asks about are like that (a gear turning on its pin, pose after pose), and a boolean with a 60-tooth gear
+// is 40 ms whatever it finds. The kernel intersects only the faces whose boxes come near each other, so the gear costs
+// its bore, not its teeth. Being inside takes one part's box inside the other's, and then a point of it inside the
+// other's mesh: a part's mesh and its BVH are kept in the frame it was first made in, so every pose of it is one mesh.
+// CADGANG_NEAR=0 sends every pair to the boolean.
+// Tried before this and dropped: telling pairs clear by the distance between their meshes (three-mesh-bvh). It could
+// only pass pairs more than 0.3 mm apart, and its queries cost more than the face test that now settles those too.
+const MESH_TOL = 0.05, MESH_KEEP = 256;
 const partMeshes = new Map();   // base key → { geometry, bvh, samples, tolerance }
 const partMesh = (shape, pose) => {
   let m = partMeshes.get(pose.base);
@@ -230,7 +228,7 @@ const partMesh = (shape, pose) => {
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(Uint32Array.from(t.indices), 1));   // a copy: the BVH reorders it
   geometry.boundsTree = new MeshBVH(geometry); geometry.computeBoundingBox();
-  m = { geometry, bvh: geometry.boundsTree, samples, tolerance: t.tolerance };
+  m = { geometry, bvh: geometry.boundsTree, samples };
   if (partMeshes.size >= MESH_KEEP) partMeshes.delete(partMeshes.keys().next().value);
   partMeshes.set(pose.base, m);
   return m;
@@ -245,15 +243,16 @@ const holds = (m, points, to) => {   // is one of these points, brought into m's
   }
   return false;
 };
-const meshesClear = (a, A, b, B) => {
-  const often = [busy(A.base), busy(B.base)].some(Boolean);
-  if (!often || process.env.CADGANG_MESH_CLEAR === '0') return false;
+const BOX_LONG = 0.5;   // an analytic box is at most a few tenths long
+const within = (p, q) => [0, 1, 2].every((k) => q.min[k] <= p.min[k] + BOX_LONG && p.max[k] - BOX_LONG <= q.max[k]);
+const surfacesApart = (a, A, b, B) => {
   try {
-    const ma = partMesh(a, A), mb = partMesh(b, B), gap = MESH_SLACK * (ma.tolerance + mb.tolerance);
-    const r = mul(inv(A.m), B.m), bToA = new THREE.Matrix4().set(...r, 0, 0, 0, 1), aToB = bToA.clone().invert();
-    if (ma.bvh.closestPointToGeometry(mb.geometry, bToA, {}, {}, gap, gap)) return false;   // something of b within the gap of a
-    return !holds(ma, mb.samples, bToA) && !holds(mb, ma.samples, aToB);
-  } catch { return false; }   // no mesh to go by: the kernel measures
+    if (brepSurfacesMeet(a, b)) return false;
+    const P = turned(a)[0], Q = turned(b)[0];
+    if (!within(P, Q) && !within(Q, P)) return true;
+    const ma = partMesh(a, A), mb = partMesh(b, B), r = mul(inv(A.m), B.m), bToA = new THREE.Matrix4().set(...r, 0, 0, 0, 1);
+    return !holds(ma, mb.samples, bToA) && !holds(mb, ma.samples, bToA.clone().invert());
+  } catch { return false; }   // the kernel measures
 };
 // The volume two parts share depends only on how one sits relative to the other, so the pair is remembered by the two
 // parts as first made and that relative placement: a hammer and its screw swung together through every pose of a
@@ -264,7 +263,10 @@ const interferenceOfOne = (a, b) => {
   const rel = (P, Q) => mul(inv(P.m), Q.m).map((v) => Math.round(v * 1e6) / 1e6 + 0).join(',');   // to a nanometre; + 0 turns -0 into 0
   let r = rel(A, B);
   if (A.base === B.base) { const back = rel(B, A); if (back < r) r = back; }   // two copies of one part: either may be the first
-  return remembered(`interference|${A.base}|${B.base}|${r}`, () => (meshesClear(a, A, b, B) ? 0 : ops.interference(a, b)));
+  return remembered(`interference|${A.base}|${B.base}|${r}`, () => {
+    if (process.env.CADGANG_NEAR !== '0' && surfacesApart(a, A, b, B)) return 0;
+    return ops.interference(a, b);
+  });
 };
 // Boxes a part apart skip the boolean: the analytic boxes (a tight one meshes an imported caster for 1.5 s), in ten
 // frames, since a pin beside a gear is inside the gear's own box. The pad made no difference to what is skipped (1 to 0.01 mm).
