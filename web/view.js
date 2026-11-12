@@ -1423,7 +1423,6 @@ $('#rotReset').addEventListener('click', () => turnModel(new THREE.Quaternion())
 // ← → nudge the explode 1%; held, they scrub it at a steady rate (key repeat is too jumpy) until let go.
 const scrub = { dir: 0, raf: 0 };
 function scrubExplode(dir) {
-  if (ui.mode === 'joint') return setExplode(0);
   setExplode(+$('#explode').value + dir);
   scrub.dir = dir; cancelAnimationFrame(scrub.raf);
   const t0 = performance.now();
@@ -1437,7 +1436,7 @@ function scrubExplode(dir) {
 }
 window.addEventListener('keyup', (e) => { if (scrub.dir && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { scrub.dir = 0; commit(); } });
 window.addEventListener('blur', () => { scrub.dir = 0; });
-function setExplode(v) { if (ui.mode === 'joint') return say('explode is off in joint mode: switch to Explode (E)'); $('#explode').value = Math.max(0, Math.min(100, v)); applyExplode(); }
+function setExplode(v) { if (ui.mode === 'joint') setMode('explode'); $('#explode').value = Math.max(0, Math.min(100, v)); applyExplode(); }
 $('#resetBtn').addEventListener('click', () => { for (const m of model.children) { m.userData.axis = undefined; m.userData.pull = undefined; m.userData.exTo = undefined; } applyExplode(); say('explode positions reset'); });
 
 function finishLoad(name, ms, keep = false) {
@@ -1933,8 +1932,9 @@ function addJoint(m, type, a, parent = null, align = null) {
 // shank, a bore, a pin, a ball), else along the first face's normal; the menu offers the type the faces
 // suggest first. The arrow shows what a click would take. The parts stay where they are (Fusion's as-built joint).
 let pickJoint = null;   // { first: { m, a } } once the moving part's face is in
-function startPickJoint() {   // in either mode: an exploded assembly stays exploded, its faces easier to reach
+function startPickJoint() {   // asked for in explode mode, it switches to joint mode first (the assembly comes together)
   hideMenu();
+  setMode('joint');
   setMeasure(false);   // the face picks are the joint's: no measure or markup tool in the way
   const t = $('[data-tool].on')?.dataset.tool; if (t) markup.setTool(t);
   pickJoint = {};
@@ -3665,7 +3665,7 @@ const CMDS = [
     const m = hovered ?? (selected.size === 1 ? [...selected][0] : null);
     if (m?.isMesh) startPickAxis(m); else say('point at a part, or select one, then press V');
   } },
-  { key: '0', label: 'Explode all / none', btn: '#explode', run: () => setExplode(+$('#explode').value ? 0 : 100), on: () => +$('#explode').value > 0 },
+  { key: '0', label: 'Explode all / none', btn: '#explode', run: () => setExplode(ui.mode !== 'joint' && +$('#explode').value ? 0 : 100), on: () => +$('#explode').value > 0 },
   { key: '=', label: 'Explode more', run: () => setExplode(+$('#explode').value + 10) },
   { key: '-', label: 'Explode less', run: () => setExplode(+$('#explode').value - 10) },
   { key: 'ArrowRight', hold: true, label: 'Nudge explode out (hold to scrub)', run: () => scrubExplode(1) },
