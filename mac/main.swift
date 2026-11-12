@@ -241,6 +241,17 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
                 w.evaluateJavaScript("window.cadgangSaveTo?.(\(json)[0])")
             }
         }
+        // Save a picture (CAPTURE, Save screenshot): a web view has no downloads, so the Save panel picks the path and the shell writes the PNG.
+        if cmd == "savePng", let w = m.webView, let b64 = body["png"] as? String, let png = Data(base64Encoded: b64) {
+            let panel = NSSavePanel()
+            panel.allowedFileTypes = ["png"]
+            panel.nameFieldStringValue = body["name"] as? String ?? "cadgang.png"
+            panel.begin { r in
+                guard r == .OK, let u = panel.url else { return }
+                do { try png.write(to: u) } catch { NSSound.beep(); return }
+                if let data = try? JSONSerialization.data(withJSONObject: [u.path]), let json = String(data: data, encoding: .utf8) { w.evaluateJavaScript("window.cadgangSaved?.(\(json)[0])") }
+            }
+        }
         if cmd == "copy", let s = body["text"] as? String { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string) }
     }
 

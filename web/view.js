@@ -3358,6 +3358,15 @@ $('#shareShot').addEventListener('click', () => {
   navigator.clipboard.write([new ClipboardItem({ 'image/png': shotBlob() })])
     .then(() => say('screenshot copied: paste it anywhere'), (e) => say(`could not copy the screenshot (${e.message}): use Save screenshot`, true));
 });
+// A PNG (a data: URL) to a file. The Mac app has no downloads, so its shell asks where and writes it; a browser downloads it.
+async function savePng(url, note = '') {
+  const name = shotName(), shell = window.webkit?.messageHandlers?.cadgang;
+  if (shell) return shell.postMessage({ cmd: 'savePng', name, png: url.split(',')[1] });   // the shell says what it saved (cadgangSaved)
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(await (await fetch(url)).blob()), download: name });
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  say(`saved ${name}${note ? ` (${note})` : ''}`);
+}
+window.cadgangSaved = (path) => say(`saved ${path}`);
 // CAPTURE: the 3D view as it is drawn now (grid, markups and notes if they are on) with none of the buttons or
 // panels, the size of the whole window. The view fills the window for one frame that is never painted, is drawn
 // and read at that size, and goes back.
@@ -3366,16 +3375,12 @@ $('#captureBtn').addEventListener('click', async () => {
   if (!bbox) return say('open a file first', true);
   viewport.classList.add('capture'); frame();
   let url, size; try { url = markup.snapshot(); size = `${renderer.domElement.width} × ${renderer.domElement.height}`; } finally { viewport.classList.remove('capture'); frame(); }
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(await (await fetch(url)).blob()), download: shotName() });
-  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-  say(`saved ${a.download} (${size})`);
+  savePng(url, size);
 });
 $('#shareShotSave').addEventListener('click', async () => {
   shareMenu.hidden = true;
   if (!bbox) return say('open a file first', true);
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(await shotBlob()), download: shotName() });
-  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-  say(`saved ${a.download}`);
+  savePng(markup.snapshot());
 });
 $('#shareWeb').addEventListener('click', async () => {
   if (!sources.length) return say('open a file first', true);
