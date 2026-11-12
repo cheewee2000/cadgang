@@ -2597,6 +2597,7 @@ async function openPaths(paths, keep, mine) {
       const parts = cad ? parseCad(buf) : await parseMesh(name.toLowerCase().split('.').pop(), buf, name);
       if (!mine() || ticket !== loadTicket) return;   // a newer open took this window, or a newer load the progress bar
       if (stale) { clearModel(); stale = false; }
+      hideDraft();   // the real model is here
       sources.push({ name, cad, buffer: buf });
       for (const part of parts) addPart(part, name);
       shown++; label = name; progressEnd(name, performance.now() - tf);
@@ -2853,6 +2854,35 @@ function showBusy(what) {
   el.querySelector('span').textContent = what;
   busyTimer = setTimeout(() => { el.hidden = false; }, 400);
 }
+// A cell under way: the rough shape its last op made (the kernel's draft, see kernel.js) is drawn here step by
+// step, see-through over the model already up, so a long build is watched instead of waited for. It goes
+// when the run ends or the real model lands.
+// ponytail: the shape is drawn where the op made it; a part built at the origin and moved later shows at the origin. In-place needs the kernel to know the final move.
+const draft = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial({ color: 0x8a8a8a, roughness: 0.7, side: THREE.DoubleSide, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));   // pulled forward: a step of the part on screen lies flush with it
+draft.visible = false; draft.renderOrder = 3; scene.add(draft);
+let draftRun = null, draftSeq = 0;
+function hideDraft() { draftSeq++; draft.visible = false; }
+function showDraft({ op, kind }) {
+  if (kind === 'done') return hideDraft();
+  if (op === 'cell' || kind === 'render' || draftRun) return;   // a render is the whole model, which is already here
+  const my = draftSeq;
+  draftRun = fetchBuffer(`api/cells/draft?session=${encodeURIComponent(liveKey ?? '')}`).then((buf) => {
+    if (my !== draftSeq) return;   // the real model landed while this was on its way
+    const n = new DataView(buf).getUint32(0, true), [np, nn, ni] = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n))).bin;   // packBinaryMesh, src/server/cells.js
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buf, 4 + n, np), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(buf, 4 + n + np * 4, nn), 3));
+    g.setIndex(new THREE.BufferAttribute(new Uint32Array(buf, 4 + n + (np + nn) * 4, ni), 1));
+    draft.geometry.dispose(); draft.geometry = g;
+    draft.material.opacity = model.children.length ? 0.45 : 1;
+    draft.visible = true;
+    if (!model.children.length) {   // nothing up yet (a first build): look at the step
+      g.computeBoundingSphere();
+      orbit.target.copy(g.boundingSphere.center);
+      orbit.dist = Math.max(orbit.dist, g.boundingSphere.radius / Math.sin(THREE.MathUtils.degToRad(persp.fov / 2)) * 1.1);   // only ever out: no zooming back and forth between steps
+    }
+  }).catch(() => {}).finally(() => { draftRun = null; });
+}
 // Claude asks what only the page knows (cadgang_interference): the reply goes back through the server.
 function answer({ id, what, args }) {
   let body;
@@ -2911,7 +2941,8 @@ document.addEventListener('visibilitychange', focus);
     if (msg.type === 'subject') followTo(msg.subject);
     if (msg.type === 'tabs') setTabs(msg.tabs || []);
     if (msg.type === 'raise' && msg.subject === subject) { window.webkit?.messageHandlers?.cadgang?.postMessage({ cmd: 'raise' }); window.focus(); window.cadgangOpen(subject.split('|'), { keep: true }); }   // this window has the file another was asked to open: come forward, fresh
-    if (msg.type === 'cells_progress' && liveKey !== undefined && (msg.session ?? null) === liveKey && msg.cell) { const el = $('#busy'); if (!el.hidden) el.querySelector('span').textContent = `${msg.kind === 'assert' ? 'testing' : 'building'} ${msg.cell}${msg.op && msg.op !== 'cell' ? ` · ${msg.op}` : ''}…`; }   // which cell, and the step it is on
+    if (msg.type === 'cells_progress' && liveKey !== undefined && (msg.session ?? null) === liveKey && msg.cell) { const el = $('#busy'); if (!el.hidden) el.querySelector('span').textContent = `${msg.kind === 'assert' ? 'testing' : 'building'} ${msg.cell}${msg.op && msg.op !== 'cell' ? ` · ${msg.op}` : ''}…`; }
+    if (msg.type === 'cells_progress' && liveKey !== undefined && (msg.session ?? null) === liveKey) showDraft(msg);   // which cell, and the step it is on
     if (msg.type === 'cells_changed' && liveKey !== undefined && (msg.session ?? null) === liveKey) window.cadgangOpen(subject.split('|'), { keep: true });   // Claude committed a change: the model on screen follows
     if (msg.type === 'file_changed' && subject.split('|').includes(msg.path)) { say('file changed, reloading…'); window.cadgangOpen(subject.split('|'), { keep: true }); }
   };
