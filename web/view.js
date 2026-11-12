@@ -3350,7 +3350,9 @@ $('#shareBtn').addEventListener('click', (e) => { e.stopPropagation(); shareMenu
 shareMenu.addEventListener('click', (e) => e.stopPropagation());
 document.addEventListener('click', () => { shareMenu.hidden = true; });
 const shotBlob = () => fetch(markup.snapshot()).then((r) => r.blob());
-const shotName = () => `${String($('#fileName').textContent || 'cadgang').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_')}.png`;
+// The file's name and the time to the second, local: each picture its own file, and a folder of them sorts in the order taken.
+const shotStamp = (d = new Date()) => { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`; };
+const shotName = () => `${String($('#fileName').textContent || 'cadgang').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_')}_${shotStamp()}.png`;
 $('#shareShot').addEventListener('click', () => {
   shareMenu.hidden = true;
   if (!bbox) return say('open a file first', true);
