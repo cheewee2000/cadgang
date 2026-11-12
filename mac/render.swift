@@ -77,8 +77,10 @@ final class PathTracer: NSObject, MTKViewDelegate {
     func stop() { view.isHidden = true; view.isPaused = true; fresh = true; accel = nil; vtx = nil; idx = nil; tri = nil; mats = nil; uvs = nil; lamps = nil; texs = [] }
 
     /// verts: [x y z nx ny nz] per vertex, world space. idx: 3 per triangle. tri: material per triangle.
-    /// mats: [r g b metalness roughness transmission ior texture glow] (linear colour; texture: an index into
-    /// pngs or -1, glow: how much it lights itself, a screen's picture or a lamp's lens). uv: [u v] per vertex (zeros where untextured).
+    /// mats: [r g b metalness roughness transmission ior texture glow grain axes + 12] (linear colour; texture: an index into
+    /// pngs or -1, glow: how much it lights itself, a screen's picture or a lamp's lens; grain: 0 none, 1 brushed, 2 bead blast,
+    /// 3 wood; axes: the body's longest axis * 4 + its middle one; then the three rows of world -> the body's own millimetres,
+    /// where the grain lives, so it stays on a part that moves). uv: [u v] per vertex (zeros where untextured).
     /// lights: [x y z dx dy dz r g b cosOuter cosInner] per lamp (a glTF's spots and points; a point has cos -2, -1), colour times
     /// intensity in the sun's units at 1 m (scene mm), falling off with the square of the distance.
     func setScene(verts: Data, idx idxData: Data, tri triData: Data, mats matList: [[Double]], cap: [Double], bg: [Double], uv uvData: Data? = nil, pngs: [Data] = [], lights: [[Double]] = []) {
@@ -98,8 +100,11 @@ final class PathTracer: NSObject, MTKViewDelegate {
         m.append([0.035, 0.035, 0.035, 0, 0.9, 0, 1.5])                       // floor: dark matte (Oct 21, Che-Wei)
         m.append(cap.map(Float.init) + [0, 0.7, 0, 1.5])                       // section cap
         tm += [UInt32(m.count - 2), UInt32(m.count - 2)]
-        let mats8: [Float] = m.flatMap { [$0[0], $0[1], $0[2], 0, $0[3], $0[4], $0[5], $0.count > 6 ? $0[6] : 1.5,
-                                          $0.count > 7 ? $0[7] : -1, $0.count > 8 ? $0[8] : 0, 0, 0] }   // three float4 per material
+        let mats8: [Float] = m.flatMap { a -> [Float] in   // six float4 per material
+            func at(_ i: Int, _ d: Float) -> Float { a.count > i ? a[i] : d }
+            let rows: [Float] = a.count >= 23 ? Array(a[11..<23]) : [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0]
+            return [a[0], a[1], a[2], 0, a[3], a[4], a[5], at(6, 1.5), at(7, -1), at(8, 0), at(9, 0), at(10, 0)] + rows
+        }
         var uv = [Float](repeating: 0, count: v.count / 6 * 2)   // the floor's four corners included, untextured
         if let uvData { _ = uv.withUnsafeMutableBytes { uvData.copyBytes(to: $0, count: min(uvData.count, $0.count)) } }
         let loader = MTKTextureLoader(device: dev)
@@ -322,7 +327,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     struct U { float4 camPos, camFwd, camRight, camUp, sunDir, sunCol, skyTop, skyBot, bg, clip, scene; uint4 info;
                float4 pPos, pFwd, pRight, pUp, fx; uint4 tick; };
     struct Vtx { packed_float3 p; packed_float3 n; };
-    struct Mat { float4 color; float4 prm; float4 tex; };   // prm: metalness, roughness, transmission, ior; tex: picture index (-1 none), glow
+    struct Mat { float4 color; float4 prm; float4 tex; float4 r0, r1, r2; };   // prm: metalness, roughness, transmission, ior; tex: picture index (-1 none), glow, grain, axes; r: world -> the body's own mm
     struct Lamp { float4 pos; float4 dir; float4 col; };     // pos.w: cos of the cone's edge, dir.w: cos where it is full
 
     static uint pcg(thread uint& s) { s = s * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
@@ -457,6 +462,41 @@ final class PathTracer: NSObject, MTKViewDelegate {
     }
     static float3 srgb(float3 c) { c = saturate(c); return select(1.055 * pow(c, 1.0 / 2.4) - 0.055, 12.92 * c, c <= 0.0031308); }
 
+    static float hash3(float3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+    static float vnoise(float3 x) {   // value noise, 0..1, one cell a unit
+        float3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(mix(hash3(i), hash3(i + float3(1, 0, 0)), f.x), mix(hash3(i + float3(0, 1, 0)), hash3(i + float3(1, 1, 0)), f.x), f.y),
+                   mix(mix(hash3(i + float3(0, 0, 1)), hash3(i + float3(1, 0, 1)), f.x), mix(hash3(i + float3(0, 1, 1)), hash3(i + float3(1, 1, 1)), f.x), f.y), f.z);
+    }
+    static float3 axis(int i) { return i == 0 ? float3(1, 0, 0) : i == 1 ? float3(0, 1, 0) : float3(0, 0, 1); }
+    // A finish with a grain to it, at its true size: a STEP body has no texture coordinates, so the grain is worked out from
+    // where the hit is in the body's own millimetres. It tilts the normal (n, world) and, for wood, shades the colour.
+    //   1 brushed: scratches 0.07 to 0.3 mm apart along the body's length, tilting the normal across them (a highlight smears across the brushing)
+    //   2 bead blast: 0.1 mm dimples
+    //   3 wood: growth lines 2 mm apart along the length, wandering, with fibres
+    static void grain(Mat m, float3 pw, thread float3& n, thread float3& col) {
+        int kind = int(m.tex.z + 0.5), code = int(m.tex.w + 0.5);
+        float3 p = float3(dot(m.r0.xyz, pw) + m.r0.w, dot(m.r1.xyz, pw) + m.r1.w, dot(m.r2.xyz, pw) + m.r2.w);
+        float3 no = normalize(float3(dot(m.r0.xyz, n), dot(m.r1.xyz, n), dot(m.r2.xyz, n)));
+        float3 A = axis(code / 4), B = axis(code % 4), d = 0.0;
+        float3 qa = p - A * dot(p, A), qb = p - B * dot(p, B);   // the same all along A (or B): lines
+        if (kind == 1) {
+            float ta = (vnoise(qa * 3.5) - 0.5) * 0.8 + (vnoise(qa * 14.0) - 0.5) * 1.2, tb = (vnoise(qb * 3.5) - 0.5) * 0.8 + (vnoise(qb * 14.0) - 0.5) * 1.2;
+            d = mix(cross(no, A) * ta, cross(no, B) * tb, smoothstep(0.75, 0.95, abs(dot(no, A)))) * 0.35;   // an end face is brushed along the middle axis
+        } else if (kind == 2) {
+            d = (float3(vnoise(p * 9.0), vnoise(p * 9.0 + 31.7), vnoise(p * 9.0 + 71.3)) - 0.5) * 0.5;
+        } else {
+            float3 q = normalize(B + 0.5 * cross(A, B));   // across the width, leaning through the thickness: lines on the face and the edge
+            float3 slow = qa * 0.05 + A * dot(p, A) * 0.012;   // the lines wander a little across the board and hardly at all along it
+            float t = dot(p, q) / 2.2 + (vnoise(slow) - 0.5) * 1.6 + (vnoise(slow * 3.1 + 7.0) - 0.5) * 0.5, s = 0.5 + 0.5 * sin(6.2832 * t);
+            float fib = vnoise(qa * 6.0 + A * dot(p, A) * 0.15);
+            col *= mix(0.8, 1.05, s * s) * (0.9 + 0.2 * fib);
+            d = cross(no, A) * (fib - 0.5) * 0.12;
+        }
+        no = normalize(no + d);
+        n = normalize(m.r0.xyz * no.x + m.r1.xyz * no.y + m.r2.xyz * no.z);
+    }
+
     struct First { bool hit; float3 p, n, diff, spec; float rough, reach; };   // what the camera's ray met: the denoiser's guides (reach: how far its mirror bounce went)
 
     // One path from the camera through px (-1..1, y up). rgb: its light, weighted by 1 - a; a: how much of it is background.
@@ -495,8 +535,9 @@ final class PathTracer: NSObject, MTKViewDelegate {
             }
             if (!h.cap) L += T * col * m.tex.y;   // a screen or a lamp's lens lights itself
             float metal = m.prm.x, a = max(m.prm.y * m.prm.y, 0.002), a2 = a * a, trans = m.prm.z;
-            float3 v = -d;
-            if (depth == 0) { f.hit = true; f.p = p; f.n = h.n; f.diff = col * (1.0 - metal); f.spec = mix(float3(0.04), col, metal); f.rough = m.prm.y; }
+            float3 v = -d, nt = h.n;   // nt: the normal with the finish's grain in it
+            if (!h.cap && m.tex.z > 0.5) grain(m, p, nt, col);
+            if (depth == 0) { f.hit = true; f.p = p; f.n = dot(nt, v) > 0.02 ? nt : h.n; f.diff = col * (1.0 - metal); f.spec = mix(float3(0.04), col, metal); f.rough = m.prm.y; }
             if (trans > 0.5) {   // glass: Fresnel-weighted reflect or refract, IOR 1.5
                 bool entering = dot(h.ng, d) < 0.0;
                 float3 n = entering ? h.n : -h.n;
@@ -508,7 +549,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
                 lastPdf = 1e9;
                 continue;
             }
-            float3 n = h.n, ng = dot(h.ng, d) < 0.0 ? h.ng : -h.ng;
+            float3 n = dot(nt, v) > 0.02 ? nt : h.n, ng = dot(h.ng, d) < 0.0 ? h.ng : -h.ng;   // a grain that turned the normal away from the eye is left out
             if (dot(n, ng) < 0.0) n = ng;
             o = p + ng * eps;
             float pSpec = mix(0.25, 1.0, metal);

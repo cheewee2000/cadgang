@@ -1,6 +1,6 @@
 // Offscreen rig for mac/render.swift (RENDER, the Metal path tracer): a small scene, traced without the app.
 //   swiftc -O -o /tmp/render-rig mac/render.swift test/render-rig/main.swift -framework Cocoa -framework Metal -framework MetalKit -framework MetalFX
-//   /tmp/render-rig <out dir> [ortho] [studio]
+//   /tmp/render-rig <out dir> [ortho] [studio] [grain]
 // Writes moving-before.png (one full-size sample: a moving view without MetalFX), reference.png (converged), moving.png (the last
 // frame of an orbit through MetalFX's denoising upscaler), still.png (30 frames later), handoff.png (the samples fading in over it),
 // and prints the time a moving frame takes. moving.png should be clean and close to reference.png.
@@ -37,7 +37,10 @@ sphere(SIMD3(-25, 0, 32), 20, 1)                              // polished steel 
 sphere(SIMD3(25, 5, 27), 15, 2)                               // red plastic ball
 box(SIMD3(10, -35, 12), SIMD3(40, -20, 40), 3)                // brass block
 for i in 0..<8 { box(SIMD3(-55 + Float(i) * 4, 25, 12), SIMD3(-53 + Float(i) * 4, 36, 30), 4) }   // thin fins: fine detail for the upscaler
-let mats: [[Double]] = [[0.03, 0.03, 0.035, 1, 0.38, 0, 1.5], [0.56, 0.57, 0.58, 1, 0.12, 0, 1.5], [0.6, 0.02, 0.02, 0, 0.35, 0, 1.5], [0.78, 0.57, 0.11, 1, 0.3, 0, 1.5], [0.8, 0.8, 0.8, 0, 0.6, 0, 1.5]]
+var mats: [[Double]] = [[0.03, 0.03, 0.035, 1, 0.38, 0, 1.5], [0.56, 0.57, 0.58, 1, 0.12, 0, 1.5], [0.6, 0.02, 0.02, 0, 0.35, 0, 1.5], [0.78, 0.57, 0.11, 1, 0.3, 0, 1.5], [0.8, 0.8, 0.8, 0, 0.6, 0, 1.5]]
+if CommandLine.arguments.contains("grain") {   // a brushed aluminium plate, a bead-blasted ball, a brushed brass block, wooden fins: [.. texture glow grain axes]
+    mats[0] = [0.65, 0.66, 0.68, 1, 0.4, 0, 1.5, -1, 0, 1, 1]; mats[1] += [-1, 0, 2, 1]; mats[3] += [-1, 0, 1, 9]; mats[4] = [0.48, 0.25, 0.1, 0, 0.75, 0, 1.5, -1, 0, 3, 9]
+}
 
 guard let t = PathTracer(frame: .zero) else { print("no ray tracing"); exit(1) }
 t.setScene(verts: f32(v), idx: u32(ix), tri: u32(tm), mats: mats, cap: [0.5, 0.5, 0.5], bg: [1, 1, 1])

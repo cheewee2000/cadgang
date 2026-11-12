@@ -26,7 +26,7 @@ export const MATERIALS = {
   glass: { label: 'Glass', density: 2.5, color: 0xdfe8ee, metal: 0, rough: 0, trans: 1, ior: 1.52 },   // a breath of blue-grey, as the Glass look
   acrylic: { label: 'Acrylic', density: 1.18, color: 0xf7fbff, metal: 0, rough: 0.02, trans: 1, ior: 1.49 },
   rubber: { label: 'Rubber', density: 1.2, color: 0x2a2a2a, metal: 0, rough: 0.95 },
-  wood: { label: 'Wood', density: 0.6, color: 0xb98a5a, metal: 0, rough: 0.75 },
+  wood: { label: 'Wood', density: 0.6, color: 0xb98a5a, metal: 0, rough: 0.75, grain: 3 },   // grain: the Mac app's RENDER draws growth lines and fibres (render.swift)
   pcb: { label: 'PCB green', density: 1.85, color: 0x1f5a2e, metal: 0, rough: 0.45 },
   pcb_black: { label: 'PCB black', density: 1.85, color: 0x141516, metal: 0, rough: 0.4 },
   pcb_white: { label: 'PCB white', density: 1.85, color: 0xf1f1ec, metal: 0, rough: 0.45 },
@@ -98,6 +98,7 @@ export function materialFor(THREE, m, src = m.userData) {
     return new THREE.MeshPhysicalMaterial({ ...src.pbr, color: new THREE.Color().setRGB(...src.color, THREE.SRGBColorSpace) });
   const d = MATERIALS[materialOf(m, g)];
   const mat = new THREE.MeshPhysicalMaterial({ color: d.color, metalness: d.metal, roughness: d.rough });
+  if (d.grain) mat.userData.grain = d.grain;
   if (d.trans) Object.assign(mat, { transmission: 0.9, ior: d.ior, thickness: 0, transparent: true, opacity: 0.75 });   // thin-walled in the live view: a thickness bent what is behind it per triangle (shattered look); the Metal render refracts for real. A little opacity: pure transmission vanished against the background
   // Plastic, anodizing, ceramic and epoxy are whatever colour the file says.
   if ((d.fileColor || d === MATERIALS.plastic || d === MATERIALS.gloss) && src.color) mat.color.setRGB(...src.color, THREE.SRGBColorSpace);

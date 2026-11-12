@@ -114,7 +114,9 @@ let tints = {};
 try { tints = JSON.parse(localStorage.getItem(TINT_KEY)) || {}; } catch {}
 const saveTints = () => { try { localStorage.setItem(TINT_KEY, JSON.stringify(tints)); } catch {} };
 // A finish the user gave a body (matte, satin, gloss, polished), kept the same way: how rough it renders.
-const FINISHES = { matte: { label: 'Matte', rough: 0.75 }, satin: { label: 'Satin', rough: 0.45 }, gloss: { label: 'Gloss', rough: 0.2 }, polished: { label: 'Polished', rough: 0.06 } };
+// Brushed and bead blast have a grain as well: RENDER in the Mac app draws it at its true size (render.swift grain); elsewhere they are a roughness.
+const FINISHES = { matte: { label: 'Matte', rough: 0.75 }, satin: { label: 'Satin', rough: 0.45 }, gloss: { label: 'Gloss', rough: 0.2 }, polished: { label: 'Polished', rough: 0.06 },
+  brushed: { label: 'Brushed', rough: 0.4, grain: 1 }, blasted: { label: 'Bead blast', rough: 0.6, grain: 2 } };
 const FINISH_KEY = 'cadgang-finishes';
 let finishes = {};
 try { finishes = JSON.parse(localStorage.getItem(FINISH_KEY)) || {}; } catch {}
@@ -138,7 +140,7 @@ function styleMesh(m) {
     const tint = src.tint || m.userData.tint;
     if (!ui.color && tint && mat.color && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.color.setRGB(...tint, THREE.SRGBColorSpace);
     const fin = src.finish || m.userData.finish;
-    if (fin && FINISHES[fin] && 'roughness' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.roughness = FINISHES[fin].rough;
+    if (fin && FINISHES[fin] && 'roughness' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) { mat.roughness = FINISHES[fin].rough; if (FINISHES[fin].grain) mat.userData.grain = FINISHES[fin].grain; }
     if (m.userData.opacity < 1 && SOLID_LOOKS.has(ui.look)) Object.assign(mat, { transparent: true, opacity: m.userData.opacity, depthWrite: false });
     if (m.userData.ghost) Object.assign(mat, { transparent: true, opacity: Math.min(mat.opacity, 0.15), depthWrite: false, transmission: 0 });
     if (m.userData.map && !ui.color && 'map' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) { mat.map = m.userData.map; mat.color?.set(0xffffff); }
@@ -3084,7 +3086,7 @@ function nativeScene() {
   for (const m of meshes) { nv += m.geometry.attributes.position.count; nt += (m.geometry.index?.count ?? m.geometry.attributes.position.count) / 3; }
   const verts = new Float32Array(nv * 6), idx = new Uint32Array(nt * 3), tri = new Uint32Array(nt), mats = [];
   const uv = new Float32Array(nv * 2), pics = [];   // pictures: texture coordinates per vertex, each image once
-  const v = new THREE.Vector3(), nm = new THREE.Matrix3();
+  const v = new THREE.Vector3(), nm = new THREE.Matrix3(), inv = new THREE.Matrix4();
   const inGlass = (bbox?.getSize(v).length() || 1) * 2e-4;   // 10× the tracer's ray offset
   let vo = 0, to = 0;
   meshes.forEach((m, mi) => {
@@ -3109,7 +3111,12 @@ function nativeScene() {
     // a body with a material per group (several finishes) sends one material per group
     if (ms.length > 1) for (const gr of g.groups) tri.fill(base + gr.materialIndex, to + gr.start / 3, to + Math.min(gr.start + gr.count, n) / 3);
     else tri.fill(base, to, to + n / 3);
-    for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5, mat.map === map ? pic : -1, pic >= 0 || !m.userData.map ? m.userData.glow : 0]); }
+    // a finish's grain is worked out in the body's own millimetres, along its length: the way back from the world (a glTF's metres scaled out), and its longest and middle axes
+    if (!g.boundingBox) g.computeBoundingBox();
+    const size = g.boundingBox.getSize(v).toArray(), [long, mid] = [0, 1, 2].sort((a, b) => size[b] - size[a]);
+    const e = inv.copy(m.matrixWorld).invert().elements, sc = Math.cbrt(Math.abs(m.matrixWorld.determinant()));
+    const rows = [0, 1, 2].flatMap((r) => [e[r], e[r + 4], e[r + 8], e[r + 12]].map((x) => x * sc));
+    for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5, mat.map === map ? pic : -1, pic >= 0 || !m.userData.map ? m.userData.glow : 0, mat.userData.grain ?? 0, long * 4 + mid, ...rows]); }
     vo += pos.count; to += n / 3;
   });
   const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff);
