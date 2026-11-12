@@ -19,30 +19,41 @@
  * With `normals`, vertices weld only within one surface and the normals come back welded too.
  */
 export function weldVertices(positions, indices, tol = 1e-4, normals = null) {
-  const inv = 1 / tol;
-  const map = new Map();
-  const remap = new Uint32Array(positions.length / 3);
-  const outPos = [], outNrm = [];
+  const inv = 1 / tol, n = positions.length / 3;
+  // An open-addressed table of the vertices seen so far, keyed by the rounded position (and, with
+  // normals, the normal's bin). A Map of string keys made the same groups at five times the cost:
+  // nearly a second of a 1.3 M-vertex import.
+  let cap = 16; while (cap < n * 2) cap *= 2;
+  const mask = cap - 1, table = new Int32Array(cap).fill(-1);   // slot → welded index
+  const first = new Uint32Array(n);   // welded index → the vertex that made it
+  const remap = new Uint32Array(n);
   let next = 0;
-  for (let v = 0; v < positions.length / 3; v++) {
-    const x = positions[v * 3], y = positions[v * 3 + 1], z = positions[v * 3 + 2];
-    let key = `${Math.round(x * inv)},${Math.round(y * inv)},${Math.round(z * inv)}`;
+  for (let v = 0; v < n; v++) {
+    const x = Math.round(positions[v * 3] * inv), y = Math.round(positions[v * 3 + 1] * inv), z = Math.round(positions[v * 3 + 2] * inv);
     // With normals, a corner where a plane meets a cylinder wall keeps one vertex per
     // surface (~1° bins), so shading never bleeds from the wall onto the plane. (v0.11.1;
     // the 0.14.0 cell-stack restore dropped this once and the streaks came back.)
-    if (normals) key += `|${Math.round(normals[v * 3] * 64)},${Math.round(normals[v * 3 + 1] * 64)},${Math.round(normals[v * 3 + 2] * 64)}`;
-    let idx = map.get(key);
-    if (idx === undefined) {
-      idx = next++;
-      map.set(key, idx);
-      outPos.push(x, y, z);
-      if (normals) outNrm.push(normals[v * 3], normals[v * 3 + 1], normals[v * 3 + 2]);
+    const a = normals ? Math.round(normals[v * 3] * 64) : 0, b = normals ? Math.round(normals[v * 3 + 1] * 64) : 0, c = normals ? Math.round(normals[v * 3 + 2] * 64) : 0;
+    let h = Math.imul(x | 0, 73856093) ^ Math.imul(y | 0, 19349663) ^ Math.imul(z | 0, 83492791) ^ Math.imul((a * 129 + b) * 129 + c | 0, 0x9e3779b1);
+    h ^= h >>> 16; h = Math.imul(h, 0x45d9f3b); h ^= h >>> 16;
+    let idx;
+    for (let s = h & mask; ; s = (s + 1) & mask) {
+      idx = table[s];
+      if (idx < 0) { idx = table[s] = next++; first[idx] = v; break; }
+      const u = first[idx] * 3;
+      if (Math.round(positions[u] * inv) === x && Math.round(positions[u + 1] * inv) === y && Math.round(positions[u + 2] * inv) === z
+        && (!normals || (Math.round(normals[u] * 64) === a && Math.round(normals[u + 1] * 64) === b && Math.round(normals[u + 2] * 64) === c))) break;
     }
     remap[v] = idx;
   }
+  const outPos = new Float32Array(next * 3), outNrm = normals ? new Float32Array(next * 3) : null;
+  for (let i = 0; i < next; i++) for (let k = 0, u = first[i] * 3; k < 3; k++) {
+    outPos[i * 3 + k] = positions[u + k];
+    if (outNrm) outNrm[i * 3 + k] = normals[u + k];
+  }
   const outIdx = new Uint32Array(indices.length);
   for (let i = 0; i < indices.length; i++) outIdx[i] = remap[indices[i]];
-  return { positions: Float32Array.from(outPos), indices: outIdx, normals: normals ? Float32Array.from(outNrm) : null };
+  return { positions: outPos, indices: outIdx, normals: outNrm };
 }
 
 /** Axis-aligned bounds of a position array: {min:[..], max:[..]} (null if empty). */
