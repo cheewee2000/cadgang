@@ -147,6 +147,24 @@ final class PathTracer: NSObject, MTKViewDelegate {
         if u.info.x >= Self.maxSamples { v.isPaused = true }   // converged: stop spending the GPU
     }
 
+    /// The picture on screen, as a PNG: one more frame traced into a texture of the drawable's size (the samples
+    /// gathered so far carry over) and read back. Nil with no scene loaded.
+    func png() -> (data: Data, width: Int, height: Int)? {
+        let w = Int(view.drawableSize.width), h = Int(view.drawableSize.height)
+        guard accel != nil, w > 0, h > 0, let dev = view.device, let cb = queue.makeCommandBuffer() else { return nil }
+        let td = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+        td.usage = [.shaderRead, .shaderWrite]; td.storageMode = dev.hasUnifiedMemory ? .shared : .managed
+        guard let tex = dev.makeTexture(descriptor: td), encode(into: tex, cb) else { return nil }
+        if td.storageMode == .managed, let blit = cb.makeBlitCommandEncoder() { blit.synchronize(resource: tex); blit.endEncoding() }   // a discrete GPU: bring the pixels back
+        cb.commit(); cb.waitUntilCompleted()
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        tex.getBytes(&px, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+        let info = CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue   // BGRA, alpha unused
+        guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: info),
+              let img = ctx.makeImage(), let data = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) else { return nil }
+        return (data, w, h)
+    }
+
     /// One frame of samples into accum, tone-mapped into out.
     func encode(into out: MTLTexture, _ cb: MTLCommandBuffer) -> Bool {
         guard let accel = accel, let enc = cb.makeComputeCommandEncoder() else { return false }

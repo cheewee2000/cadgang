@@ -3372,11 +3372,18 @@ window.cadgangSaved = (path) => say(`saved ${path}`);
 // CAPTURE (⇧C): the 3D view as it is drawn now (grid, markups and notes if they are on) with none of the buttons or
 // panels, the size of the whole window, saved straight to the Desktop. The view fills the window for one frame that
 // is never painted, is drawn and read at that size, and goes back. The picture then flies off to the corner: it is saved.
-// ponytail: with Render on this is the plain shaded view; the ray-traced picture is not in this canvas.
-async function capture() {
+// ponytail: with Render on in a browser (the WebGL path tracer) this is still the plain shaded view.
+function capture() {
   if (!bbox) return say('open a file first', true);
+  // Render on, in the Mac app: the ray-traced picture is drawn by the shell under the page, so the shell hands it over
+  // (cadgangRenderShot). It is the picture on screen, the size of the view: one the size of the window would have to be traced again.
+  if (rt.on && NATIVE) return window.webkit.messageHandlers.cadgang.postMessage({ cmd: 'renderShot' });
   viewport.classList.add('capture'); frame();
   let url, size; try { url = markup.snapshot(); size = `${renderer.domElement.width} × ${renderer.domElement.height}`; } finally { viewport.classList.remove('capture'); frame(); }
+  saveCapture(url, size);
+}
+window.cadgangRenderShot = (b64, w, h) => (b64 ? saveCapture(`data:image/png;base64,${b64}`, `${w} × ${h}`) : say('the render is not up yet: try again in a moment', true));
+async function saveCapture(url, size) {
   if (follow || window.cadgangServerless) return savePng(url, size);   // no Mac of the viewer's own behind this page: a download
   try {
     const r = await fetch(`api/view/capture?name=${encodeURIComponent(shotName())}`, { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: await (await fetch(url)).blob() });

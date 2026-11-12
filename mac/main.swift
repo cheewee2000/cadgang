@@ -258,6 +258,12 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     /// RENDER: the page drives a PathTracer that sits under it (render.swift).
     func render(_ cmd: String, _ body: [String: Any], in w: DropWebView) {
         if cmd == "render" { w.tracer?.stop(); return }
+        // CAPTURE with Render on: the ray-traced picture is the shell's, not the page's, so the page asks for it here.
+        if cmd == "renderShot" {
+            if let shot = w.tracer?.png() { w.evaluateJavaScript("window.cadgangRenderShot?.('\(shot.data.base64EncodedString())', \(shot.width), \(shot.height))") }
+            else { w.evaluateJavaScript("window.cadgangRenderShot?.(null)") }
+            return
+        }
         if w.tracer == nil, let box = w.superview {
             guard let t = PathTracer(frame: .zero) else { w.evaluateJavaScript("window.cadgangNativeRender?.(false)"); return }
             box.addSubview(t.view, positioned: .below, relativeTo: w)
