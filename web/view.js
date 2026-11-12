@@ -3382,7 +3382,7 @@ window.cadgangSaved = (path) => say(`saved ${path}`);
 function capture() {
   if (!bbox) return say('open a file first', true);
   // Render on, in the Mac app: the ray-traced picture is drawn by the shell under the page, so the shell hands it over
-  // (cadgangRenderShot). It is the picture on screen, the size of the view: one the size of the window would have to be traced again.
+  // (cadgangRenderShot), traced again at the size of the window.
   if (rt.on && NATIVE) return window.webkit.messageHandlers.cadgang.postMessage({ cmd: 'renderShot' });
   viewport.classList.add('capture'); frame();
   let url, size; try { url = markup.snapshot(); size = `${renderer.domElement.width} × ${renderer.domElement.height}`; } finally { viewport.classList.remove('capture'); frame(); }

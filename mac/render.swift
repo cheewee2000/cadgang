@@ -147,16 +147,26 @@ final class PathTracer: NSObject, MTKViewDelegate {
         if u.info.x >= Self.maxSamples { v.isPaused = true }   // converged: stop spending the GPU
     }
 
-    /// The picture on screen, as a PNG: one more frame traced into a texture of the drawable's size (the samples
-    /// gathered so far carry over) and read back. Nil with no scene loaded.
-    func png() -> (data: Data, width: Int, height: Int)? {
-        let w = Int(view.drawableSize.width), h = Int(view.drawableSize.height)
-        guard accel != nil, w > 0, h > 0, let dev = view.device, let cb = queue.makeCommandBuffer() else { return nil }
+    /// The picture as a PNG of `size` pixels (CAPTURE wants the window's, which the view is not): traced afresh into
+    /// its own textures, to as many samples as the screen has gathered (64 at least), and read back. The screen's
+    /// own samples are put back after. Nil with no scene loaded.
+    func png(size: CGSize) -> (data: Data, width: Int, height: Int)? {
+        let w = Int(size.width), h = Int(size.height)
+        guard accel != nil, w > 0, h > 0, let dev = view.device else { return nil }
         let td = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
         td.usage = [.shaderRead, .shaderWrite]; td.storageMode = dev.hasUnifiedMemory ? .shared : .managed
-        guard let tex = dev.makeTexture(descriptor: td), encode(into: tex, cb) else { return nil }
-        if td.storageMode == .managed, let blit = cb.makeBlitCommandEncoder() { blit.synchronize(resource: tex); blit.endEncoding() }   // a discrete GPU: bring the pixels back
-        cb.commit(); cb.waitUntilCompleted()
+        guard let tex = dev.makeTexture(descriptor: td) else { return nil }
+        let screen = (accum, u.info.x)
+        accum = nil   // encode makes one of this size and counts from nought
+        defer { accum = screen.0; u.info.x = screen.1 }
+        let want = min(max(screen.1, 64), Self.maxSamples)
+        var last: MTLCommandBuffer?
+        repeat {
+            guard let cb = queue.makeCommandBuffer(), encode(into: tex, cb) else { return nil }
+            if u.info.x >= want, td.storageMode == .managed, let blit = cb.makeBlitCommandEncoder() { blit.synchronize(resource: tex); blit.endEncoding() }   // a discrete GPU: bring the pixels back
+            cb.commit(); last = cb
+        } while u.info.x < want
+        last?.waitUntilCompleted()
         var px = [UInt8](repeating: 0, count: w * h * 4)
         tex.getBytes(&px, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
         let info = CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue   // BGRA, alpha unused

@@ -258,9 +258,10 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     /// RENDER: the page drives a PathTracer that sits under it (render.swift).
     func render(_ cmd: String, _ body: [String: Any], in w: DropWebView) {
         if cmd == "render" { w.tracer?.stop(); return }
-        // CAPTURE with Render on: the ray-traced picture is the shell's, not the page's, so the page asks for it here.
+        // CAPTURE with Render on: the ray-traced picture is the shell's, not the page's, so the page asks for it here,
+        // at the window's size like the page's own capture.
         if cmd == "renderShot" {
-            if let shot = w.tracer?.png() { w.evaluateJavaScript("window.cadgangRenderShot?.('\(shot.data.base64EncodedString())', \(shot.width), \(shot.height))") }
+            if let shot = w.tracer?.png(size: w.convertToBacking(w.bounds).size) { w.evaluateJavaScript("window.cadgangRenderShot?.('\(shot.data.base64EncodedString())', \(shot.width), \(shot.height))") }
             else { w.evaluateJavaScript("window.cadgangRenderShot?.(null)") }
             return
         }
