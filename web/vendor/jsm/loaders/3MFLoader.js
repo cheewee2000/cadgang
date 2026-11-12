@@ -41,6 +41,36 @@ const COLOR_SPACE_3MF = SRGBColorSpace;
  * - Metallic Display Properties (PBR)
  */
 
+// cadgang: the production extension (Bambu Studio, Orca, Fusion). A component or a build item names an object
+// in another model file (p:path), and every file numbers its objects from 1, while this loader keeps one table
+// of objects by number and looked only in the root file: "Cannot read properties of undefined (reading 'mesh')".
+// Every object is moved into the root model under a name that says which file it came from, and the references
+// are rewritten to match. (test/threemf.test.js)
+export function flattenParts( data3mf ) {
+
+	const rootKey = data3mf.rels.find( ( r ) => /\.model$/i.test( r.target ) ).target.substring( 1 ), root = data3mf.model[ rootKey ];
+	const at = ( path, id, here ) => { const k = path ? path.replace( /^\//, '' ) : here; return k === rootKey ? id : `${k}#${id}`; };
+
+	for ( const key of Object.keys( data3mf.model ) ) {
+
+		const objects = data3mf.model[ key ].resources.object;
+
+		for ( const id of Object.keys( objects ) ) {
+
+			const o = objects[ id ];
+			for ( const c of o.components || [] ) { c.objectId = at( c.path, c.objectId, key ); c.path = null; }
+			if ( key !== rootKey ) { o.id = at( null, id, key ); root.resources.object[ o.id ] = o; }
+
+		}
+
+		if ( key !== rootKey ) delete data3mf.model[ key ];
+
+	}
+
+	for ( const item of root.build || [] ) { item.objectId = at( item.path, item.objectId, rootKey ); item.path = null; }
+
+}
+
 class ThreeMFLoader extends Loader {
 
 	constructor( manager ) {
@@ -522,6 +552,7 @@ class ThreeMFLoader extends Loader {
 			const componentData = {};
 
 			componentData[ 'objectId' ] = componentNode.getAttribute( 'objectid' ); // required
+			componentData[ 'path' ] = componentNode.getAttribute( 'p:path' ); // cadgang: see flattenParts
 
 			const transform = componentNode.getAttribute( 'transform' );
 
@@ -723,7 +754,8 @@ class ThreeMFLoader extends Loader {
 
 				const itemNode = itemNodes[ i ];
 				const buildItem = {
-					objectId: itemNode.getAttribute( 'objectid' )
+					objectId: itemNode.getAttribute( 'objectid' ),
+					path: itemNode.getAttribute( 'p:path' ) // cadgang: see flattenParts
 				};
 				const transform = itemNode.getAttribute( 'transform' );
 
@@ -1463,6 +1495,7 @@ class ThreeMFLoader extends Loader {
 		}
 
 		const data3mf = loadDocument( data );
+		flattenParts( data3mf );
 		const objects = buildObjects( data3mf );
 
 		return build( objects, data3mf );

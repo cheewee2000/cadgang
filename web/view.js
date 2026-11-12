@@ -2463,7 +2463,7 @@ function stlName(buffer) {
   return n && !/^(ascii|mesh|stl|cadgang|part|model|object|untitled)$/i.test(n.trim()) ? n.trim() : undefined;
 }
 
-async function parseMesh(ext, buffer, name) {
+async function parseMesh(ext, buffer, name, beside = '') {   // beside: where a .gltf's own files (its .bin, its pictures) are fetched from
   if (ext === 'dxf') {
     const { parts, skipped } = parseDxf(new TextDecoder().decode(buffer), { THREE, NURBSCurve });
     const n = Object.values(skipped).reduce((a, b) => a + b, 0);
@@ -2475,8 +2475,12 @@ async function parseMesh(ext, buffer, name) {
   if (ext === 'stl') return [{ geo: loader.parse(buffer), flat: true, name: stlName(buffer) }];
   if (ext === 'ply') return [{ geo: loader.parse(buffer) }];
   if (ext === 'obj') return collectGeometries(loader.parse(new TextDecoder().decode(buffer)));
-  if (ext === '3mf' || ext === 'fbx') return collectGeometries(loader.parse(buffer, ''));
-  const gltf = await new Promise((ok, bad) => loader.parse(buffer, '', ok, bad));
+  if (ext === '3mf' || ext === 'fbx') {
+    const parts = collectGeometries(loader.parse(buffer, ''));
+    if (ext === '3mf' && !parts.length) throw new Error('no model in it: a sliced file (.gcode.3mf) holds the print, not the part');
+    return parts;
+  }
+  const gltf = await new Promise((ok, bad) => loader.parse(buffer, beside, ok, bad));
   gltf.scene.updateMatrixWorld(true);
   gltf.scene.traverse((o) => {   // point lights and spots; three aims a glTF spot down its node's -z (its target)
     if (!o.isPointLight && !o.isSpotLight) return;
@@ -2611,7 +2615,7 @@ async function openPaths(paths, keep, mine) {
       if (live) liveKey = live.session ?? null;
       const buf = await fetchBuffer(live ? `api/cells/live${live.session ? `?session=${encodeURIComponent(live.session)}` : ''}` : cad ? `api/view/tessellate?${q}` : `api/view/file?${q}`, cad && !live ? { method: 'POST' } : undefined);
       if (!mine()) return;   // a newer open took this window
-      const parts = cad ? parseCad(buf) : await parseMesh(name.toLowerCase().split('.').pop(), buf, name);
+      const parts = cad ? parseCad(buf) : await parseMesh(name.toLowerCase().split('.').pop(), buf, name, `api/view/file?path=${encodeURIComponent(p.slice(0, p.lastIndexOf('/') + 1))}`);
       if (!mine() || ticket !== loadTicket) return;   // a newer open took this window, or a newer load the progress bar
       if (stale) { clearModel(); stale = false; }
       hideDraft();   // the real model is here
@@ -3084,7 +3088,7 @@ function nativeScene() {
   });
   const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff);
   const lamps = lights.map((l) => [...l.pos.clone().applyQuaternion(rot).toArray(), ...l.dir.clone().applyQuaternion(rot).toArray(), ...l.color.toArray(), ...l.cos]);   // turned with the bodies (Turn bakes into them)
-  post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b], uv: b64(uv), pngs: pics.map(pngOf), lights: lamps });
+  post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b], uv: pics.length ? b64(uv) : '', pngs: pics.map(pngOf), lights: lamps });   // no picture: nothing to send (the shell's are zeros already), a sixth of the message on a large assembly
 }
 // Glass pulled in by `d` along its welded normals (every copy of a corner moves the same way: no cracks), for
 // the tracer only. A pane lying on aluminium shares that face: the tracer took either surface per ray (speckle),
