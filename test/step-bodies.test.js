@@ -7,6 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { importCadFile, importCadFileInWorker, parseNative } from '../src/core/step.js';
@@ -92,6 +93,21 @@ test('the import worker transfers typed geometry and reports round-trip timing',
 test('an empty STEP export (header and product, no faces) says so instead of blaming the format', async () => {
   const txt = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nENDSEC;\nDATA;\n#1=PRODUCT('x','x','',(#2));\nENDSEC;\nEND-ISO-10303-21;\n";
   await assert.rejects(importCadFile(Buffer.from(txt), { name: 'empty.step' }), /no geometry/);
+  // a colour with nothing to colour: FACE is in SURFACE_STYLE_USAGE, and there is still no face
+  await assert.rejects(importCadFile(Buffer.from(txt.replace('ENDSEC;\nEND', '#3=SURFACE_STYLE_USAGE(.BOTH.,#4);\nENDSEC;\nEND')), { name: 'empty.step' }), /no geometry/);
+});
+
+test('a file the native importer dies on is read by the WASM one; a file it refuses is not tried twice', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cadgang-occt-')), fake = path.join(dir, 'occt');
+  try {
+    fs.writeFileSync(fake, '#!/bin/sh\nkill -ABRT $$\n', { mode: 0o755 });
+    process.env.CADGANG_OCCT = fake;
+    const m = await importCadFile(fs.readFileSync(fixture), { name: 'asm.step' });
+    assert.equal(m.timings.importer, 'wasm');
+    assert.ok(m.triangleCount > 0);
+    fs.writeFileSync(fake, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    await assert.rejects(importCadFile(fs.readFileSync(fixture), { name: 'asm.step' }), /Could not read/);
+  } finally { delete process.env.CADGANG_OCCT; fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('the native importer gives every body the same name, path and colour as the WASM one', { skip: !fs.existsSync(new URL('../bin/cadgang-occt', import.meta.url)) && 'no bin/cadgang-occt (bash mac/occt/build.sh)' }, async () => {

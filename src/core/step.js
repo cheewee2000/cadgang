@@ -65,8 +65,9 @@ function readerFor(occt, name = '') {
 // Native OCCT (mac/occt, built into bin/ by mac/occt/build.sh): the same importer code as the
 // WASM one, parallel meshing, no 32-bit heap — 3–5× faster and opens files the WASM heap can't.
 // The WASM importer stays as the fallback where the binary isn't built.
-const NATIVE = fileURLToPath(new URL('../../bin/cadgang-occt', import.meta.url));
-const hasNative = () => process.env.CADGANG_WASM !== '1' && fs.existsSync(NATIVE);
+const BUILT = fileURLToPath(new URL('../../bin/cadgang-occt', import.meta.url));
+const native = () => process.env.CADGANG_OCCT || BUILT;   // the variable is for the tests
+const hasNative = () => process.env.CADGANG_WASM !== '1' && fs.existsSync(native());
 
 /** Run cadgang-occt on the buffer; returns what occt-import-js's Read*File returns. */
 async function readNative(buffer, name, linearDeflection, angularDeflection) {
@@ -75,10 +76,10 @@ async function readNative(buffer, name, linearDeflection, angularDeflection) {
   const tmp = path.join(os.tmpdir(), `cadgang-${process.pid}-${Date.now()}.${fmt}`);
   await fs.promises.writeFile(tmp, buffer);
   try {
-    const out = await new Promise((resolve, reject) => execFile(NATIVE, [fmt, tmp, String(linearDeflection), String(angularDeflection)],
-      { encoding: 'buffer', maxBuffer: 2 ** 32 }, (e, stdout, stderr) => e ? reject(new Error(String(stderr).trim() || e.message)) : resolve(stdout)));
+    const out = await new Promise((resolve, reject) => execFile(native(), [fmt, tmp, String(linearDeflection), String(angularDeflection)],
+      { encoding: 'buffer', maxBuffer: 2 ** 32 }, (e, stdout) => e ? reject(e) : resolve(stdout)));
     return { success: true, ...parseNative(out) };
-  } catch { return { success: false }; }
+  } catch (e) { return { success: false, died: !!e.signal }; }   // died: killed by a signal (an OCCT exception nothing caught), not a refusal
   finally { fs.promises.rm(tmp, { force: true }); }
 }
 /** main.cpp's stream → what occt-import-js returns: { meshes, root } (root is null from an older binary). */
@@ -107,6 +108,9 @@ export function parseNative(buf) {
   return { meshes, root: o < buf.byteLength ? node() : null };
 }
 
+// A face entity, not the letters: SURFACE_STYLE_USAGE and SURFACE_SIDE_STYLE (a colour, in an export of nothing) have FACE in them.
+const hasFaces = (buf) => ['ADVANCED_FACE', 'FACE_SURFACE', 'FACE_BOUND', 'FACE_OUTER_BOUND', 'TRIANGULATED_FACE'].some((t) => buf.indexOf(t) >= 0);
+
 /**
  * buffer: Buffer|Uint8Array of the CAD file.
  * Options: name (filename, picks the reader by extension), linearDeflection
@@ -118,13 +122,16 @@ export function parseNative(buf) {
 export async function importCadFile(buffer, { name = 'import.step', linearDeflection = 0.001, angularDeflection = 0.5 } = {}) {
   const started = performance.now();
   const readStarted = performance.now();
-  const result = hasNative() ? await readNative(buffer, name, linearDeflection, angularDeflection)
-    : readerFor(await getOcct(), name)(new Uint8Array(buffer), {
-      linearUnit: 'millimeter',
-      linearDeflectionType: 'bounding_box_ratio',
-      linearDeflection,
-      angularDeflection,
-    });
+  let result = hasNative() ? await readNative(buffer, name, linearDeflection, angularDeflection) : null;
+  // The native importer died on the file (1 of 2,573 on one Mac: Standard_OutOfRange); the WASM build of the
+  // same importer reads it. A file it merely refuses, the WASM one refuses too, so that is not tried twice.
+  const importer = result && !(result.died && buffer.byteLength < 150 * 1048576) ? 'native' : 'wasm';
+  if (importer === 'wasm') result = readerFor(await getOcct(), name)(new Uint8Array(buffer), {
+    linearUnit: 'millimeter',
+    linearDeflectionType: 'bounding_box_ratio',
+    linearDeflection,
+    angularDeflection,
+  });
   const readMs = performance.now() - readStarted;
   if (!result?.success || !result.meshes?.length) {
     // The importer swallows its own out-of-memory (a 465 MB PCB export: 10 M
@@ -132,7 +139,7 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
     const mb = buffer.byteLength / 1048576;
     if (mb > 150) throw new Error(tooBig(name, mb.toFixed(0)));
     // a STEP with a header and a product but no faces (an empty export; 7 of 2,500 files on one Mac) is the file's fault, not the format's
-    if (!/\.(igs|iges|brep)$/i.test(name) && Buffer.from(buffer.buffer ?? buffer, buffer.byteOffset ?? 0, buffer.byteLength).indexOf('FACE') < 0) throw new Error(`'${name}' has no geometry — the export is empty (no faces in the file)`);
+    if (!/\.(igs|iges|brep)$/i.test(name) && !hasFaces(Buffer.from(buffer.buffer ?? buffer, buffer.byteOffset ?? 0, buffer.byteLength))) throw new Error(`'${name}' has no geometry — the export is empty (no faces in the file)`);
     throw new Error(`Could not read '${name}' — not a valid STEP/IGES/BREP file?`);
   }
 
@@ -210,7 +217,7 @@ export async function importCadFile(buffer, { name = 'import.step', linearDeflec
       readMs: +readMs.toFixed(2), mergeMs: +mergeMs.toFixed(2),
       metadataMs: +metadataMs.toFixed(2), weldMs: +weldMs.toFixed(2),
       totalMs: +(performance.now() - started).toFixed(2),
-      importer: hasNative() ? 'native' : 'wasm',
+      importer,
     },
   };
 }
