@@ -496,6 +496,12 @@ export function brepBoolean(op, base, tools) {
   }
 }
 
+/** Does the shape hold a solid at all? A boolean that removed everything, or gave up without an error, hands back an empty compound. */
+export function brepHasSolid(shape) {
+  const ex = new OC.TopExp_Explorer_2(shape.wrapped, OC.TopAbs_ShapeEnum.TopAbs_SOLID, OC.TopAbs_ShapeEnum.TopAbs_SHAPE);
+  try { return ex.More(); } finally { ex.delete(); }
+}
+
 /** A shape passes the kernel's full check, geometry included: what a rescue's result must do before it is believed. */
 export function brepIsValid(shape) {
   const check = new OC.BRepCheck_Analyzer(shape.wrapped, true, false);

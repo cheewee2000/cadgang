@@ -114,3 +114,15 @@ test('a fitted fillet warns in the cell\'s log, and again when the shape comes b
     }
   });
 });
+
+test('a cut that leaves no solid warns in the cell\'s log; one that leaves a part does not', async () => {
+  const { cellApi } = await import('../src/core/cellapi.js');
+  inScope(() => {
+    const logs = [], { brep } = cellApi({ logs });
+    brep.subtract(brep.box(10, 10, 10), brep.box(4, 4, 30));
+    assert.equal(logs.length, 0);
+    brep.subtract(brep.box(10, 10, 10), brep.box(20, 20, 20));
+    assert.equal(logs.length, 1);
+    assert.match(logs[0].text, /subtract\(\) left no solid/);
+  });
+});

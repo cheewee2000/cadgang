@@ -18,7 +18,7 @@ import path from 'node:path';
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 import * as ops from './ops.js';
-import { turnedBounds, brepSurfacesMeet, tessellate, compoundParts, movedMesh, trackBrepShape, brepHeapBytes } from './brep.js';
+import { turnedBounds, brepSurfacesMeet, brepHasSolid, tessellate, compoundParts, movedMesh, trackBrepShape, brepHeapBytes } from './brep.js';
 import { q as queryRoot, topology, Query } from './query.js';
 import { Sketch } from './sketch.js';
 import * as checks from './checks.js';
@@ -461,6 +461,15 @@ function assertions(sink, quick = null) {
 const assert = assertions([]);
 
 /**
+ * A union or a cut that comes back with no solid says so in the cell's log. Nothing throws, since a cut that
+ * removes everything can be meant, but a part that silently vanished from an assembly was found only by counting bodies.
+ */
+const notedBoolean = (logs, op) => (...args) => {
+  const r = brep[op](...args);
+  if (r?.wrapped && !brepHasSolid(r)) logs.push({ level: 'warn', text: `${op}() left no solid: ${op === 'subtract' ? 'the tools remove the whole base, or the kernel gave up without an error' : 'the kernel gave up without an error'}. Check the shapes going in; combining them in two calls can help.` });
+  return r;
+};
+/**
  * Build the argument object for one cell's program.
  *
  * `input` is the running current solid — the thing natural language keeps
@@ -473,7 +482,7 @@ export function cellApi({
 }) {
   // A quick run is for the picture: a clash volume is not measured (0, and `quick.skipped` says the result is not
   // the checked one). ponytail: only brep.interference, where the time is; the assert namespace still measures.
-  const own = { ...(logs && { fillet: notedFillet(logs) }), ...(quick && { interference: () => { quick.skipped = true; return 0; } }) };
+  const own = { ...(logs && { fillet: notedFillet(logs), subtract: notedBoolean(logs, 'subtract'), union: notedBoolean(logs, 'union') }), ...(quick && { interference: () => { quick.skipped = true; return 0; } }) };
   return Object.freeze({
     p: Object.freeze({ ...params }),
     brep: Object.keys(own).length ? Object.freeze({ ...brep, ...own }) : brep,
