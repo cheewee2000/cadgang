@@ -26,6 +26,16 @@ import { execFile } from 'node:child_process';
 import { importCadFileInWorker as importCadFile } from '../core/step.js';
 import { deployShare } from './vercel.js';
 
+// Imports kept on disk (see /tessellate): reopening a file, or the app restoring its windows, reads the import made
+// last time. The stamp changes whenever the importer or this file does, so an old import is never served by new code.
+// ponytail: the newest 200 by time, pruned when the server starts; a byte budget if huge assemblies fill the disk.
+const IMPORT_DIR = process.env.CADGANG_DISK_CACHE === '0' ? null : path.join(os.homedir(), 'Library', 'Caches', 'cadgang', 'imports');
+const IMPORT_STAMP = [process.env.CADGANG_WASM ?? '', ...['../../bin/cadgang-occt', '../core/step.js', './view.js'].map((f) => { try { const st = fsSync.statSync(new URL(f, import.meta.url)); return `${st.size}:${st.mtimeMs}`; } catch { return '-'; } })].join('|');
+if (IMPORT_DIR) try {
+  const old = fsSync.readdirSync(IMPORT_DIR).map((f) => ({ f, t: fsSync.statSync(path.join(IMPORT_DIR, f)).mtimeMs })).sort((a, b) => b.t - a.t).slice(200);
+  for (const { f } of old) fsSync.rmSync(path.join(IMPORT_DIR, f), { force: true });
+} catch { /* no folder yet */ }
+
 const DESKTOP = process.env.CADGANG_DESKTOP === '1';
 export const CAD_EXT = /\.(step|stp|iges|igs|brep)$/i;
 
@@ -426,11 +436,20 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       if (!src.buffer?.length) throw Object.assign(new Error('Empty upload — send the file as the raw request body'), { status: 400 });
       const t0 = Date.now();
       // Deflection is a bbox ratio: 0.001 is CAD-viewer quality; coarser for huge assemblies is the caller's call.
-      const m = await importCadFile(src.buffer, { name: src.name, linearDeflection: parseFloat(req.query.deflection || '0.0008') });
+      const deflection = parseFloat(req.query.deflection || '0.0008');
+      // The same bytes, read the same way, by the same importer: the import made last time is on disk.
+      const file = IMPORT_DIR && path.join(IMPORT_DIR, crypto.createHash('sha1').update(src.buffer).update(`|${path.basename(src.name)}|${deflection}|${IMPORT_STAMP}`).digest('hex'));
+      let packed = file && await fs.readFile(file).catch(() => null), timings = { cached: true };
+      if (packed) fs.utimes(file, new Date(), new Date()).catch(() => {});   // read again: the last to be pruned
+      else {
+        const m = await importCadFile(src.buffer, { name: src.name, linearDeflection: deflection });
+        packed = pack(m); timings = m.timings ?? {};
+        if (file) fs.mkdir(IMPORT_DIR, { recursive: true }).then(() => fs.writeFile(`${file}.tmp`, packed)).then(() => fs.rename(`${file}.tmp`, file)).catch(() => {});   // a cache: never half a file under the real name
+      }
       res.set('Content-Type', 'application/octet-stream')
         .set('X-Ms', String(Date.now() - t0))
-        .set('X-Cadgang-Timings', JSON.stringify(m.timings ?? {}))
-        .send(pack(m));
+        .set('X-Cadgang-Timings', JSON.stringify(timings))
+        .send(packed);
     } catch (e) { next(e); }
   });
 
