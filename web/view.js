@@ -2754,6 +2754,7 @@ $('#scrollSel').addEventListener('change', (e) => {
 window.addEventListener('storage', (e) => {
   if (e.key !== PREFS_KEY) return;
   try { const v = JSON.parse(e.newValue)?.scroll; if (v === 'mouse' || v === 'trackpad') ui.scroll = $('#scrollSel').value = v; } catch {}
+  try { const v = JSON.parse(e.newValue)?.light; if (v === 'sun' || v === 'studio') ui.light = $('#lightSel').value = v; } catch {}
 });
 $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
@@ -3006,7 +3007,7 @@ document.addEventListener('visibilitychange', focus);
 // so the shell's render view under it shows. Sections render, with caps.
 let NATIVE = !!window.webkit?.messageHandlers?.cadgang;
 const post = (m) => window.webkit.messageHandlers.cadgang.postMessage(m);
-window.cadgangNativeRender = (ok) => { if (ok || !NATIVE) return; NATIVE = false; document.documentElement.classList.remove('native-render'); rt.on = false; setRender(true); };   // no Metal ray tracing: the WebGL one
+window.cadgangNativeRender = (ok) => { if (ok || !NATIVE) return; NATIVE = false; $('#lightSel').hidden = true; document.documentElement.classList.remove('native-render'); rt.on = false; setRender(true); };   // no Metal ray tracing: the WebGL one
 const rt = { on: false, pt: null, floor: null, env: null, hidden: [], cam: new THREE.Matrix4(), proj: new THREE.Matrix4(), last: '' };
 async function setRender(on) {
   if (on === rt.on) return;
@@ -3136,11 +3137,18 @@ function nativeCam() {
   const r = renderer.domElement.getBoundingClientRect(), e = camera.matrixWorld.elements;
   const clip = section.axis && bbox ? [section.plane.normal.x, section.plane.normal.y, section.plane.normal.z, section.plane.constant] : null;
   const c = { cmd: 'renderCam', pos: [e[12], e[13], e[14]], fwd: [-e[8], -e[9], -e[10]], right: [e[0], e[1], e[2]], up: [e[4], e[5], e[6]],
-    fov: persp.fov, ortho: ui.ortho, orthoH: camera.top ?? 1, clip, rect: [r.left, r.top, r.width, r.height] };
+    fov: persp.fov, ortho: ui.ortho, orthoH: camera.top ?? 1, clip, rect: [r.left, r.top, r.width, r.height], light: ui.light };
   const key = JSON.stringify(c);
   if (key !== rt.last) { rt.last = key; post(c); }
 }
 $('#renderBtn').addEventListener('click', () => { setRender(!rt.on); commit(); });
+// RENDER's lighting, a preference like Trackpad / Mouse: SUN (the default) or STUDIO. The Metal render's, so the Mac app's only.
+ui.light = 'sun';
+$('#lightSel').hidden = !NATIVE;
+$('#lightSel').addEventListener('change', (e) => {
+  ui.light = e.target.value;
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(PREFS_KEY)), light: ui.light })); } catch {}
+});
 
 // -------------------------------------------------------------------- loop
 
@@ -3733,7 +3741,7 @@ function commit() {
   if (s === history.list[history.i]) return;
   rerender();
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, scroll: ui.scroll, color: ui.color, ortho: ui.ortho, mode: ui.mode })); } catch {}
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, scroll: ui.scroll, light: ui.light, color: ui.color, ortho: ui.ortho, mode: ui.mode })); } catch {}
 }
 // View preferences outlive the page, like the theme. Section, explode and body
 // visibility belong to a file and start fresh with it.
@@ -3743,6 +3751,7 @@ try {
   if (p?.look in PRESETS) ui.look = document.documentElement.dataset.look = $('#look').value = p.look;
   if (UNIT_MM[p?.units]) { ui.units = $('#unitsSel').value = p.units; }
   if (p?.scroll === 'mouse') ui.scroll = $('#scrollSel').value = 'mouse';
+  if (p?.light === 'studio') ui.light = $('#lightSel').value = 'studio';
   for (const k of ['edges', 'wire', 'grid', 'ruler', 'color']) if (typeof p?.[k] === 'boolean' && ui[k] !== p[k]) toggle(k, `#${k}Btn`);
   if (p?.ortho) setOrtho(true);
   if (p?.mode === 'joint') setMode('joint');

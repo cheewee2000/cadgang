@@ -1,6 +1,6 @@
 // Offscreen rig for mac/render.swift (RENDER, the Metal path tracer): a small scene, traced without the app.
 //   swiftc -O -o /tmp/render-rig mac/render.swift test/render-rig/main.swift -framework Cocoa -framework Metal -framework MetalKit -framework MetalFX
-//   /tmp/render-rig <out dir> [ortho]
+//   /tmp/render-rig <out dir> [ortho] [studio]
 // Writes moving-before.png (one full-size sample: a moving view without MetalFX), reference.png (converged), moving.png (the last
 // frame of an orbit through MetalFX's denoising upscaler), still.png (30 frames later), handoff.png (the samples fading in over it),
 // and prints the time a moving frame takes. moving.png should be clean and close to reference.png.
@@ -45,7 +45,7 @@ let W = 1600, H = 1000
 func cam(_ a: Double) -> [String: Any] {
     let target = SIMD3<Double>(0, 0, 15), pos = target + SIMD3(cos(a) * 190, sin(a) * 190, 110)
     let fwd = normalize(target - pos), right = normalize(cross(fwd, SIMD3(0, 0, 1))), up = cross(right, fwd)
-    return ["pos": [pos.x, pos.y, pos.z], "fwd": [fwd.x, fwd.y, fwd.z], "right": [right.x, right.y, right.z], "up": [up.x, up.y, up.z], "fov": 40.0, "ortho": CommandLine.arguments.contains("ortho"), "orthoH": 70.0]
+    return ["pos": [pos.x, pos.y, pos.z], "fwd": [fwd.x, fwd.y, fwd.z], "right": [right.x, right.y, right.z], "up": [up.x, up.y, up.z], "fov": 40.0, "ortho": CommandLine.arguments.contains("ortho"), "orthoH": 70.0, "light": CommandLine.arguments.contains("studio") ? "studio" : "sun"]
 }
 let dev = t.view.device!, q = dev.makeCommandQueue()!
 func target() -> MTLTexture {

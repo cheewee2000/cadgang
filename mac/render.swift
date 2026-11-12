@@ -134,7 +134,8 @@ final class PathTracer: NSObject, MTKViewDelegate {
     }
 
     /// pos/fwd/right/up: the camera's world basis; fov (deg, vertical) or ortho with orthoH (half height);
-    /// clip: the section plane [nx ny nz c] or nil; rect: the viewport in the page's points, top-left origin.
+    /// clip: the section plane [nx ny nz c] or nil; rect: the viewport in the page's points, top-left origin;
+    /// light: "studio" for softboxes, else the sun.
     func setCamera(_ c: [String: Any]) {
         cam = c
         if let r = c["rect"] as? [Double], r.count == 4 {
@@ -143,6 +144,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         }
         let p = (c["clip"] as? [Double]) ?? [0, 0, 0, 0]
         u.clip = SIMD4(Float(p[0]), Float(p[1]), Float(p[2]), Float(p[3]))
+        u.skyTop.w = (c["light"] as? String) == "studio" ? 1 : 0   // the lighting: the sun and sky, or softboxes
         view.isHidden = false
         restart()
     }
@@ -331,6 +333,33 @@ final class PathTracer: NSObject, MTKViewDelegate {
     }
     static float3 sky(constant U& u, float3 d) { return mix(u.skyBot.rgb, u.skyTop.rgb, smoothstep(-0.3, 0.8, d.z)); }
 
+    // STUDIO lighting (u.skyTop.w): three softboxes far away in a dim room, in place of the sun and the sky. A softbox is
+    // a rectangle seen in direction c, h the tangent of its half angles across and up. They show in what reflects them.
+    struct Box { float3 c; float2 h; float3 col; };
+    static Box softbox(int i) {
+        Box b;
+        if (i == 0) { b.c = normalize(float3(60, -80, 120)); b.h = float2(0.6, 0.45); b.col = float3(2.5, 2.45, 2.35); }         // key: where the sun is, as much light
+        else if (i == 1) { b.c = normalize(float3(-110, -30, 50)); b.h = float2(0.7, 0.4); b.col = float3(0.55, 0.58, 0.65); }   // fill: the other side, cooler
+        else { b.c = normalize(float3(-20, 110, 45)); b.h = float2(0.12, 0.7); b.col = float3(3.2, 3.2, 3.3); }                  // rim: a tall strip behind
+        return b;
+    }
+    static void boxAxes(Box b, thread float3& t, thread float3& bt) { t = normalize(cross(float3(0, 0, 1), b.c)); bt = cross(b.c, t); }
+    // The softboxes' light toward d (soft at their edges); pdf: the chance that sampling a softbox picks d.
+    static float3 boxes(float3 d, thread float& pdf) {
+        float3 L = 0.0; pdf = 0.0;
+        for (int i = 0; i < 3; i++) {
+            Box b = softbox(i);
+            float cz = dot(d, b.c);
+            if (cz <= 0.0) continue;
+            float3 t, bt; boxAxes(b, t, bt);
+            float2 q = abs(float2(dot(d, t), dot(d, bt))) / (cz * b.h);   // 0 at its middle, 1 at its edge
+            if (q.x >= 1.0 || q.y >= 1.0) continue;
+            pdf += 1.0 / (3.0 * 4.0 * b.h.x * b.h.y * cz * cz * cz);
+            L += b.col * smoothstep(1.0, 0.85, q.x) * smoothstep(1.0, 0.85, q.y);
+        }
+        return L;
+    }
+
     struct Hit { bool hit; float t; float3 ng; float3 n; uint mat; bool cap; uint prim; float2 bc; };
 
     // Closest hit on the KEPT side of the section plane. Hits on the cut-away side are stepped past.
@@ -400,6 +429,12 @@ final class PathTracer: NSObject, MTKViewDelegate {
         return (1.0 - F) * (1.0 - metal) * col / M_PI_F + spec;
     }
 
+    // The chance that the next-direction sampling (GGX lobe or cosine hemisphere) picks l.
+    static float lobePdf(float3 n, float3 v, float3 l, float a2, float pSpec) {
+        float3 hv = normalize(v + l);
+        return pSpec * ggxD(max(dot(n, hv), 0.0), a2) * max(dot(n, hv), 0.0) / (4.0 * max(dot(v, hv), 1e-4)) + (1.0 - pSpec) * max(dot(n, l), 0.0) / M_PI_F;
+    }
+
     static float3 neutral(float3 c) {   // Khronos PBR Neutral tone mapping
         float x = min(c.r, min(c.g, c.b)), off = x < 0.08 ? x - 6.25 * x * x : 0.04;
         c -= off;
@@ -436,11 +471,18 @@ final class PathTracer: NSObject, MTKViewDelegate {
         float3 L = 0.0, T = 1.0;
         float bgw = 0.0;
         bool mirror = false;   // the first bounce took the specular lobe
+        bool studio = u.skyTop.w > 0.5;
+        float lastPdf = 1e9;   // the chance the ray's direction was picked with (huge: a mirror or glass, no choice)
         f.hit = false; f.n = -d; f.diff = 0.0; f.spec = 0.0; f.rough = 1.0;
         for (int depth = 0; depth < 8; depth++) {
             Hit h = closest(u, accel, vtx, idx, tri, o, d, INFINITY);
             if (depth == 1 && mirror) f.reach = h.hit ? h.t : diag * 100.0;
-            if (!h.hit) { if (depth == 0) { bgw = 1.0; f.p = o + d * diag * 1e3; } else L += T * sky(u, d); break; }
+            if (!h.hit) {
+                if (depth == 0) { bgw = 1.0; f.p = o + d * diag * 1e3; }
+                else if (studio) { float pl; float3 B = boxes(d, pl); L += T * (sky(u, d) * 0.3 + B * lastPdf / (lastPdf + pl)); }   // a softbox met by chance: weighed against the sample aimed at it
+                else L += T * sky(u, d);
+                break;
+            }
             float3 p = o + d * h.t;
             bool isFloor = !h.cap && h.prim >= u.info.w;
             if (depth == 0 && isFloor) bgw = smoothstep(diag * 1.5, diag * 10.0, h.t);   // the floor melts into the background
@@ -463,15 +505,25 @@ final class PathTracer: NSObject, MTKViewDelegate {
                 float3 rd = refract(d, n, eta);
                 if (all(rd == 0.0) || rnd(seed) < F) { d = reflect(d, n); o = p + n * eps; }
                 else { d = rd; o = p - n * eps; T *= col; }
+                lastPdf = 1e9;
                 continue;
             }
             float3 n = h.n, ng = dot(h.ng, d) < 0.0 ? h.ng : -h.ng;
             if (dot(n, ng) < 0.0) n = ng;
             o = p + ng * eps;
-            // Sun: one shadowed sample inside its disc (soft shadow edge).
-            float3 sd = normalize(u.sunDir.xyz + onb(u.sunDir.xyz, float3((rnd(seed) * 2.0 - 1.0), (rnd(seed) * 2.0 - 1.0), 0.0)) * u.sunDir.w);
-            if (dot(n, sd) > 0.0)
-                L += T * brdf(n, v, sd, col, metal, a2) * dot(n, sd) * u.sunCol.rgb * shadow(u, accel, vtx, idx, tri, mats, o, sd);
+            float pSpec = mix(0.25, 1.0, metal);
+            if (studio) {   // one shadowed sample aimed at a softbox, weighed against meeting it by chance (above)
+                Box b = softbox(min(int(rnd(seed) * 3.0), 2));
+                float3 t, bt; boxAxes(b, t, bt);
+                float3 sd = normalize(b.c + (rnd(seed) * 2.0 - 1.0) * b.h.x * t + (rnd(seed) * 2.0 - 1.0) * b.h.y * bt);
+                float pl; float3 B = boxes(sd, pl);
+                if (dot(n, sd) > 0.0 && pl > 0.0)
+                    L += T * brdf(n, v, sd, col, metal, a2) * dot(n, sd) * B / (pl + lobePdf(n, v, sd, a2, pSpec)) * shadow(u, accel, vtx, idx, tri, mats, o, sd);
+            } else {   // Sun: one shadowed sample inside its disc (soft shadow edge).
+                float3 sd = normalize(u.sunDir.xyz + onb(u.sunDir.xyz, float3((rnd(seed) * 2.0 - 1.0), (rnd(seed) * 2.0 - 1.0), 0.0)) * u.sunDir.w);
+                if (dot(n, sd) > 0.0)
+                    L += T * brdf(n, v, sd, col, metal, a2) * dot(n, sd) * u.sunCol.rgb * shadow(u, accel, vtx, idx, tri, mats, o, sd);
+            }
             // Lamps: one shadowed sample each, inverse square in metres (the scene is mm), soft cone edge.
             for (uint li = 0; li < uint(u.scene.w); li++) {
                 Lamp lp = lamps[li];
@@ -481,7 +533,6 @@ final class PathTracer: NSObject, MTKViewDelegate {
                 L += T * brdf(n, v, ld, col, metal, a2) * nl * lp.col.rgb * cone * 1e6 / (dist * dist) * shadow(u, accel, vtx, idx, tri, mats, o, ld, dist);
             }
             // Next direction: GGX lobe or cosine hemisphere, weighted by their mixture pdf.
-            float pSpec = mix(0.25, 1.0, metal);
             float3 l;
             if (rnd(seed) < pSpec) {
                 mirror = depth == 0;
@@ -495,10 +546,9 @@ final class PathTracer: NSObject, MTKViewDelegate {
             }
             float nl = dot(n, l);
             if (nl <= 0.0 || dot(ng, l) <= 0.0) break;
-            float3 hv = normalize(v + l);
-            float nh = max(dot(n, hv), 0.0), vh = max(dot(v, hv), 1e-4);
-            float pdf = pSpec * ggxD(nh, a2) * nh / (4.0 * vh) + (1.0 - pSpec) * nl / M_PI_F;
+            float pdf = lobePdf(n, v, l, a2, pSpec);
             T *= brdf(n, v, l, col, metal, a2) * nl / max(pdf, 1e-6);
+            lastPdf = pdf;
             d = l;
             if (depth >= 3) { float q = min(max(T.r, max(T.g, T.b)), 0.95); if (rnd(seed) > q) break; T /= q; }
         }
