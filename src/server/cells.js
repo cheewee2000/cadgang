@@ -677,7 +677,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
         if (mesh) out.mesh = { positions: Array.from(t.positions), normals: Array.from(t.normals), indices: Array.from(t.indices), faces: t.faces, edges };
       }
       return out;
-    }, { partial: true });
+    }, { partial: true, quick: true });   // a look and its measures: the clash checks are not part of either, and a version saved after an edit held the kernel for their whole run
 
   // Anything else under this router is a typo, and answers as JSON like the rest.
   r.use((req, res) => res.status(404).json({ error: `No such API route: ${req.method} ${req.originalUrl}` }));

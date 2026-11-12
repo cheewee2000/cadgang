@@ -581,6 +581,10 @@ const faceBoxes = (shape) => {
  * True also when it was not worth finding out (spline faces): the caller measures.
  */
 export function brepSurfacesMeet(a, b, pad = 0.01) {
+  const started = performance.now();
+  try { return surfacesMeet(a, b, pad); } finally { recordOperation('nearFaces', performance.now() - started, false); }   // counted like any op: /api/health shows what the test costs
+}
+function surfacesMeet(a, b, pad) {
   const A = faceBoxes(a), B = faceBoxes(b), keepA = new Set(), keepB = new Set();
   for (let i = 0; i < A.length; i += 6) for (let j = 0; j < B.length; j += 6) {
     if (A[i] - pad > B[j + 3] || B[j] - pad > A[i + 3] || A[i + 1] - pad > B[j + 4] || B[j + 1] - pad > A[i + 4] || A[i + 2] - pad > B[j + 5] || B[j + 2] - pad > A[i + 5]) continue;
