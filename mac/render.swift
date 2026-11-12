@@ -3,8 +3,12 @@
 // stays on top and nothing is copied back. The page sends the visible triangles once per change
 // (renderScene) and the camera + section plane + viewport rect whenever they move (renderCam).
 // Samples accumulate while the view holds still; any change starts them over.
+// While the view moves (macOS 26+), it is traced at half size with a few samples and MetalFX's denoising
+// upscaler (Apple's counterpart of DLSS ray reconstruction) makes the full-size picture of it, so a turning
+// model is clean instead of grainy. Once the view has held still a moment the full-size samples take over.
 
 import MetalKit
+import MetalFX
 
 struct RenderUniforms {
     var camPos = SIMD4<Float>(), camFwd = SIMD4<Float>(), camRight = SIMD4<Float>(), camUp = SIMD4<Float>()
@@ -12,6 +16,9 @@ struct RenderUniforms {
     var bg = SIMD4<Float>(), clip = SIMD4<Float>()   // clip: keep where dot(xyz, p) + w >= 0; xyz = 0 is off
     var scene = SIMD4<Float>()                       // x: scene diagonal, y: ray offset, z: floor height, w: lamps
     var info = SIMD4<UInt32>()                       // x: samples so far, y: ortho, z: samples this frame, w: floor's first triangle
+    var pPos = SIMD4<Float>(), pFwd = SIMD4<Float>(), pRight = SIMD4<Float>(), pUp = SIMD4<Float>()   // the camera of the frame before (motion)
+    var fx = SIMD4<Float>()                          // x y: this frame's sub-pixel jitter, z: near (ortho: far) for depth, w: how much of the full-size samples shows over the upscaled picture
+    var tick = SIMD4<UInt32>()                       // x: frame number, y: samples a pixel in the half-size pass
 }
 
 final class PathTracer: NSObject, MTKViewDelegate {
@@ -23,6 +30,16 @@ final class PathTracer: NSObject, MTKViewDelegate {
     private var texs: [MTLTexture] = []   // the bodies' pictures (a glTF's image textures), up to maxTextures
     static let maxTextures = 8
     private var accum: MTLTexture?
+    private let gbufPipe: MTLComputePipelineState, resolvePipe: MTLComputePipelineState
+    private var scaler: AnyObject?        // MTLFXTemporalDenoisedScaler (macOS 26+), made for the drawable's size
+    private var noScaler = false          // this Mac has none: the samples alone, as before
+    private var guides: [MTLTexture] = [] // half size: colour (a: background), depth, motion, diffuse, specular, normal, roughness, mirror reach
+    private var upscaled: MTLTexture?, held: MTLTexture?   // MetalFX's picture (light), and it tone-mapped: what the full-size samples fade in over
+    private var warm = 0                  // upscaled frames since the view last changed
+    private var frame: UInt32 = 0, fresh = true            // fresh: nothing before this frame is worth keeping (a new scene, a new size)
+    private var prev: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>)?
+    static let settle = 30                // upscaled frames before the full-size samples start
+    static let moving: UInt32 = 2         // samples a pixel in the half-size pass
     private var u = RenderUniforms()
     private var cam: [String: Any] = [:]
     static let maxSamples: UInt32 = 4096
@@ -32,6 +49,8 @@ final class PathTracer: NSObject, MTKViewDelegate {
         do {
             let lib = try dev.makeLibrary(source: PathTracer.shader, options: nil)
             pipe = try dev.makeComputePipelineState(function: lib.makeFunction(name: "trace")!)
+            gbufPipe = try dev.makeComputePipelineState(function: lib.makeFunction(name: "gbuf")!)
+            resolvePipe = try dev.makeComputePipelineState(function: lib.makeFunction(name: "resolve")!)
         } catch { NSLog("cadgang render: \(error)"); return nil }
         queue = q
         view = MTKView(frame: frame, device: dev)
@@ -55,7 +74,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
 
     private var shown: Bool { view.window?.occlusionState.contains(.visible) ?? false }
 
-    func stop() { view.isHidden = true; view.isPaused = true; accel = nil; vtx = nil; idx = nil; tri = nil; mats = nil; uvs = nil; lamps = nil; texs = [] }
+    func stop() { view.isHidden = true; view.isPaused = true; fresh = true; accel = nil; vtx = nil; idx = nil; tri = nil; mats = nil; uvs = nil; lamps = nil; texs = [] }
 
     /// verts: [x y z nx ny nz] per vertex, world space. idx: 3 per triangle. tri: material per triangle.
     /// mats: [r g b metalness roughness transmission ior texture glow] (linear colour; texture: an index into
@@ -94,6 +113,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         let lm: [Float] = lights.filter { $0.count >= 11 }.flatMap { l in [0, 1, 2, 9, 3, 4, 5, 10, 6, 7, 8].map { Float(l[$0]) } + [0] }   // three float4 per lamp: pos + cosOuter, dir + cosInner, colour
         lamps = dev.makeBuffer(bytes: lm.isEmpty ? [Float](repeating: 0, count: 12) : lm, length: max(lm.count, 12) * 4, options: .storageModeShared)
         u.bg = SIMD4(Float(bg[0]), Float(bg[1]), Float(bg[2]), 1)
+        fresh = true
         u.scene = SIMD4(diag, diag * 2e-5, z, Float(lm.count / 12))
         u.sunCol = SIMD4(2.6, 2.5, 2.35, 0) * (lm.isEmpty ? 1 : 0.35)   // the file's lamps light it; the sun drops to a fill so their pools read
         u.info.w = UInt32(ix.count / 3 - 2)
@@ -127,7 +147,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         restart()
     }
 
-    private func restart() { u.info.x = 0; view.isPaused = accel == nil || !shown }
+    private func restart() { u.info.x = 0; warm = 0; view.isPaused = accel == nil || !shown }
 
     private func basis(aspect: Float) {
         func v(_ k: String) -> SIMD3<Float> { let a = (cam[k] as? [Double]) ?? [0, 0, 0]; return SIMD3(Float(a[0]), Float(a[1]), Float(a[2])) }
@@ -142,7 +162,16 @@ final class PathTracer: NSObject, MTKViewDelegate {
 
     func draw(in v: MTKView) {
         if !shown { v.isPaused = true; return }
-        guard let drawable = v.currentDrawable, let cb = queue.makeCommandBuffer(), encode(into: drawable.texture, cb) else { return }
+        guard let drawable = v.currentDrawable, let cb = queue.makeCommandBuffer() else { return }
+        let t = drawable.texture
+        var drawn = false
+        if #available(macOS 26.0, *), warm < Self.settle { drawn = encodeUpscaled(into: t, cb) }
+        if !drawn {   // the full-size samples, faded in over the upscaled picture as they gather (8 to 256)
+            let over = warm > 0 && held?.width == t.width && held?.height == t.height
+            let x = min(max((Float(u.info.x) - 8) / 248, 0), 1)
+            drawn = encode(into: t, cb, blend: over ? x * x * (3 - 2 * x) : 1)
+        }
+        guard drawn else { return }
         cb.present(drawable); cb.commit()
         if u.info.x >= Self.maxSamples { v.isPaused = true }   // converged: stop spending the GPU
     }
@@ -176,7 +205,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     }
 
     /// One frame of samples into accum, tone-mapped into out.
-    func encode(into out: MTLTexture, _ cb: MTLCommandBuffer) -> Bool {
+    func encode(into out: MTLTexture, _ cb: MTLCommandBuffer, blend: Float = 1) -> Bool {
         guard let accel = accel, let enc = cb.makeComputeCommandEncoder() else { return false }
         if accum?.width != out.width || accum?.height != out.height {
             let td = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float, width: out.width, height: out.height, mipmapped: false)
@@ -185,17 +214,100 @@ final class PathTracer: NSObject, MTKViewDelegate {
         }
         basis(aspect: Float(out.width) / Float(max(out.height, 1)))
         u.info.z = u.info.x < 4 ? 1 : 4   // one sample a frame while moving, four once it holds still
-        enc.setComputePipelineState(pipe)
+        u.fx.w = blend
+        bind(enc, pipe, accel)
+        enc.setTexture(accum, index: 0); enc.setTexture(out, index: 1); enc.setTexture(blend < 1 ? held : accum, index: 10)
+        enc.dispatchThreadgroups(MTLSize(width: (out.width + 7) / 8, height: (out.height + 7) / 8, depth: 1), threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
+        enc.endEncoding()
+        u.info.x += u.info.z
+        return true
+    }
+
+    private func bind(_ enc: MTLComputeCommandEncoder, _ p: MTLComputePipelineState, _ accel: MTLAccelerationStructure) {
+        enc.setComputePipelineState(p)
         enc.setBytes(&u, length: MemoryLayout<RenderUniforms>.stride, index: 0)
         enc.setBuffer(vtx, offset: 0, index: 1); enc.setBuffer(idx, offset: 0, index: 2)
         enc.setBuffer(tri, offset: 0, index: 3); enc.setBuffer(mats, offset: 0, index: 4)
         enc.setAccelerationStructure(accel, bufferIndex: 5)
         enc.setBuffer(uvs, offset: 0, index: 6); enc.setBuffer(lamps, offset: 0, index: 7)
-        for i in 0..<Self.maxTextures { enc.setTexture(i < texs.count ? texs[i] : accum, index: 2 + i) }   // unused slots get any texture; no material points at them
-        enc.setTexture(accum, index: 0); enc.setTexture(out, index: 1)
-        enc.dispatchThreadgroups(MTLSize(width: (out.width + 7) / 8, height: (out.height + 7) / 8, depth: 1), threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
+        for i in 0..<Self.maxTextures { enc.setTexture(i < texs.count ? texs[i] : (accum ?? upscaled), index: 2 + i) }   // unused slots get any texture; no material points at them
+    }
+
+    /// The denoising upscaler for a picture of w x h, with the half-size textures it reads. Nil where there is none.
+    @available(macOS 26.0, *)
+    private func upscaler(_ w: Int, _ h: Int) -> MTLFXTemporalDenoisedScaler? {
+        if let s = scaler as? MTLFXTemporalDenoisedScaler, s.outputWidth == w, s.outputHeight == h { return s }
+        guard !noScaler, w >= 64, h >= 64, let dev = view.device else { return nil }
+        guard MTLFXTemporalDenoisedScalerDescriptor.supportsDevice(dev) else { noScaler = true; return nil }
+        let iw = (w + 1) / 2, ih = (h + 1) / 2
+        let d = MTLFXTemporalDenoisedScalerDescriptor()
+        d.inputWidth = iw; d.inputHeight = ih; d.outputWidth = w; d.outputHeight = h
+        let formats: [MTLPixelFormat] = [.rgba16Float, .r32Float, .rg16Float, .rgba16Float, .rgba16Float, .rgba16Float, .r16Float, .r32Float]
+        d.colorTextureFormat = formats[0]; d.depthTextureFormat = formats[1]; d.motionTextureFormat = formats[2]
+        d.diffuseAlbedoTextureFormat = formats[3]; d.specularAlbedoTextureFormat = formats[4]
+        d.normalTextureFormat = formats[5]; d.roughnessTextureFormat = formats[6]
+        d.outputTextureFormat = .rgba16Float
+        d.isSpecularHitDistanceTextureEnabled = true; d.specularHitDistanceTextureFormat = formats[7]   // how far each mirror bounce went: reflections stay sharp
+        guard let s = d.makeTemporalDenoisedScaler(device: dev) else { NSLog("cadgang render: no MetalFX denoising upscaler at \(w) x \(h)"); noScaler = true; return nil }
+        func tex(_ f: MTLPixelFormat, _ w: Int, _ h: Int, _ usage: MTLTextureUsage) -> MTLTexture? {
+            let td = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: f, width: w, height: h, mipmapped: false)
+            td.usage = usage.union([.shaderRead, .shaderWrite]); td.storageMode = .private
+            return dev.makeTexture(descriptor: td)
+        }
+        let usages = [s.colorTextureUsage, s.depthTextureUsage, s.motionTextureUsage, s.diffuseAlbedoTextureUsage, s.specularAlbedoTextureUsage, s.normalTextureUsage, s.roughnessTextureUsage, s.specularHitDistanceTextureUsage]
+        guides = zip(formats, usages).compactMap { tex($0, iw, ih, $1) }
+        upscaled = tex(.rgba16Float, w, h, s.outputTextureUsage); held = tex(.rgba16Float, w, h, [])
+        guard guides.count == formats.count, upscaled != nil, held != nil else { noScaler = true; return nil }
+        scaler = s; fresh = true
+        return s
+    }
+
+    /// One frame the fast way: a few samples at half size with what the denoiser wants to know of each pixel
+    /// (depth, motion, colours, normal, roughness), MetalFX's full-size picture of it, tone-mapped into out.
+    @available(macOS 26.0, *)
+    func encodeUpscaled(into out: MTLTexture, _ cb: MTLCommandBuffer) -> Bool {
+        guard let accel = accel, let s = upscaler(out.width, out.height), let enc = cb.makeComputeCommandEncoder() else { return false }
+        let ortho = u.info.y
+        basis(aspect: Float(out.width) / Float(max(out.height, 1)))
+        if u.info.y != ortho { fresh = true }
+        let now = (u.camPos, u.camFwd, u.camRight, u.camUp)
+        (u.pPos, u.pFwd, u.pRight, u.pUp) = fresh ? now : (prev ?? now)
+        // sub-pixel jitter: 32 Halton(2, 3) points, the same for every pixel of a frame, so the upscaler can find what lies between them
+        func halton(_ i: UInt32, _ b: UInt32) -> Float { var f: Float = 1, r: Float = 0, n = i; while n > 0 { f /= Float(b); r += f * Float(n % b); n /= b }; return r }
+        let k = frame % 32 + 1, jx = halton(k, 2) - 0.5, jy = halton(k, 3) - 0.5
+        let diag = u.scene.x, isOrtho = u.info.y == 1, zRange = isOrtho ? diag * 200 : diag * 1e-4   // ortho: far, else near
+        u.fx = SIMD4(jx, jy, zRange, 1); u.tick = SIMD4(frame, Self.moving, 0, 0)
+        bind(enc, gbufPipe, accel)
+        for (i, t) in guides.enumerated() { enc.setTexture(t, index: 10 + i) }
+        enc.dispatchThreadgroups(MTLSize(width: (s.inputWidth + 7) / 8, height: (s.inputHeight + 7) / 8, depth: 1), threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
         enc.endEncoding()
-        u.info.x += u.info.z
+
+        s.colorTexture = guides[0]; s.depthTexture = guides[1]; s.motionTexture = guides[2]
+        s.diffuseAlbedoTexture = guides[3]; s.specularAlbedoTexture = guides[4]; s.normalTexture = guides[5]; s.roughnessTexture = guides[6]; s.specularHitDistanceTexture = guides[7]
+        s.outputTexture = upscaled
+        s.jitterOffsetX = -jx; s.jitterOffsetY = -jy   // the way back to the pixel's centre (the other sign is blurred: test/render-rig/main.swift)
+        s.motionVectorScaleX = Float(s.inputWidth); s.motionVectorScaleY = Float(s.inputHeight)   // the shader writes motion as a share of the picture
+        s.shouldResetHistory = fresh
+        s.isDepthReversed = true   // 1 at the eye, 0 far away
+        // the eye looks down -z; an ortho view's rays start 4 diagonals behind the camera's point
+        func v3(_ v: SIMD4<Float>) -> SIMD3<Float> { SIMD3(v.x, v.y, v.z) }
+        let f = v3(u.camFwd), hx = simd_length(v3(u.camRight)), hy = simd_length(v3(u.camUp))
+        let r = v3(u.camRight) / hx, up = v3(u.camUp) / hy
+        let back: Float = isOrtho ? diag * 4 : 0
+        let eye: SIMD3<Float> = v3(u.camPos) - f * back
+        s.worldToViewMatrix = simd_float4x4(columns: (SIMD4(r.x, up.x, -f.x, 0), SIMD4(r.y, up.y, -f.y, 0), SIMD4(r.z, up.z, -f.z, 0), SIMD4(-dot(r, eye), -dot(up, eye), dot(f, eye), 1)))
+        s.viewToClipMatrix = isOrtho
+            ? simd_float4x4(columns: (SIMD4(1 / hx, 0, 0, 0), SIMD4(0, 1 / hy, 0, 0), SIMD4(0, 0, 1 / zRange, 0), SIMD4(0, 0, 1, 1)))
+            : simd_float4x4(columns: (SIMD4(1 / hx, 0, 0, 0), SIMD4(0, 1 / hy, 0, 0), SIMD4(0, 0, 0, -1), SIMD4(0, 0, zRange, 0)))
+        s.encode(commandBuffer: cb)
+
+        guard let res = cb.makeComputeCommandEncoder() else { return false }
+        res.setComputePipelineState(resolvePipe)
+        res.setBytes(&u, length: MemoryLayout<RenderUniforms>.stride, index: 0)
+        res.setTexture(upscaled, index: 0); res.setTexture(guides[0], index: 1); res.setTexture(held, index: 2); res.setTexture(out, index: 3)
+        res.dispatchThreadgroups(MTLSize(width: (out.width + 7) / 8, height: (out.height + 7) / 8, depth: 1), threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
+        res.endEncoding()
+        prev = now; fresh = false; frame &+= 1; warm += 1
         return true
     }
 
@@ -205,7 +317,8 @@ final class PathTracer: NSObject, MTKViewDelegate {
     using namespace metal;
     using namespace raytracing;
 
-    struct U { float4 camPos, camFwd, camRight, camUp, sunDir, sunCol, skyTop, skyBot, bg, clip, scene; uint4 info; };
+    struct U { float4 camPos, camFwd, camRight, camUp, sunDir, sunCol, skyTop, skyBot, bg, clip, scene; uint4 info;
+               float4 pPos, pFwd, pRight, pUp, fx; uint4 tick; };
     struct Vtx { packed_float3 p; packed_float3 n; };
     struct Mat { float4 color; float4 prm; float4 tex; };   // prm: metalness, roughness, transmission, ior; tex: picture index (-1 none), glow
     struct Lamp { float4 pos; float4 dir; float4 col; };     // pos.w: cos of the cone's edge, dir.w: cos where it is full
@@ -296,98 +409,187 @@ final class PathTracer: NSObject, MTKViewDelegate {
         c *= np / peak;
         return mix(c, float3(np), 1.0 - 1.0 / (0.15 * (peak - np) + 1.0));
     }
+    // neutral() backwards: the light that tone-maps to c. Nothing maps to full white, so c stops at 0.97.
+    static float3 unneutral(float3 c) {
+        float np = max(c.r, max(c.g, c.b));
+        if (np >= 0.76) {
+            np = min(np, 0.97); c = min(c, np);
+            float peak = 0.52 + 0.0576 / (1.0 - np), g = 1.0 - 1.0 / (0.15 * (peak - np) + 1.0);
+            c = (c - np * g) / (1.0 - g) * peak / np;
+        }
+        float x = min(c.r, min(c.g, c.b));
+        return c + (x < 0.04 ? sqrt(max(x, 0.0) / 6.25) - x : 0.04);
+    }
     static float3 srgb(float3 c) { c = saturate(c); return select(1.055 * pow(c, 1.0 / 2.4) - 0.055, 12.92 * c, c <= 0.0031308); }
+
+    struct First { bool hit; float3 p, n, diff, spec; float rough, reach; };   // what the camera's ray met: the denoiser's guides (reach: how far its mirror bounce went)
+
+    // One path from the camera through px (-1..1, y up). rgb: its light, weighted by 1 - a; a: how much of it is background.
+    static float4 path(constant U& u, primitive_acceleration_structure accel, device const Vtx* vtx, device const uint* idx,
+                       device const uint* tri, device const Mat* mats, device const float2* uvs, device const Lamp* lamps,
+                       array<texture2d<float>, 8> texs, float2 px, thread uint& seed, thread First& f) {
+        constexpr sampler pic(filter::linear, address::clamp_to_edge);
+        float diag = u.scene.x, eps = u.scene.y;
+        float3 o = u.camPos.xyz, d;
+        if (u.info.y == 1) { o += px.x * u.camRight.xyz + px.y * u.camUp.xyz - u.camFwd.xyz * diag * 4.0; d = u.camFwd.xyz; }
+        else d = normalize(u.camFwd.xyz + px.x * u.camRight.xyz + px.y * u.camUp.xyz);
+        float3 L = 0.0, T = 1.0;
+        float bgw = 0.0;
+        bool mirror = false;   // the first bounce took the specular lobe
+        f.hit = false; f.n = -d; f.diff = 0.0; f.spec = 0.0; f.rough = 1.0;
+        for (int depth = 0; depth < 8; depth++) {
+            Hit h = closest(u, accel, vtx, idx, tri, o, d, INFINITY);
+            if (depth == 1 && mirror) f.reach = h.hit ? h.t : diag * 100.0;
+            if (!h.hit) { if (depth == 0) { bgw = 1.0; f.p = o + d * diag * 1e3; } else L += T * sky(u, d); break; }
+            float3 p = o + d * h.t;
+            bool isFloor = !h.cap && h.prim >= u.info.w;
+            if (depth == 0 && isFloor) bgw = smoothstep(diag * 1.5, diag * 10.0, h.t);   // the floor melts into the background
+            Mat m = mats[h.cap ? (u.info.w > 0 ? tri[u.info.w] + 1 : 0) : h.mat];
+            float3 col = m.color.rgb;
+            if (!h.cap && m.tex.x >= 0.0) {   // a picture: its colour at the hit, and a screen lights itself
+                uint i = h.prim;
+                float2 uv = uvs[idx[3 * i]] * (1.0 - h.bc.x - h.bc.y) + uvs[idx[3 * i + 1]] * h.bc.x + uvs[idx[3 * i + 2]] * h.bc.y;
+                col = texs[uint(m.tex.x)].sample(pic, uv, level(0)).rgb;
+            }
+            if (!h.cap) L += T * col * m.tex.y;   // a screen or a lamp's lens lights itself
+            float metal = m.prm.x, a = max(m.prm.y * m.prm.y, 0.002), a2 = a * a, trans = m.prm.z;
+            float3 v = -d;
+            if (depth == 0) { f.hit = true; f.p = p; f.n = h.n; f.diff = col * (1.0 - metal); f.spec = mix(float3(0.04), col, metal); f.rough = m.prm.y; }
+            if (trans > 0.5) {   // glass: Fresnel-weighted reflect or refract, IOR 1.5
+                bool entering = dot(h.ng, d) < 0.0;
+                float3 n = entering ? h.n : -h.n;
+                float ior = m.prm.w > 1.0 ? m.prm.w : 1.5, eta = entering ? 1.0 / ior : ior, cosi = min(dot(v, n), 1.0);
+                float f0 = (ior - 1.0) * (ior - 1.0) / ((ior + 1.0) * (ior + 1.0)), F = f0 + (1.0 - f0) * pow(saturate(1.0 - cosi), 5.0);
+                float3 rd = refract(d, n, eta);
+                if (all(rd == 0.0) || rnd(seed) < F) { d = reflect(d, n); o = p + n * eps; }
+                else { d = rd; o = p - n * eps; T *= col; }
+                continue;
+            }
+            float3 n = h.n, ng = dot(h.ng, d) < 0.0 ? h.ng : -h.ng;
+            if (dot(n, ng) < 0.0) n = ng;
+            o = p + ng * eps;
+            // Sun: one shadowed sample inside its disc (soft shadow edge).
+            float3 sd = normalize(u.sunDir.xyz + onb(u.sunDir.xyz, float3((rnd(seed) * 2.0 - 1.0), (rnd(seed) * 2.0 - 1.0), 0.0)) * u.sunDir.w);
+            if (dot(n, sd) > 0.0)
+                L += T * brdf(n, v, sd, col, metal, a2) * dot(n, sd) * u.sunCol.rgb * shadow(u, accel, vtx, idx, tri, mats, o, sd);
+            // Lamps: one shadowed sample each, inverse square in metres (the scene is mm), soft cone edge.
+            for (uint li = 0; li < uint(u.scene.w); li++) {
+                Lamp lp = lamps[li];
+                float3 to = lp.pos.xyz - o; float dist = length(to); float3 ld = to / dist;
+                float cone = smoothstep(lp.pos.w, lp.dir.w, dot(-ld, lp.dir.xyz)), nl = dot(n, ld);
+                if (cone <= 0.0 || nl <= 0.0) continue;
+                L += T * brdf(n, v, ld, col, metal, a2) * nl * lp.col.rgb * cone * 1e6 / (dist * dist) * shadow(u, accel, vtx, idx, tri, mats, o, ld, dist);
+            }
+            // Next direction: GGX lobe or cosine hemisphere, weighted by their mixture pdf.
+            float pSpec = mix(0.25, 1.0, metal);
+            float3 l;
+            if (rnd(seed) < pSpec) {
+                mirror = depth == 0;
+                float r1 = rnd(seed), r2 = rnd(seed);
+                float ct = sqrt((1.0 - r1) / (1.0 + (a2 - 1.0) * r1)), st = sqrt(1.0 - ct * ct), ph = 2.0 * M_PI_F * r2;
+                float3 hv = onb(n, float3(st * cos(ph), st * sin(ph), ct));
+                l = reflect(-v, hv);
+            } else {
+                float r1 = rnd(seed), r2 = rnd(seed), ph = 2.0 * M_PI_F * r2;
+                l = onb(n, float3(sqrt(r1) * cos(ph), sqrt(r1) * sin(ph), sqrt(1.0 - r1)));
+            }
+            float nl = dot(n, l);
+            if (nl <= 0.0 || dot(ng, l) <= 0.0) break;
+            float3 hv = normalize(v + l);
+            float nh = max(dot(n, hv), 0.0), vh = max(dot(v, hv), 1e-4);
+            float pdf = pSpec * ggxD(nh, a2) * nh / (4.0 * vh) + (1.0 - pSpec) * nl / M_PI_F;
+            T *= brdf(n, v, l, col, metal, a2) * nl / max(pdf, 1e-6);
+            d = l;
+            if (depth >= 3) { float q = min(max(T.r, max(T.g, T.b)), 0.95); if (rnd(seed) > q) break; T /= q; }
+        }
+        float lum = dot(L, float3(0.2126, 0.7152, 0.0722));
+        if (lum > 20.0) L *= 20.0 / lum;   // firefly clamp
+        return float4(L * (1.0 - bgw), bgw);
+    }
 
     kernel void trace(uint2 gid [[thread_position_in_grid]], constant U& u [[buffer(0)]],
                       device const Vtx* vtx [[buffer(1)]], device const uint* idx [[buffer(2)]],
                       device const uint* tri [[buffer(3)]], device const Mat* mats [[buffer(4)]],
                       primitive_acceleration_structure accel [[buffer(5)]], device const float2* uvs [[buffer(6)]], device const Lamp* lamps [[buffer(7)]],
                       texture2d<float, access::read_write> accum [[texture(0)]], texture2d<float, access::write> out [[texture(1)]],
-                      array<texture2d<float>, 8> texs [[texture(2)]]) {
-        constexpr sampler pic(filter::linear, address::clamp_to_edge);
+                      array<texture2d<float>, 8> texs [[texture(2)]], texture2d<float> held [[texture(10)]]) {
         uint2 size = uint2(out.get_width(), out.get_height());
         if (gid.x >= size.x || gid.y >= size.y) return;
         uint seed = (gid.x * 1973u + gid.y * 9277u + u.info.x * 26699u) | 1u;
         float4 acc = u.info.x == 0 ? float4(0) : accum.read(gid);   // rgb: weighted radiance; a: background weight
-        float diag = u.scene.x, eps = u.scene.y;
+        First f;
         for (uint s = 0; s < u.info.z; s++) {
             float2 px = (float2(gid) + float2(rnd(seed), rnd(seed))) / float2(size) * 2.0 - 1.0;
-            px.y = -px.y;
-            float3 o = u.camPos.xyz, d;
-            if (u.info.y == 1) { o += px.x * u.camRight.xyz + px.y * u.camUp.xyz - u.camFwd.xyz * diag * 4.0; d = u.camFwd.xyz; }
-            else d = normalize(u.camFwd.xyz + px.x * u.camRight.xyz + px.y * u.camUp.xyz);
-            float3 L = 0.0, T = 1.0;
-            float bgw = 0.0;
-            for (int depth = 0; depth < 8; depth++) {
-                Hit h = closest(u, accel, vtx, idx, tri, o, d, INFINITY);
-                if (!h.hit) { if (depth == 0) bgw = 1.0; else L += T * sky(u, d); break; }
-                float3 p = o + d * h.t;
-                bool isFloor = !h.cap && h.prim >= u.info.w;
-                if (depth == 0 && isFloor) bgw = smoothstep(diag * 1.5, diag * 10.0, h.t);   // the floor melts into the background
-                Mat m = mats[h.cap ? (u.info.w > 0 ? tri[u.info.w] + 1 : 0) : h.mat];
-                float3 col = m.color.rgb;
-                if (!h.cap && m.tex.x >= 0.0) {   // a picture: its colour at the hit, and a screen lights itself
-                    uint i = h.prim;
-                    float2 uv = uvs[idx[3 * i]] * (1.0 - h.bc.x - h.bc.y) + uvs[idx[3 * i + 1]] * h.bc.x + uvs[idx[3 * i + 2]] * h.bc.y;
-                    col = texs[uint(m.tex.x)].sample(pic, uv, level(0)).rgb;
-                }
-                if (!h.cap) L += T * col * m.tex.y;   // a screen or a lamp's lens lights itself
-                float metal = m.prm.x, a = max(m.prm.y * m.prm.y, 0.002), a2 = a * a, trans = m.prm.z;
-                float3 v = -d;
-                if (trans > 0.5) {   // glass: Fresnel-weighted reflect or refract, IOR 1.5
-                    bool entering = dot(h.ng, d) < 0.0;
-                    float3 n = entering ? h.n : -h.n;
-                    float ior = m.prm.w > 1.0 ? m.prm.w : 1.5, eta = entering ? 1.0 / ior : ior, cosi = min(dot(v, n), 1.0);
-                    float f0 = (ior - 1.0) * (ior - 1.0) / ((ior + 1.0) * (ior + 1.0)), F = f0 + (1.0 - f0) * pow(saturate(1.0 - cosi), 5.0);
-                    float3 rd = refract(d, n, eta);
-                    if (all(rd == 0.0) || rnd(seed) < F) { d = reflect(d, n); o = p + n * eps; }
-                    else { d = rd; o = p - n * eps; T *= col; }
-                    continue;
-                }
-                float3 n = h.n, ng = dot(h.ng, d) < 0.0 ? h.ng : -h.ng;
-                if (dot(n, ng) < 0.0) n = ng;
-                o = p + ng * eps;
-                // Sun: one shadowed sample inside its disc (soft shadow edge).
-                float3 sd = normalize(u.sunDir.xyz + onb(u.sunDir.xyz, float3((rnd(seed) * 2.0 - 1.0), (rnd(seed) * 2.0 - 1.0), 0.0)) * u.sunDir.w);
-                if (dot(n, sd) > 0.0)
-                    L += T * brdf(n, v, sd, col, metal, a2) * dot(n, sd) * u.sunCol.rgb * shadow(u, accel, vtx, idx, tri, mats, o, sd);
-                // Lamps: one shadowed sample each, inverse square in metres (the scene is mm), soft cone edge.
-                for (uint li = 0; li < uint(u.scene.w); li++) {
-                    Lamp lp = lamps[li];
-                    float3 to = lp.pos.xyz - o; float dist = length(to); float3 ld = to / dist;
-                    float cone = smoothstep(lp.pos.w, lp.dir.w, dot(-ld, lp.dir.xyz)), nl = dot(n, ld);
-                    if (cone <= 0.0 || nl <= 0.0) continue;
-                    L += T * brdf(n, v, ld, col, metal, a2) * nl * lp.col.rgb * cone * 1e6 / (dist * dist) * shadow(u, accel, vtx, idx, tri, mats, o, ld, dist);
-                }
-                // Next direction: GGX lobe or cosine hemisphere, weighted by their mixture pdf.
-                float pSpec = mix(0.25, 1.0, metal);
-                float3 l;
-                if (rnd(seed) < pSpec) {
-                    float r1 = rnd(seed), r2 = rnd(seed);
-                    float ct = sqrt((1.0 - r1) / (1.0 + (a2 - 1.0) * r1)), st = sqrt(1.0 - ct * ct), ph = 2.0 * M_PI_F * r2;
-                    float3 hv = onb(n, float3(st * cos(ph), st * sin(ph), ct));
-                    l = reflect(-v, hv);
-                } else {
-                    float r1 = rnd(seed), r2 = rnd(seed), ph = 2.0 * M_PI_F * r2;
-                    l = onb(n, float3(sqrt(r1) * cos(ph), sqrt(r1) * sin(ph), sqrt(1.0 - r1)));
-                }
-                float nl = dot(n, l);
-                if (nl <= 0.0 || dot(ng, l) <= 0.0) break;
-                float3 hv = normalize(v + l);
-                float nh = max(dot(n, hv), 0.0), vh = max(dot(v, hv), 1e-4);
-                float pdf = pSpec * ggxD(nh, a2) * nh / (4.0 * vh) + (1.0 - pSpec) * nl / M_PI_F;
-                T *= brdf(n, v, l, col, metal, a2) * nl / max(pdf, 1e-6);
-                d = l;
-                if (depth >= 3) { float q = min(max(T.r, max(T.g, T.b)), 0.95); if (rnd(seed) > q) break; T /= q; }
-            }
-            float lum = dot(L, float3(0.2126, 0.7152, 0.0722));
-            if (lum > 20.0) L *= 20.0 / lum;   // firefly clamp
-            acc += float4(L * (1.0 - bgw), bgw);
+            acc += path(u, accel, vtx, idx, tri, mats, uvs, lamps, texs, float2(px.x, -px.y), seed, f);
         }
         accum.write(acc, gid);
         float n = float(u.info.x + u.info.z), wHit = n - acc.a;
         float3 c = wHit > 0.0 ? neutral(acc.rgb / wHit) : 0.0;
         c = mix(c, u.bg.rgb, acc.a / n);   // the background is the page's own colour, untouched by tone mapping
+        if (u.fx.w < 1.0) c = mix(held.read(gid).rgb, c, u.fx.w);   // the first samples fade in over the upscaled picture
+        out.write(float4(srgb(c), 1.0), gid);
+    }
+
+    // Where p shows in a camera's picture, 0..1 from the top left.
+    static float2 project(float3 pos, float3 fwd, float3 right, float3 up, bool ortho, float3 p) {
+        float3 rel = p - pos;
+        float z = ortho ? 1.0 : max(dot(rel, fwd), 1e-6);
+        float2 ndc = float2(dot(rel, right) / dot(right, right), dot(rel, up) / dot(up, up)) / z;
+        return float2(ndc.x, -ndc.y) * 0.5 + 0.5;
+    }
+
+    // The half-size pass for MetalFX: noisy light, and what the camera's ray met at each pixel.
+    kernel void gbuf(uint2 gid [[thread_position_in_grid]], constant U& u [[buffer(0)]],
+                     device const Vtx* vtx [[buffer(1)]], device const uint* idx [[buffer(2)]],
+                     device const uint* tri [[buffer(3)]], device const Mat* mats [[buffer(4)]],
+                     primitive_acceleration_structure accel [[buffer(5)]], device const float2* uvs [[buffer(6)]], device const Lamp* lamps [[buffer(7)]],
+                     array<texture2d<float>, 8> texs [[texture(2)]],
+                     texture2d<float, access::write> color [[texture(10)]], texture2d<float, access::write> depth [[texture(11)]],
+                     texture2d<float, access::write> motion [[texture(12)]], texture2d<float, access::write> diffuse [[texture(13)]],
+                     texture2d<float, access::write> specular [[texture(14)]], texture2d<float, access::write> normal [[texture(15)]],
+                     texture2d<float, access::write> rough [[texture(16)]], texture2d<float, access::write> reach [[texture(17)]]) {
+        uint2 size = uint2(color.get_width(), color.get_height());
+        if (gid.x >= size.x || gid.y >= size.y) return;
+        uint seed = (gid.x * 1973u + gid.y * 9277u + u.tick.x * 26699u) | 1u;
+        float2 uv = (float2(gid) + 0.5 + u.fx.xy) / float2(size);   // every pixel's ray is off-centre by the frame's jitter
+        float2 px = float2(uv.x, 1.0 - uv.y) * 2.0 - 1.0;
+        First f; f.reach = 0.0; float4 acc = 0.0;
+        for (uint s = 0; s < u.tick.y; s++) acc += path(u, accel, vtx, idx, tri, mats, uvs, lamps, texs, px, seed, f);
+        acc /= float(max(u.tick.y, 1u));
+        bool ortho = u.info.y == 1;
+        float along = dot(f.p - u.camPos.xyz, u.camFwd.xyz);
+        float z = !f.hit ? 0.0 : ortho ? saturate(1.0 - (along + u.scene.x * 4.0) / u.fx.z) : saturate(u.fx.z / max(along, 1e-6));
+        float2 was = project(u.pPos.xyz, u.pFwd.xyz, u.pRight.xyz, u.pUp.xyz, ortho, f.p);
+        // The page's colour shows where the floor fades out and where the ray met nothing, and it is not tone-mapped. So it is mixed
+        // in as the eye will see it and the mix taken back to light: the denoiser gets one picture, and resolve's neutral() undoes this.
+        float3 L = acc.a < 1.0 ? acc.rgb / (1.0 - acc.a) : float3(0.0);
+        float lum = dot(L, float3(0.2126, 0.7152, 0.0722));
+        if (lum > 3.0) L *= 3.0 / lum;   // brighter than this (it is white on screen already) and MetalFX hollows a highlight out into a ring
+        if (acc.a > 0.0) L = unneutral(mix(neutral(L), u.bg.rgb, acc.a));
+        color.write(float4(L, acc.a), gid);
+        depth.write(float4(z), gid);
+        motion.write(float4(was - uv, 0.0, 0.0), gid);
+        diffuse.write(float4(f.diff, 1.0), gid);
+        specular.write(float4(f.spec, 1.0), gid);
+        normal.write(float4(f.n, 0.0), gid);
+        rough.write(float4(f.rough), gid);
+        reach.write(float4(f.reach), gid);
+    }
+
+    // MetalFX's picture, tone-mapped. Where the half-size pass saw only background the page's own colour goes in untouched.
+    kernel void resolve(uint2 gid [[thread_position_in_grid]], constant U& u [[buffer(0)]],
+                        texture2d<float> upscaled [[texture(0)]], texture2d<float> low [[texture(1)]],
+                        texture2d<float, access::write> held [[texture(2)]], texture2d<float, access::write> out [[texture(3)]]) {
+        constexpr sampler lin(filter::linear, address::clamp_to_edge);
+        uint2 size = uint2(out.get_width(), out.get_height());
+        if (gid.x >= size.x || gid.y >= size.y) return;
+        float2 uv = (float2(gid) + 0.5) / float2(size), t = 1.0 / float2(low.get_width(), low.get_height());
+        // all background for a pixel and a half around (at half size): the page's colour exactly, which neutral() cannot reach when it is white
+        t *= 1.5;
+        float w = min(low.sample(lin, uv, level(0)).a, min(min(low.sample(lin, uv + t, level(0)).a, low.sample(lin, uv - t, level(0)).a),
+                                                           min(low.sample(lin, uv + float2(t.x, -t.y), level(0)).a, low.sample(lin, uv + float2(-t.x, t.y), level(0)).a)));
+        float3 c = mix(neutral(max(upscaled.read(gid).rgb, 0.0)), u.bg.rgb, smoothstep(0.9, 1.0, w));
+        held.write(float4(c, 1.0), gid);
         out.write(float4(srgb(c), 1.0), gid);
     }
     """
