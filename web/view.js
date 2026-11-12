@@ -3868,7 +3868,8 @@ function cursorTip(text, e) {
 // --- Cells pane: the transcript Claude writes (web/cells.js) beside the model, as an iframe in panel mode.
 // Open or shut and its width are preferences, like the theme. View › Cells (⌘⇧2) toggles it from the shell.
 const cellsPane = $('#cellsPane'), cellsFrame = $('#cellsFrame');
-let cellsPref = {}; try { cellsPref = JSON.parse(localStorage.getItem('cadgang-cells')) || {}; } catch {}
+// var: a file opened from the address (?open=, above) asks for the pane before this line has run, and must find nothing rather than throw; the pane is synced below
+var cellsPref = {}; try { cellsPref = JSON.parse(localStorage.getItem('cadgang-cells')) || {}; } catch {}
 const saveCells = () => { try { localStorage.setItem('cadgang-cells', JSON.stringify(cellsPref)); } catch {} };
 function setCells(on) {
   cellsPref.on = on; saveCells();
@@ -3878,7 +3879,7 @@ function setCells(on) {
 // The pane shows the cells of the project this window's file belongs to (the nearest folder above it with
 // a cell document), so each tab has its own; a file in no project leaves the pane following Claude.
 async function syncCellsPane() {
-  if (!cellsPref.on) return;
+  if (!cellsPref?.on) return;
   const s = subject ? await fetch(`api/cells/session?subject=${encodeURIComponent(subject)}`).then((r) => r.json()).catch(() => ({})) : {};
   const follow = cellsFrame.contentWindow?.cadgangFollow;
   if (follow) follow(s);

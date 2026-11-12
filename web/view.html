@@ -16,10 +16,11 @@
     (() => {
       let sent = 0;
       const report = (what) => { if (sent++ < 20) navigator.sendBeacon('/api/view/pagelog', String(what).slice(0, 4000)); };
-      addEventListener('error', (e) => report(e.error?.stack || `${e.message || `could not load ${e.target?.src || e.target?.href || 'a file'}`} (${e.filename || ''}:${e.lineno || ''})`), true);
-      addEventListener('unhandledrejection', (e) => report(e.reason?.stack || e.reason));
+      const text = (x) => (x instanceof Error ? (String(x.stack).includes(x.message) ? x.stack : `${x}\n${x.stack}`) : x);   // WebKit's stack leaves the message out
+      addEventListener('error', (e) => report(e.error ? text(e.error) : `${e.message || `could not load ${e.target?.src || e.target?.href || 'a file'}`} (${e.filename || ''}:${e.lineno || ''})`), true);
+      addEventListener('unhandledrejection', (e) => report(text(e.reason)));
       const say = console.error;   // and what the page or three.js says is an error (a shader that will not compile, a lost context)
-      console.error = (...a) => { say.apply(console, a); report(a.map((x) => x?.stack || x).join(' ')); };
+      console.error = (...a) => { say.apply(console, a); report(a.map(text).join(' ')); };
     })();
   </script>
   <script type="importmap">
