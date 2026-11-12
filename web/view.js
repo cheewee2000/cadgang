@@ -3300,7 +3300,7 @@ function resetPlacement() {
 
 // MATERIALS needs something for metal and glass to reflect in the live view: a soft studio room.
 let roomEnv = null;
-(function loop() {
+function frame() {
   resize();
   if (!(rt.on && rt.pt)) {   // the WebGL path tracer owns the environment while it runs
     const env = ui.look === 'materials' ? (roomEnv ??= new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture) : null;
@@ -3326,8 +3326,8 @@ let roomEnv = null;
   viewCube.render();
   measure.projectLabels();
   markup.projectLabels();
-  requestAnimationFrame(loop);
-})();
+}
+(function loop() { frame(); requestAnimationFrame(loop); })();
 
 fetch('api/health').then((r) => r.json()).then((h) => {
   $('#version').textContent = 'v' + h.version;
@@ -3357,6 +3357,18 @@ $('#shareShot').addEventListener('click', () => {
   // the item is made now, with the picture still to come: Safari (and the Mac app) only let the click itself write
   navigator.clipboard.write([new ClipboardItem({ 'image/png': shotBlob() })])
     .then(() => say('screenshot copied: paste it anywhere'), (e) => say(`could not copy the screenshot (${e.message}): use Save screenshot`, true));
+});
+// CAPTURE: the 3D view as it is drawn now (grid, markups and notes if they are on) with none of the buttons or
+// panels, the size of the whole window. The view fills the window for one frame that is never painted, is drawn
+// and read at that size, and goes back.
+// ponytail: with Render on this is the plain shaded view; the ray-traced picture is not in this canvas.
+$('#captureBtn').addEventListener('click', async () => {
+  if (!bbox) return say('open a file first', true);
+  viewport.classList.add('capture'); frame();
+  let url, size; try { url = markup.snapshot(); size = `${renderer.domElement.width} × ${renderer.domElement.height}`; } finally { viewport.classList.remove('capture'); frame(); }
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(await (await fetch(url)).blob()), download: shotName() });
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  say(`saved ${a.download} (${size})`);
 });
 $('#shareShotSave').addEventListener('click', async () => {
   shareMenu.hidden = true;

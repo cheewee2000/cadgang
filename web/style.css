@@ -134,6 +134,7 @@ input[type="range"] { accent-color: var(--ink); }
 /* ------------------------------------------------------------ viewer */
 main { display: flex; flex: 1 1 auto; min-height: 0; }
 #viewport { flex: 1 1 auto; position: relative; min-width: 0; }
+#viewport.capture { position: fixed; inset: 0; z-index: 1000; }   /* CAPTURE: the view at the window's size for the one frame it is read */
 #viewport canvas { display: block; touch-action: none; }   /* fingers and a pencil reach the page, not Safari's scroll/zoom */
 footer {
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
