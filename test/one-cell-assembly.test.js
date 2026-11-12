@@ -57,3 +57,19 @@ export default ({ p, brep, sk }) => { const s = sk.sketch(); const [a, b, c, d] 
   assert.equal(count('extrude'), 1);
   assert.notDeepEqual(w35.map((v, i) => v - w20[i]).slice(3), [2, 0, 0], 'the bar changed size, not just place');
 });
+
+test('a part placed by a later cell: moving it there re-meshes nothing', async () => {
+  await initBrep();
+  clearCellCache();
+  const doc = new CellDocument();
+  doc.addCell({ id: 'peg', code: 'export default ({ brep }) => brep.cylinder(4, 20);' });
+  doc.addCell({ id: 'placed', refs: ['peg'], code: `export const params = { z: 5 };
+export default ({ p, brep, inputs }) => brep.compound(brep.box(30, 30, 2), brep.name(brep.translate(brep.rotate(inputs.peg, 90, [0, 1, 0]), [0, 0, p.z]), 'peg'));` });
+  run(doc, (shape) => tessellateBodies(shape, { tolerance: 0.1 }, 'placed'));
+  resetBrepOperationStats();
+  doc.updateCell('placed', { params: { z: 9 } });
+  const moved = run(doc, (shape) => tessellateBodies(shape, { tolerance: 0.1 }, 'placed'));
+  assert.equal(count('tessellation'), 0, 'the peg comes from another cell: its mesh is moved, not made again');
+  const peg = moved.bodies.find((b) => b.name === 'peg'), zs = []; for (let i = peg.first * 3; i < (peg.first + peg.count) * 3; i++) zs.push(moved.positions[moved.indices[i] * 3 + 2]);
+  assert.ok(Math.abs(Math.min(...zs) - 5) < 0.2 && Math.abs(Math.max(...zs) - 13) < 0.2, `the peg sits at its new height (${Math.min(...zs)}..${Math.max(...zs)})`);
+});

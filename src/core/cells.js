@@ -24,7 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { GraphError } from './errors.js';
 import { compileCell, normalizeParams } from './sandbox.js';
-import { cellApi, checkCellResult, clearMeasureMemo, clearShapeMemo, childKeys, adoptChildren, keptShape } from './cellapi.js';
+import { cellApi, checkCellResult, clearMeasureMemo, clearShapeMemo, childKeys, adoptChildren, keptShape, cellShapes } from './cellapi.js';
 import { trackBrepShape, nameParts, partsOf, setParts, brepHeapBytes, BREP_ROOM_BYTES, beginBrepScope, settleBrep, progress, brepToBuffer, brepFromBuffer } from './brep.js';
 
 const CELL_ID = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
@@ -647,6 +647,7 @@ function compiledFor(cell) {
  */
 const RESULT_CACHE_LIMIT = 48; // ponytail: count cap, not bytes — a byte budget if the heap limit trips
 const resultCache = new Map();
+cellShapes.of = (k) => resultCache.get(k)?.shape ?? null;   // a moved copy of this part is meshed as this part's mesh, moved (cellapi.js)
 
 function cellKey(cell, inputKeys) {
   return crypto.createHash('sha1').update(JSON.stringify([
