@@ -10,6 +10,18 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png" />
   <link rel="stylesheet" href="cwandt.css" />
   <link rel="stylesheet" href="style.css" />
+  <script>
+    // What goes wrong in the page is written to the server's log (the app: ~/Library/Logs/cadgang/server.log): the app's window has no console to read.
+    // Before the module, so a script that fails to load is caught too. ponytail: the first 20 a page load; a flood says nothing new.
+    (() => {
+      let sent = 0;
+      const report = (what) => { if (sent++ < 20) navigator.sendBeacon('/api/view/pagelog', String(what).slice(0, 4000)); };
+      addEventListener('error', (e) => report(e.error?.stack || `${e.message || `could not load ${e.target?.src || e.target?.href || 'a file'}`} (${e.filename || ''}:${e.lineno || ''})`), true);
+      addEventListener('unhandledrejection', (e) => report(e.reason?.stack || e.reason));
+      const say = console.error;   // and what the page or three.js says is an error (a shader that will not compile, a lost context)
+      console.error = (...a) => { say.apply(console, a); report(a.map((x) => x?.stack || x).join(' ')); };
+    })();
+  </script>
   <script type="importmap">
     { "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/jsm/", "three/examples/jsm/": "./vendor/jsm/", "three-mesh-bvh": "./vendor/three-mesh-bvh.module.js" } }
   </script>

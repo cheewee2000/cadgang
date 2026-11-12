@@ -34,6 +34,10 @@ test('the same file asked for twice at once is imported once, and both get it', 
   assert.ok(!a.timings.cached && !b.timings.cached && a.bytes.equals(b.bytes));
 });
 
+test('the page can hand its errors to the server log', async () => {
+  assert.equal((await fetch(`${root}/api/view/pagelog`, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: 'Error: something in the page' })).status, 204);
+});
+
 test('a capture is written where captures go, never over another, and only if it is a PNG', async () => {
   const png = Buffer.concat([Buffer.from('\x89PNG\r\n\x1a\n', 'latin1'), Buffer.from('rest of a picture')]);
   const post = (body, name) => fetch(`${root}/api/view/capture?name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'Content-Type': 'image/png' }, body });

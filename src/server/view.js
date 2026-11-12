@@ -198,6 +198,13 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
     } catch (e) { next(e); }
   });
 
+  // An error in the page (view.html sends it): into the server's log, where the app keeps it. ponytail: 500 a run, so a page stuck in a loop cannot fill the disk.
+  let pageErrors = 0;
+  r.post('/pagelog', express.text({ type: () => true, limit: '8kb' }), (req, res) => {
+    if (pageErrors++ < 500) console.error(new Date().toISOString(), 'page error:', String(req.body).slice(0, 4000));
+    res.status(204).end();
+  });
+
   // CAPTURE: the page's clean picture, written straight to the Desktop with no dialog. A name already there gets -2, -3…
   r.post('/capture', express.raw({ type: 'image/png', limit: '200mb' }), async (req, res, next) => {
     try {
