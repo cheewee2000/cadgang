@@ -100,10 +100,26 @@ export function explodeOffsets(bodies, centre, hints = new Map()) {
   // resting on another registers as a touch, not a miss.
   // skip(h): hits to look past (the lip of a hole whose pin is bigger than it)
   // lead: how square a face must face d to probe (flat faces only: 0.9)
+  // Can no ray along d from inside body i's box reach body j's box? j wholly behind i, or the two boxes apart on an
+  // axis square to d (each world axis with its part along d taken off). Exact: every probe starts inside i's box.
+  const WORLD = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)], rel = new THREE.Vector3(), u = new THREE.Vector3();
+  const outOfReach = (i, j, d, pad) => {
+    const A = info[i], B = info[j];
+    rel.subVectors(B.c, A.c);
+    if (rel.dot(d) + extOf(B.half, d) < -extOf(A.half, d) - pad) return true;
+    for (const e of WORLD) {
+      u.copy(e).addScaledVector(d, -e.dot(d)); if (u.lengthSq() < 1e-12) continue;
+      u.normalize();
+      if (Math.abs(rel.dot(u)) > extOf(A.half, u) + extOf(B.half, u) + pad) return true;
+    }
+    return false;
+  };
   const hitFrom = (i, d, among, skip, lead = 0.3) => {
     d = d.clone().normalize();
     const { c, r, pts } = info[i], eps = 1e-3 * r;
-    const meshes = among.map((b) => probe[bodies.indexOf(b)]);
+    // 2.2 million rays on a 168-body assembly, most of them at bodies the part could never reach: those are not cast
+    const meshes = []; for (const b of among) { const j = bodies.indexOf(b); if (!outOfReach(i, j, d, 4 * eps)) meshes.push(probe[j]); }
+    if (!meshes.length) return null;
     let best = null;
     for (const { p, n } of pts) {
       if (n.dot(d) < lead) continue;   // not a leading face
