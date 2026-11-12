@@ -162,8 +162,19 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
             env["CADGANG_CELLS"] = support.appendingPathComponent("cells.json").path   // the cell stack until a project is set
             p.environment = env
             p.currentDirectoryURL = support
-            p.standardOutput = FileHandle.standardOutput
-            p.standardError = FileHandle.standardError
+            // What the server says (an API error's stack, a crash and restart) goes to ~/Library/Logs/cadgang/server.log:
+            // an app opened from the Finder has no terminal to say it to. One old log is kept once this one passes 2 MB.
+            let logs = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/cadgang")
+            let log = logs.appendingPathComponent("server.log"), old = logs.appendingPathComponent("server.log.1")
+            try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+            if ((try? FileManager.default.attributesOfItem(atPath: log.path)[.size] as? Int) ?? 0) > 2_000_000 {
+                try? FileManager.default.removeItem(at: old); try? FileManager.default.moveItem(at: log, to: old)
+            }
+            if !FileManager.default.fileExists(atPath: log.path) { FileManager.default.createFile(atPath: log.path, contents: nil) }
+            if let h = try? FileHandle(forWritingTo: log) {
+                h.seekToEndOfFile(); h.write("--- cadgang \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "") started \(ISO8601DateFormatter().string(from: Date()))\n".data(using: .utf8)!)
+                p.standardOutput = h; p.standardError = h
+            } else { p.standardOutput = FileHandle.standardOutput; p.standardError = FileHandle.standardError }
             do { try p.run() } catch {
                 self.fail("Could not start the bundled server: \(error.localizedDescription)"); return
             }

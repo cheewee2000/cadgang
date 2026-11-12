@@ -260,7 +260,7 @@ app.use('/api', (err, req, res, next) => {
 app.use('/api', (req, res) => res.status(404).json({ error: `No such API route: ${req.method} ${req.originalUrl}` }));
 app.use('/api', (err, req, res, next) => {
   if (res.headersSent) return next(err);
-  console.error('API error:', err?.stack || err);
+  console.error(new Date().toISOString(), 'API error:', req.method, req.originalUrl, err?.stack || err);   // the Mac app keeps these in ~/Library/Logs/cadgang/server.log
   res.status(err?.status || 500).json({ error: err?.message || String(err) });
 });
 // A stray rejection must not take the open window down with it: log it and keep serving.
