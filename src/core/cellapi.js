@@ -365,10 +365,11 @@ const q = Object.freeze({
  *
  * `sink` is the array the evaluator hands in to collect them.
  */
-function assertions(sink) {
+function assertions(sink, quick = null) {
   const record = ({ label, ok, value, limit, unit = 'mm', detail = null, message }) => {
     sink.push({ label, ok, value, limit, unit, detail });
-    if (!ok) throw new GraphError(message);
+    if (!ok && quick) quick.skipped = true;   // a quick run draws on: its clash volumes are 0, so a failure here says nothing yet
+    else if (!ok) throw new GraphError(message);
     return value;
   };
   const round = (v) => (Number.isFinite(v) ? Number(v.toFixed(4)) : v);
@@ -466,14 +467,17 @@ const assert = assertions([]);
  * name what it means.
  */
 export function cellApi({
-  params = {}, input = null, inputs = {}, selections = {}, sketch = null, checked = [], flats = [], logs = null,
+  params = {}, input = null, inputs = {}, selections = {}, sketch = null, checked = [], flats = [], logs = null, quick = null,
 }) {
+  // A quick run is for the picture: a clash volume is not measured (0, and `quick.skipped` says the result is not
+  // the checked one). ponytail: only brep.interference, where the time is; the assert namespace still measures.
+  const own = { ...(logs && { fillet: notedFillet(logs) }), ...(quick && { interference: () => { quick.skipped = true; return 0; } }) };
   return Object.freeze({
     p: Object.freeze({ ...params }),
-    brep: logs ? Object.freeze({ ...brep, fillet: notedFillet(logs) }) : brep,
+    brep: Object.keys(own).length ? Object.freeze({ ...brep, ...own }) : brep,
     q,
     sk: sketchNamespace(params, sketch),
-    assert: assertions(checked),
+    assert: assertions(checked, quick),
     sm: sheetMetalNamespace(checked, flats),
     soft: softNamespace(checked, flats),
     topology,

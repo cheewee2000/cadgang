@@ -764,7 +764,11 @@ export async function evaluateCellsSettled(doc, targetId = doc.terminal, opts = 
   return s.value;
 }
 
-function* evaluateCellsSteps(doc, targetId, { stopOnError = true, checks = doc.checks !== false } = {}) {
+// quick: the geometry without its checks, for a window that is waiting to draw. Assertion cells are skipped and a
+// modelling cell's own clash measures answer 0; a cell that asked for one is kept apart (key + '|q') so the
+// checked run still happens, and a cell that asked for none is simply the result.
+// ponytail: a cell that shapes its part by a clash volume draws wrong until the checked run lands.
+function* evaluateCellsSteps(doc, targetId, { stopOnError = true, checks = doc.checks !== false, quick = false } = {}) {
   if (!targetId) throw new GraphError('Document has no cells to evaluate');
   const order = evaluationOrder(doc, targetId);
   const results = new Map();
@@ -814,12 +818,13 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true, checks = doc.c
 
     const started = Date.now();
     const asserting = cell.kind === CELL_KIND.assert;
-    if (asserting && !checks) { entry.status = 'skipped'; results.set(cell.id, input); continue; }
+    if (asserting && (!checks || quick)) { entry.status = 'skipped'; results.set(cell.id, input); continue; }
     const dir = diskDir(doc);
-    const hit = !asserting && (resultCache.get(key) || (dir && diskRead(dir, key)));
+    const unchecked = quick && !resultCache.has(key) && resultCache.has(key + '|q');
+    const hit = !asserting && (unchecked ? resultCache.get(key + '|q') : resultCache.get(key) || (dir && diskRead(dir, key)));
     if (hit) {
-      resultCache.delete(key); // re-insert: Map order is the LRU order
-      resultCache.set(key, hit);
+      resultCache.delete(unchecked ? key + '|q' : key); // re-insert: Map order is the LRU order
+      resultCache.set(unchecked ? key + '|q' : key, hit);
       entry.logs = hit.logs.map((l) => ({ ...l }));
       entry.checks.push(...hit.checks.map((c) => ({ ...c })));
       entry.flats.push(...(hit.flats || []).map((f) => ({ ...f })));
@@ -837,7 +842,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true, checks = doc.c
     // Each cell builds in its own scope: its result moves out to the caller's, its scraps go at once.
     // A cell's intermediates run to hundreds of MB, and the OCCT heap caps at 2 GB — summed over a
     // document they fill it in one evaluation, and the kernel restarts, cold, every request.
-    const cellScope = beginBrepScope();
+    const cellScope = beginBrepScope(), unmeasured = quick ? { skipped: false } : null;
     try {
       if (!asserting) makeRoom(cell.id);
       yield;   // a settling driver collects here, before this cell builds on the last one's leftovers
@@ -846,7 +851,7 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true, checks = doc.c
       try { progress.fn?.('cell', null); } catch { /* cosmetic: the pane lights the cell that is building */ }
       const value = compiled.run(cellApi({
         params: cell.params, input, inputs, selections: cell.selections, sketch: cell.sketch,
-        checked: entry.checks, flats: entry.flats, logs: compiled.logs,
+        checked: entry.checks, flats: entry.flats, logs: compiled.logs, quick: unmeasured,
       }));
       entry.logs = compiled.logs.map((l) => ({ ...l }));
       // An assertion cell measures; it does not model. Its result is whatever
@@ -864,7 +869,8 @@ function* evaluateCellsSteps(doc, targetId, { stopOnError = true, checks = doc.c
         previous = results.get(cell.id);
         previousKey = key;
         lastGood = cell.id;
-        cacheResult(key, previous, entry.logs, entry.checks, entry.flats, cell.id, dir);
+        if (unmeasured?.skipped) { cacheResult(key + '|q', previous, entry.logs, entry.checks, entry.flats, cell.id, null); resultCache.get(key + '|q').shape.__key = key; }   // the same part to the mesh and measure memos
+        else cacheResult(key, previous, entry.logs, entry.checks, entry.flats, cell.id, dir);
       }
     } catch (err) {
       // A lost pick is not a bug in the code — it is a question only the human

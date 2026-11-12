@@ -77,16 +77,28 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
     return prev.then(() => release);
   }
 
-  async function withShapeOf(document, target, body, { partial = false, requireAssertions = false } = {}) {
+  /**
+   * The picture before the checks. A request that reports the checks first builds the geometry alone and lets go of
+   * the kernel, so a window already waiting on /live (which never runs them) draws while the checks are measured.
+   */
+  async function prime(document, target) {
+    if (document.checks === false) return;
+    const release = await acquireBuild(), scope = beginBrepScope();
+    try { await evaluateCellsSettled(document, target, { stopOnError: false, quick: true }); } catch { /* the checked run reports it */ } finally { scope.dispose(); release(); }
+    await new Promise((r) => setTimeout(r, 10));   // the build blocked the loop: let a request that arrived meanwhile take its place in the queue
+  }
+
+  async function withShapeOf(document, target, body, { partial = false, requireAssertions = false, quick = false } = {}) {
     if (!target) throw new GraphError('The cell document is empty — add a cell first');
     await initBrep();
+    if (partial && !quick) await prime(document, target);
     const release = await acquireBuild();
     const scope = beginBrepScope();
     try {
       // Walk the whole chain: a broken cell above the target only matters if the
       // target needed what it made. A box built from scratch under a half-drawn
       // sketch still has a topology to report.
-      const run = await evaluateCellsSettled(document, target, { stopOnError: false, ...(requireAssertions && { checks: true }) });   // an export runs the checks whatever the switch says
+      const run = await evaluateCellsSettled(document, target, { stopOnError: false, quick, ...(requireAssertions && { checks: true }) });   // an export runs the checks whatever the switch says
       const shown = run.value ? target : partial ? run.lastGood : null;
       if (!shown) {
         const mine = run.report.find((c) => c.id === target && c.status !== 'ok');
@@ -428,6 +440,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
       const target = req.query.cell || doc.terminal;
       if (!target) throw new GraphError('The cell document is empty — add a cell first');
       await initBrep();
+      await prime(doc, target);
       const release = await acquireBuild();
       const scope = beginBrepScope();
       try {
@@ -558,7 +571,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
     try {
       await withShape(req, ({ shape, shown }) => {
         res.type('application/octet-stream').set('X-Cadgang-Revision', String(doc.revision)).send(pack(tessellateBodies(shape, { tolerance: tolerance(req, shape) }, shown)));
-      }, { partial: true });
+      }, { partial: true, quick: true });
     } catch (e) { fail(res, e); }
   });
 

@@ -141,3 +141,34 @@ test('a part checked pose after pose is told clear by its mesh, and a body insid
   assert.equal(run.report.find((e) => e.id === 'check').status, 'ok', JSON.stringify(run.report.find((e) => e.id === 'check')));
   assert.equal(count('interference'), 9, 'eight poses by the kernel, six by the meshes, and the one in the wall by the kernel');
 });
+
+test('a quick run is the geometry without its clash measures, and the checked run still measures them', async () => {
+  await initBrep(); clearCellCache();
+  const doc = new CellDocument();
+  doc.addCell({ id: 'plain', prompt: 'plain', code: 'export default ({ brep }) => brep.box(10, 10, 10)' });
+  doc.addCell({ id: 'asm', refs: ['plain'], prompt: 'asm', code: `export default ({ brep, inputs, assert }) => {
+    const lid = brep.translate(brep.box(10, 10, 4), [0, 0, 8]);
+    assert.ok(brep.interference(inputs.plain, lid) < 1, 'lid clear of the box');
+    return brep.compound(inputs.plain, lid);
+  }` });
+  doc.addCell({ id: 'check', kind: 'assert', refs: ['asm'], prompt: 'c', code: 'export default ({ brep, inputs, assert }) => { assert.ok(brep.bodies(inputs.asm) === 2, \'two bodies\'); return inputs.asm; }' });
+  resetBrepOperationStats();
+  let run = evaluateCells(doc, 'check', { stopOnError: false, quick: true });
+  const of = (id) => run.report.find((e) => e.id === id);
+  assert.ok(run.results.get('asm'), 'the assembly is there to draw');
+  assert.equal(count('interference'), 0, 'no clash measured');
+  assert.equal(of('check').status, 'skipped');
+  run = evaluateCells(doc, 'check', { stopOnError: false });
+  assert.equal(of('plain').cached, true, 'a cell with no clash measure was the real result the first time');
+  assert.equal(count('interference'), 1, 'the cell that skipped one runs again');
+  assert.equal(of('asm').status, 'error', 'and the overlap is reported');
+  assert.equal(of('asm').checks[0].ok, false);
+  run = evaluateCells(doc, 'check', { stopOnError: false, quick: true });
+  assert.ok(of('asm').cached && run.results.get('asm'), 'a later quick run still has the geometry to draw');
+  doc.updateCell('asm', { code: doc.get('asm').code.replace('[0, 0, 8]', '[0, 0, 10]') });   // the lid lifted clear
+  run = evaluateCells(doc, 'check', { stopOnError: false, quick: true });
+  run = evaluateCells(doc, 'check', { stopOnError: false });
+  assert.equal(of('asm').status, 'ok'); assert.equal(of('check').status, 'ok');
+  run = evaluateCells(doc, 'check', { stopOnError: false, quick: true });
+  assert.equal(of('asm').checks[0].ok, true, 'and once checked, a quick run takes the checked result');
+});
