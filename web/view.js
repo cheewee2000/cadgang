@@ -401,7 +401,13 @@ function listBodies() {
   radialOffsets(model.children, bbox.getCenter(new THREE.Vector3()));
   const tris = model.children.reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.getAttribute('position').count) / 3, 0);
   $('#resetBtn').hidden = model.children.length < 2;
-  if (model.children.length > 1 && tris <= 300000) solveExplode();
+  // The solver's rays and fits took 1.1 s of a 1.25 s load on a 168-body assembly, all before the model was drawn
+  // once. It runs after the first frame: the radial vectors above serve until it lands.
+  if (model.children.length > 1 && tris <= 300000) {
+    const loaded = model.children[0];
+    solveDue = () => { solveDue = null; if (model.children[0] === loaded) try { solveExplode(); } catch (e) { console.error(e); } };   // a newer load has its own
+    if (+$('#explode').value > 0) solveDue(); else requestAnimationFrame(() => setTimeout(() => solveDue?.(), 0));   // already pulled apart: the parts must not jump a second later
+  }
   // Rows nest under the file's assembly groups (STEP): a group row folds, ticks all it holds, and solos on a click.
   const root = { name: '', kids: new Map(), bodies: [], parent: null };
   for (const m of model.children) {
@@ -594,6 +600,7 @@ function saveBodies() {
 }
 
 /** Solve the explode vectors from the bodies at rest, then put the explode back. */
+let solveDue = null;   // the solve a load put off until its first frame; anything that needs the vectors now runs it
 function solveExplode() {
   const t0 = performance.now();
   // Solve in the file's own frame: the probes run along x, y and z, and a model turned 45° has no faces on them.
@@ -627,7 +634,7 @@ function resolveForJoints() {
   solveTimer = setTimeout(() => { try { solveExplode(); say('explode re-solved from the joints'); } catch {} }, 250);
 }
 // For a headless drive or a console: what the solver decided.
-window.cadgangExplode = () => model.children.map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, stage: m.userData.stage ?? 0, axis: m.userData.axis ?? null, pull: m.userData.pull == null ? null : +m.userData.pull.toFixed(2), fixStage: m.userData.fixStage ?? null, at: m.position.toArray().map((v) => +v.toFixed(1)), box: (({ min, max }) => [...min.toArray(), ...max.toArray()].map((v) => +v.toFixed(1)))(new THREE.Box3().setFromObject(m)) }));
+window.cadgangExplode = () => (solveDue?.(), model.children).map((m) => ({ name: m.userData.name, offset: m.userData.offset?.toArray().map((v) => +v.toFixed(2)), rides: m.userData.parent?.userData.name ?? null, stage: m.userData.stage ?? 0, axis: m.userData.axis ?? null, pull: m.userData.pull == null ? null : +m.userData.pull.toFixed(2), fixStage: m.userData.fixStage ?? null, at: m.position.toArray().map((v) => +v.toFixed(1)), box: (({ min, max }) => [...min.toArray(), ...max.toArray()].map((v) => +v.toFixed(1)))(new THREE.Box3().setFromObject(m)) }));
 /** Body ticks in model order (a group tree renders them out of order). */
 const bodyBoxes = () => { const by = new Map([...$('#bodies').querySelectorAll('input.body-cb')].map((cb) => [cb._body, cb])); return model.children.map((m) => by.get(m)).filter(Boolean); };
 /** Ticks follow the bodies: a group is ticked when all of it shows, half when some does. */
