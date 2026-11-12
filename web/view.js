@@ -396,14 +396,13 @@ function listBodies() {
     if (o && o.userData.file !== m.userData.file) { setBodyVisible(m, false); m.userData.dup = `repeats ${o.userData.name} of ${o.userData.file}`; dups.push(`${m.userData.file} repeats ${o.userData.name} of ${o.userData.file}: unticked`); }
     else if (!o) first.set(sig(m), m);
   }
-  // Explode vectors: radial at once; the solver (cylinders, contacts, collisions) runs now for small
-  // files and behind the SOLVE button for big ones, where its rays and fits take seconds.
+  // Explode vectors: radial at once; the solver (cylinders, contacts, collisions) runs for files small enough
+  // (solvable), where its rays and fits do not take seconds.
   radialOffsets(model.children, bbox.getCenter(new THREE.Vector3()));
-  const tris = model.children.reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.getAttribute('position').count) / 3, 0);
   $('#resetBtn').hidden = model.children.length < 2;
   // The solver's rays and fits took 1.1 s of a 1.25 s load on a 168-body assembly, all before the model was drawn
   // once. It runs after the first frame: the radial vectors above serve until it lands.
-  if (model.children.length > 1 && tris <= 300000) {
+  if (solvable()) {
     const loaded = model.children[0];
     solveDue = () => { solveDue = null; if (model.children[0] === loaded) try { solveExplode(); } catch (e) { console.error(e); } };   // a newer load has its own
     if (+$('#explode').value > 0) solveDue(); else requestAnimationFrame(() => setTimeout(() => solveDue?.(), 0));   // already pulled apart: the parts must not jump a second later
@@ -600,6 +599,15 @@ function saveBodies() {
 }
 
 /** Solve the explode vectors from the bodies at rest, then put the explode back. */
+// Is the assembly small enough to solve without being asked? The solver's time goes with the square of the bodies
+// (168 bodies 0.6 s, 235 bodies 1.2 s, 817 bodies 15 s), hardly with their triangles (123 bodies of 416,000 triangles: 0.4 s).
+// ponytail: under 300,000 triangles always solves, as it did before the count of bodies was looked at; hundreds of small bodies under that still wait.
+function solvable() {
+  const n = model.children.length;
+  if (n < 2) return false;
+  const tris = model.children.reduce((t, m) => t + (m.geometry.index ? m.geometry.index.count : m.geometry.getAttribute('position').count) / 3, 0);
+  return tris <= 300000 || (n <= 300 && tris <= 2000000);   // past two million triangles the trees the rays walk take seconds to build
+}
 let solveDue = null;   // the solve a load put off until its first frame; anything that needs the vectors now runs it
 function solveExplode() {
   const t0 = performance.now();
@@ -628,9 +636,7 @@ const hintSig = () => JSON.stringify(joints.map((j) => [j.body, j.parent, j.type
 /** New joints change how the parts should explode: solve again, quietly, when the model is small enough to do it on load. */
 function resolveForJoints() {
   clearTimeout(solveTimer);
-  if (model.children.length < 2 || hintSig() === solvedFor) return;
-  const tris = model.children.reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.getAttribute('position').count) / 3, 0);
-  if (tris > 300000) return;
+  if (!solvable() || hintSig() === solvedFor) return;
   solveTimer = setTimeout(() => { try { solveExplode(); say('explode re-solved from the joints'); } catch {} }, 250);
 }
 // For a headless drive or a console: what the solver decided.
