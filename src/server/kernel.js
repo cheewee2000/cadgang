@@ -20,7 +20,7 @@ import { persistMeasureMemo } from '../core/cellapi.js';
 import { cellsRouter, packBinaryMesh } from './cells.js';
 import { historyRouter } from './history.js';
 import { optionsRouter } from './options.js';
-import { initBrep, brepHeapBytes, brepOperationStats, progress, tessellate, brepBBox } from '../core/brep.js';
+import { initBrep, brepHeapBytes, brepOperationStats, progress, tessellate, brepBBox, persistMeshes } from '../core/brep.js';
 import { setImportRoot } from '../core/ops.js';
 
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '../..');
@@ -30,6 +30,7 @@ const broadcast = (msg) => send({ type: 'broadcast', msg });
 
 const doc = new CellDocument(CELLS_PATH), proj = { dir: null };
 if (process.env.CADGANG_DISK_CACHE !== '0') persistMeasureMemo(path.join(os.homedir(), 'Library', 'Caches', 'cadgang', 'measures.json'));   // with the parts on disk (cells.js), a fresh kernel's checks are lookups too
+if (process.env.CADGANG_DISK_CACHE !== '0') persistMeshes(path.join(os.homedir(), 'Library', 'Caches', 'cadgang', 'meshes'));
 let session = null;
 const api = cellsRouter(doc, ROOT, { project: proj }), routes = express.Router();
 // The document rides along: the page draws the stack from it at once, since a build may be holding

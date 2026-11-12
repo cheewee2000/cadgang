@@ -43,3 +43,24 @@ test('an assembly is meshed, boxed and measured part by part, so an edit re-mesh
   tessellate(run.value, { tolerance: 0.1 });
   assert.equal(brepOperationStats().tessellation.count, 1, 'only the edited part is meshed again');
 });
+
+test('a part mesh kept on disk is read back by a fresh kernel instead of being meshed again', async () => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path'), crypto = await import('node:crypto');
+  const { persistMeshes } = await import('../src/core/brep.js');
+  await initBrep(); clearCellCache();
+  const doc = new CellDocument();
+  doc.addCell({ id: 'rod', prompt: 'r', code: 'export default ({ brep }) => brep.cylinder(7, 31)' });
+  const run = evaluateCells(doc, 'rod'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cadgang-meshes-'));
+  const file = (tol) => path.join(dir, '1', crypto.createHash('sha1').update(`${run.value.__key}|${tol}|0.3`).digest('hex'));
+  try {
+    persistMeshes(dir); resetBrepOperationStats();
+    const made = tessellate(run.value, { tolerance: 0.07 });
+    assert.ok(fs.existsSync(file(0.07)), 'written');
+    fs.copyFileSync(file(0.07), file(0.08));   // stands in for a mesh an earlier kernel left
+    const read = tessellate(run.value, { tolerance: 0.08 });
+    assert.equal(brepOperationStats().tessellation.count, 1, 'the second was read, not meshed');
+    assert.deepEqual(read, made);
+    fs.writeFileSync(file(0.09), 'cut short');
+    assert.equal(tessellate(run.value, { tolerance: 0.09 }).indices.length, made.indices.length, 'a damaged file is meshed over');
+  } finally { persistMeshes(null); fs.rmSync(dir, { recursive: true, force: true }); }
+});

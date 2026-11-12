@@ -18,6 +18,7 @@
  * beginBrepScope()/dispose() pair that frees the intermediates.
  */
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
@@ -1783,6 +1784,29 @@ const cachedMesh = (shape, tolerance, angularTolerance, make) => {
   }
   return v;
 };
+// The same meshes on disk, when the kernel asks for it (persistMeshes): a fresh kernel reads a part's BRep from the
+// cell cache in milliseconds and then spent a second meshing forty-eight bodies it had meshed before.
+// ponytail: a file per part mesh, pruned by count when the kernel starts; bump the folder's number if the mesher changes.
+let meshDir = null;
+export function persistMeshes(dir, keep = 3000) {
+  if (!dir) { meshDir = null; return; }
+  try {
+    meshDir = path.join(dir, '1'); fs.mkdirSync(meshDir, { recursive: true });
+    const files = fs.readdirSync(meshDir);
+    if (files.length > keep) {
+      const at = (f) => { try { return fs.statSync(path.join(meshDir, f)).mtimeMs; } catch { return 0; } };
+      for (const f of files.sort((a, b) => at(a) - at(b)).slice(0, files.length - keep * 2 / 3)) try { fs.unlinkSync(path.join(meshDir, f)); } catch { /* gone */ }
+    }
+  } catch { meshDir = null; }
+}
+const meshOnDisk = (shape, tolerance, angularTolerance, make) => {
+  if (!meshDir || !shape?.__key) return make();
+  const file = path.join(meshDir, crypto.createHash('sha1').update(`${shape.__key}|${tolerance}|${angularTolerance}`).digest('hex'));
+  try { return v8.deserialize(fs.readFileSync(file)); } catch { /* not there, or cut short: mesh it */ }
+  const v = make();
+  try { fs.writeFileSync(file + '.tmp', v8.serialize(v)); fs.renameSync(file + '.tmp', file); } catch { /* a cache */ }
+  return v;
+};
 const mergeMeshes = (parts) => {
   const positions = new Float32Array(parts.reduce((n, p) => n + p.positions.length, 0)), normals = new Float32Array(positions.length);
   const indices = new Uint32Array(parts.reduce((n, p) => n + p.indices.length, 0)), faces = [];
@@ -1804,7 +1828,7 @@ export function tessellate(shape, opts = {}) {
     // A moved copy's mesh is its source's mesh, moved: a knob turn or an explode re-meshes nothing.
     const mv = movedMesh.of(shape), src = mv?.from();
     if (src) { const t = tessellate(src, opts), positions = Float32Array.from(t.positions), normals = Float32Array.from(t.normals); mv.apply(positions, false); mv.apply(normals, true); return { ...t, positions, normals }; }
-    return attempt('tessellation', () => {
+    return meshOnDisk(shape, tolerance, angularTolerance, () => attempt('tessellation', () => {
     let mesh = shape.mesh({ tolerance: Math.max(tolerance, COARSE), angularTolerance });
     // Triangle count grows about linearly with 1/tolerance, so judge the budget
     // on the FINE count the coarse one predicts — judging the coarse count let a
@@ -1821,7 +1845,7 @@ export function tessellate(shape, opts = {}) {
       // picking in the viewport works the same for both.
       faces: groups.map((g) => ({ first: g.start / 3, count: g.count / 3, faceId: g.faceId })),
     };
-    });
+    }));
   });
 }
 
