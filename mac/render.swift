@@ -472,7 +472,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     // A finish with a grain to it, at its true size: a STEP body has no texture coordinates, so the grain is worked out from
     // where the hit is in the body's own millimetres. It tilts the normal (n, world) and, for wood, shades the colour.
     //   1 brushed: scratches 0.07 to 0.3 mm apart along the body's length, tilting the normal across them (a highlight smears across the brushing)
-    //   2 bead blast: 0.1 mm dimples
+    //   2 bead blast: 0.035 mm dimples (a fine glass bead, #200: a satin sheen at arm's length, a grain only up close)
     //   3 wood: growth lines 2 mm apart along the length, wandering, with fibres
     static void grain(Mat m, float3 pw, thread float3& n, thread float3& col) {
         int kind = int(m.tex.z + 0.5), code = int(m.tex.w + 0.5);
@@ -484,7 +484,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
             float ta = (vnoise(qa * 3.5) - 0.5) * 0.8 + (vnoise(qa * 14.0) - 0.5) * 1.2, tb = (vnoise(qb * 3.5) - 0.5) * 0.8 + (vnoise(qb * 14.0) - 0.5) * 1.2;
             d = mix(cross(no, A) * ta, cross(no, B) * tb, smoothstep(0.75, 0.95, abs(dot(no, A)))) * 0.35;   // an end face is brushed along the middle axis
         } else if (kind == 2) {
-            d = (float3(vnoise(p * 9.0), vnoise(p * 9.0 + 31.7), vnoise(p * 9.0 + 71.3)) - 0.5) * 0.5;
+            d = (float3(vnoise(p * 28.0), vnoise(p * 28.0 + 31.7), vnoise(p * 28.0 + 71.3)) - 0.5) * 0.5;
         } else {
             float3 q = normalize(B + 0.5 * cross(A, B));   // across the width, leaning through the thickness: lines on the face and the edge
             float3 slow = qa * 0.05 + A * dot(p, A) * 0.012;   // the lines wander a little across the board and hardly at all along it
