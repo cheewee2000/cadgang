@@ -26,6 +26,14 @@ test('the same file opened twice is imported once', async () => {
   assert.ok(second.bytes.equals(first.bytes), 'and the page gets the same model');
 });
 
+test('the same file asked for twice at once is imported once, and both get it', async () => {
+  const step = fs.readFileSync('test/fixtures/cube.stp'), name = `cube-twice-${process.pid}-${Date.now()}.stp`;
+  const open = async () => { const r = await fetch(`${root}/api/view/tessellate?name=${name}`, { method: 'POST', body: step }); assert.equal(r.status, 200); return { timings: JSON.parse(r.headers.get('x-cadgang-timings')), bytes: Buffer.from(await r.arrayBuffer()) }; };
+  const [a, b] = await Promise.all([open(), open()]);
+  assert.equal([a, b].filter((r) => r.timings.shared).length, 1, 'one imports, the other waits for it');
+  assert.ok(!a.timings.cached && !b.timings.cached && a.bytes.equals(b.bytes));
+});
+
 test('a capture is written where captures go, never over another, and only if it is a PNG', async () => {
   const png = Buffer.concat([Buffer.from('\x89PNG\r\n\x1a\n', 'latin1'), Buffer.from('rest of a picture')]);
   const post = (body, name) => fetch(`${root}/api/view/capture?name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'Content-Type': 'image/png' }, body });
