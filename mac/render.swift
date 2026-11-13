@@ -139,7 +139,9 @@ final class PathTracer: NSObject, MTKViewDelegate {
               let scratch = dev.makeBuffer(length: sizes.buildScratchBufferSize, options: .storageModePrivate),
               let cb = queue.makeCommandBuffer(), let enc = cb.makeAccelerationStructureCommandEncoder() else { return }
         enc.build(accelerationStructure: a, descriptor: d, scratchBuffer: scratch, scratchBufferOffset: 0)
-        enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
+        // No wait: a queue runs its command buffers in the order they were committed, so every frame drawn after this one traces
+        // the new scene. Waiting here held the main thread (the whole app) until the frames already queued had finished too.
+        enc.endEncoding(); cb.commit()
         accel = a
         restart()
     }
