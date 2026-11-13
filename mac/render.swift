@@ -571,9 +571,11 @@ final class PathTracer: NSObject, MTKViewDelegate {
         float3 o = u.camPos.xyz, d;
         if (u.info.y == 1) {
             o += px.x * u.camRight.xyz + px.y * u.camUp.xyz - u.camFwd.xyz * diag * 4.0; d = u.camFwd.xyz;
-            // An ortho ray looking down starts above the floor, however far back that is: started under it (a pixel low in a
-            // side-on view) it met nothing, and the floor stopped at a hard line across the picture.
-            if (d.z < 0.0 && o.z < u.scene.z + diag) o += d * ((u.scene.z + diag - o.z) / d.z);
+            // An ortho ray that starts under the floor, looking down (a pixel low in a side-on view), is backed up to start above
+            // it: it met nothing, and the floor stopped at a hard line across the picture. No further than 40 diagonals, where
+            // the floor has long faded out: flat-on (d.z a rounding crumb under 0) the way back is astronomical, and a ray from
+            // there has no precision left to miss anything with, so it tested every triangle (minutes a frame: the app hung).
+            if (d.z < 0.0 && o.z < u.scene.z) { float back = (u.scene.z - o.z) / -d.z + diag; if (back < diag * 40.0) o -= d * back; }
         }
         else d = normalize(u.camFwd.xyz + px.x * u.camRight.xyz + px.y * u.camUp.xyz);
         float3 L = 0.0, T = 1.0;
