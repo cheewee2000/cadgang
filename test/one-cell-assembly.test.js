@@ -10,7 +10,7 @@ export default ({ p, brep, sk }) => {
   const plate = (w, d, h) => { const s = sk.sketch(); const ids = [[0, 0], [w, 0], [w, d], [0, d]].map(([x, y]) => s.point(x, y, { fixed: true })); ids.forEach((a, i) => s.line(a, ids[(i + 1) % 4])); return brep.extrude(s, h); };
   const base = plate(60, 40, 5), arm = brep.translate(brep.rotate(plate(30, 6, 3), p.turn, [0, 0, 1], [3, 3, 0]), [10, 10, 5]);
   const lid = brep.translate(plate(60, 40, p.lid), [0, 0, 20]);
-  return brep.compound(brep.name(base, 'base, steel'), brep.name(arm, 'arm'), brep.name(lid, 'lid'));
+  return brep.compound(brep.name(base, 'base, steel'), brep.name(arm, 'arm'), brep.name(lid, 'lid, plastic #e4572e'));
 };`;
 const count = (op) => brepOperationStats()[op]?.count ?? 0;
 const run = (doc, body) => { const scope = beginBrepScope(); try { return body(evaluateCells(doc).value); } finally { scope.dispose(); } };
@@ -22,7 +22,8 @@ test('a one-cell assembly: an edit rebuilds one part, bodies come out named, a t
   const doc = new CellDocument();
   doc.addCell({ id: 'rig', code });
   const first = run(doc, (shape) => tessellateBodies(shape, { tolerance: 0.1 }, 'rig'));
-  assert.deepEqual(first.bodies.map((b) => b.name), ['base, steel', 'arm', 'lid']);
+  assert.deepEqual(first.bodies.map((b) => b.name), ['base, steel', 'arm', 'lid, plastic'], 'a #rrggbb in a name is its colour, not part of the name');
+  assert.deepEqual(first.bodies.map((b) => b.color?.map((c) => Math.round(c * 255)) ?? null), [null, null, [0xe4, 0x57, 0x2e]]);
   assert.equal(first.bodies.reduce((n, b) => n + b.count, 0), first.indices.length / 3, 'the bodies cover every triangle');
 
   resetBrepOperationStats();

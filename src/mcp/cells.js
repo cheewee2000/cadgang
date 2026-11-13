@@ -43,7 +43,8 @@ brep — every operation is a pure function: shape in, new shape out. Nothing is
     torus(majorR, minorR) about z; cone(r1, r2, h, {center}) — r2 = 0 for a point, r1 ≠ r2 for a frustum;
     coil(r, pitch, height, sectionR, {section:'circle'|'square'|'triangle', lefthand}) — a spring
   booleans: union/subtract/intersect(base, ...tools); interference(a, b) -> shared volume (0 = no clash).
-    name(shape, 'caster wheel, rubber') names its solids in the STEP (and the viewer's MATERIALS look reads a material word in the name: steel, stainless, titanium, rubber, aluminum…).
+    name(shape, 'caster wheel, rubber') names its solids in the STEP (and the viewer's MATERIALS look reads a material word in the name: steel, stainless, titanium, rubber, aluminum…;
+    a #rrggbb in the name is that body's colour in the viewer, shown on plastic and other painted materials: 'knob, plastic #e4572e').
     compound(...shapes) keeps parts as SEPARATE bodies — an assembly, nothing fused: a lid seated on its body, a cap on a
     bottle. Measures report bodies = N and STEP writes N solids (union would fuse anything that touches).
     A union of bodies that do not touch is a MULTI-BODY result (a gap under 0.01 mm is a gap): measures report

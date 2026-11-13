@@ -1862,13 +1862,22 @@ export function tessellate(shape, opts = {}) {
   });
 }
 
+const HEX_IN_NAME = /\s*#([0-9a-f]{6})\b/i;
+
 /**
- * The mesh with its bodies, [{first, count, name}] in triangle order: what the viewer's body list needs.
+ * The mesh with its bodies, [{first, count, name, color?}] in triangle order: what the viewer's body list needs.
  * An assembly goes part by part (an unchanged part's mesh is a cache hit); anything else solid by solid.
+ * A body's colour rides in its name, brep.name(s, 'knob, plastic #e4572e'): the viewer gets it as the body's own
+ * colour [r, g, b] 0..1 (what a STEP's colour is) and the name without it.
  */
 export function tessellateBodies(shape, opts = {}, name = 'body') {
   const meshes = [], bodies = []; let first = 0;
-  const add = (s, label) => { const t = tessellate(s, opts), count = t.indices.length / 3; meshes.push(t); bodies.push({ first, count, name: label }); first += count; };
+  const add = (s, label) => {
+    const t = tessellate(s, opts), count = t.indices.length / 3, hex = HEX_IN_NAME.exec(label)?.[1];
+    meshes.push(t);
+    bodies.push({ first, count, name: hex ? label.replace(HEX_IN_NAME, '').trim() : label, ...(hex && { color: [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255) }) });
+    first += count;
+  };
   const kids = compoundParts.of(shape);
   if (kids?.length) {
     const names = partsOf(shape)?.flatMap((p) => Array(p.count).fill(p.name || name)) ?? [];
