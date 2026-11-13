@@ -1472,7 +1472,7 @@ function finishLoad(name, ms, keep = false) {
   edges.visible = ui.edges || ui.wire;   // the wireframe is the edges
   say(dups ? `${name} in ${ms} ms · ${dups}` : `${name} in ${ms} ms`);
   loadParts();
-  if (!fromBundle) { loadMarkup(); loadJoints(); }   // a bundle brings its own markups and joints
+  if (!fromBundle) { loadMarkup(); loadJoints(); loadDisplay(); }   // a bundle brings its own markups and joints, and its display settings come after its state (loadBundle)
   setTimeout(postBodies, 600);
   postSnapshot();
 }
@@ -2758,8 +2758,6 @@ $('#scrollSel').addEventListener('change', (e) => {
 window.addEventListener('storage', (e) => {
   if (e.key !== PREFS_KEY) return;
   try { const v = JSON.parse(e.newValue)?.scroll; if (v === 'mouse' || v === 'trackpad') ui.scroll = $('#scrollSel').value = v; } catch {}
-  try { const v = JSON.parse(e.newValue)?.light; if (v === 'sun' || v === 'studio') ui.light = $('#lightSel').value = v; } catch {}
-  try { const v = JSON.parse(e.newValue)?.ground; if (GROUND.test(v) && v !== ui.ground) setGround(v, false); } catch {}
 });
 $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
@@ -2845,7 +2843,7 @@ function applyTheme(t) {
   for (const m of model.children) if (m.isLine) styleMesh(m);
   try { localStorage.setItem(THEME_KEY, t); } catch {}
 }
-// RENDER's ground, a preference like Trackpad / Mouse (the footer's list beside the background): MATCH (the default) takes the
+// RENDER's ground, the file's own like the background (saveDisplay), set from the footer's list beside it: MATCH (the default) takes the
 // background's colour (at dusk and dawn the sky's straight-down one), so it reads as the backdrop with shadows on it; NONE is no
 // ground at all; WHITE, BLACK, or a colour of the user's own, kept as its #rrggbb.
 ui.ground = 'match';
@@ -2864,14 +2862,14 @@ function showGround() {
 }
 function setGround(g, keep = true) {
   ui.ground = g; showGround(); rerender();
-  if (keep) try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(PREFS_KEY)), ground: g })); } catch {}
+  if (keep) { try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(PREFS_KEY)), ground: g })); } catch {} saveDisplay(); }
 }
 $('#groundSel').addEventListener('change', (e) => {
   if (e.target.value !== 'pick') return setGround(e.target.value === 'color' ? ui.ground : e.target.value);
   showGround();
   openColorMenu(e.target, `#${groundColor().getHexString()}`, (rgb) => setGround(hexOfRGB(rgb)), () => {});
 });
-$('#themeToggle').addEventListener('click', () => { applyTheme(THEMES[(THEMES.indexOf(document.documentElement.dataset.bg) + 1) % THEMES.length]); rerender(); });   // RENDER's background and ground follow
+$('#themeToggle').addEventListener('click', () => { applyTheme(THEMES[(THEMES.indexOf(document.documentElement.dataset.bg) + 1) % THEMES.length]); rerender(); saveDisplay(); });   // RENDER's background and ground follow
 let theme = 'light';
 try { theme = localStorage.getItem(THEME_KEY) || theme; } catch {}
 applyTheme(theme);
@@ -3181,13 +3179,14 @@ function nativeCam() {
   if (sent !== rt.last) { rt.last = sent; post(c); }
 }
 $('#renderBtn').addEventListener('click', () => { setRender(!rt.on); commit(); });
-// RENDER's lighting, a preference like Trackpad / Mouse: SUN (the default) or STUDIO. The Metal render's, so the Mac app's only.
+// RENDER's lighting, the file's own (saveDisplay): SUN (the default) or STUDIO. The Metal render's, so the Mac app's only.
 ui.light = 'sun';
 $('#lightSel').hidden = !NATIVE;
 $('#lightSel').addEventListener('change', (e) => {
   ui.light = e.target.value;
   try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(PREFS_KEY)), light: ui.light })); } catch {}
 });
+  saveDisplay();
 
 // -------------------------------------------------------------------- loop
 
@@ -3563,7 +3562,7 @@ function packBundle(extra = {}) {
   const head = new TextEncoder().encode(JSON.stringify({
     name: $('#fileName').textContent, files: sources.map((f) => ({ name: f.name, cad: f.cad, bytes: f.buffer.byteLength })),
     state: snap(), camera: { yaw: orbit.yaw, pitch: orbit.pitch, dist: orbit.dist, target: orbit.target.toArray() },
-    theme: document.documentElement.dataset.bg, materials: model.children.map(materialOf), subMaterials: model.children.map((m) => m.userData.groups?.map((g) => pickedMaterial(m, g) ?? null) ?? null), ...extra,
+    theme: document.documentElement.dataset.bg, ground: ui.ground, light: ui.light, materials: model.children.map(materialOf), subMaterials: model.children.map((m) => m.userData.groups?.map((g) => pickedMaterial(m, g) ?? null) ?? null), ...extra,
   }));
   return new Blob([new Uint8Array(new Uint32Array([head.length]).buffer), head, ...sources.map((f) => f.buffer)]);
 }
@@ -3575,6 +3574,7 @@ async function loadBundle(buf, { markupFromServer = false } = {}) {
   if (!Array.isArray(head.files) || typeof head.state !== 'string') throw new Error('not a CADgang file');
   clearModel();
   let off = 4 + n;
+  displayFor = null;   // the file's state goes in first (below), and it is not this Mac's to keep until loadDisplay has had its say
   for (const f of head.files) {
     const part = buf.slice(off, off + f.bytes); off += f.bytes;
     const parts = f.cad ? parseCad(part) : await parseMesh(f.name.toLowerCase().split('.').pop(), part, f.name);
@@ -3595,7 +3595,8 @@ async function loadBundle(buf, { markupFromServer = false } = {}) {
   if (!markupFromServer) markupChanged(markup.items);
   if (st.joints === undefined) loadJoints();   // a file saved before joints or names existed: what the server kept for it stands
   if (st.names === undefined) loadNames();   // the file's markups replace whatever the server kept for this subject
-  applyTheme(head.theme); rerender();
+  applyTheme(head.theme); applyPrefs({ ground: head.ground, light: head.light });
+  loadDisplay();   // what this Mac last showed the file with wins over what it was saved with
   window.cadgangCamera(head.camera);
   return head;
 }
@@ -3799,20 +3800,37 @@ function commit() {
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
   try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, scroll: ui.scroll, light: ui.light, ground: ui.ground, color: ui.color, ortho: ui.ortho, mode: ui.mode })); } catch {}
 }
+  saveDisplay();
 // View preferences outlive the page, like the theme. Section, explode and body
 // visibility belong to a file and start fresh with it.
 const PREFS_KEY = 'cadgang-view';
-try {
-  const p = JSON.parse(localStorage.getItem(PREFS_KEY));
-  if (p?.look in PRESETS) ui.look = document.documentElement.dataset.look = $('#look').value = p.look;
+function applyPrefs(p) {
+  if (p?.look in PRESETS && p.look !== ui.look) { ui.look = document.documentElement.dataset.look = $('#look').value = p.look; for (const m of model.children) styleMesh(m); }
   if (UNIT_MM[p?.units]) { ui.units = $('#unitsSel').value = p.units; }
   if (p?.scroll === 'mouse') ui.scroll = $('#scrollSel').value = 'mouse';
-  if (p?.light === 'studio') ui.light = $('#lightSel').value = 'studio';
+  if (p?.light === 'sun' || p?.light === 'studio') ui.light = $('#lightSel').value = p.light;
+  if (THEMES.includes(p?.theme)) applyTheme(p.theme);
   if (GROUND.test(p?.ground)) setGround(p.ground, false);
   for (const k of ['edges', 'wire', 'grid', 'ruler', 'color']) if (typeof p?.[k] === 'boolean' && ui[k] !== p[k]) toggle(k, `#${k}Btn`);
-  if (p?.ortho) setOrtho(true);
+  if (typeof p?.ortho === 'boolean' && p.ortho !== ui.ortho) setOrtho(p.ortho);
   if (p?.mode === 'joint') setMode('joint');
-} catch {}
+}
+try { applyPrefs(JSON.parse(localStorage.getItem(PREFS_KEY))); } catch {}
+// A FILE'S OWN DISPLAY SETTINGS: the look and the toggles beside it, the background, RENDER's ground and lighting. Each
+// window keeps its file's, by subject, so two tabs do not share them and each comes back as it was left. A file never
+// opened before starts with the ones last used anywhere (PREFS_KEY, THEME_KEY). Units, scrolling and the mode stay the person's.
+// ponytail: an entry for every file ever opened (about 150 bytes), never pruned; drop the oldest if localStorage's 5 MB ever matters
+const DISPLAY_KEY = 'cadgang-display', DISPLAY = ['look', 'edges', 'wire', 'grid', 'ruler', 'color', 'ortho', 'light', 'ground'];
+let displayFor = null;   // the subject whose own settings are in force: nothing is saved for a file that is still loading
+function saveDisplay() {
+  if (follow || !subject || displayFor !== subject) return;
+  try { localStorage.setItem(DISPLAY_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(DISPLAY_KEY)), [subject]: { theme: document.documentElement.dataset.bg, ...Object.fromEntries(DISPLAY.map((k) => [k, ui[k]])) } })); } catch {}
+}
+function loadDisplay() {
+  if (follow) return;
+  try { applyPrefs(JSON.parse(localStorage.getItem(DISPLAY_KEY))?.[subject]); } catch {}
+  displayFor = subject; saveDisplay(); rerender();
+}
 function apply(s) {
   const st = JSON.parse(s);
   const r = st.rot ?? [0, 0, 0, 1];   // the state's marks, dims and axes are in its own turn: only the geometry follows
