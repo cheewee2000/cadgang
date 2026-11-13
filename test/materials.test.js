@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { guessMaterial } from '../web/materials.js';
+import { guessMaterial, nameFinish } from '../web/materials.js';
 
 test('material words in the name win', () => {
   for (const [name, path, want] of [
@@ -33,4 +33,17 @@ test("the file's own material name decides before the body's name", () => {
   assert.equal(guessMaterial('Frame', ['Speaker'], 'Aluminum - Satin'), 'aluminum');
   assert.equal(guessMaterial('Surround', [], 'Rubber - Soft'), 'rubber');
   assert.equal(guessMaterial('M3 screw', [], 'Coating - Black Oxide'), 'steel');   // a material name that says nothing falls back to the name
+});
+
+test("a finish word in a body's name is its finish, with the grain's axis when a letter follows", () => {
+  assert.deepEqual(nameFinish('wall plate, stainless, brushed y'), { key: 'brushed', axis: 1 });
+  assert.deepEqual(nameFinish('wall plate, stainless, brushed'), { key: 'brushed', axis: -1 });
+  assert.deepEqual(nameFinish('knob waist, 3D printed plastic'), { key: 'printed', axis: -1 });
+  assert.deepEqual(nameFinish('bracket, FDM z, yellow'), { key: 'printed', axis: 2 });
+  assert.deepEqual(nameFinish('cover, bead blasted aluminum'), { key: 'blasted', axis: -1 });
+  assert.deepEqual(nameFinish('wall plate, stainless, laser cut y'), { key: 'lasercut', axis: 1 });
+  assert.equal(guessMaterial('wall plate, stainless, laser cut y'), 'steel');
+  assert.deepEqual(nameFinish('wall plate, stainless, tumbled'), { key: 'tumbled', axis: -1 });
+  assert.equal(nameFinish('printed circuit board'), null);
+  assert.equal(nameFinish('knob'), null);
 });

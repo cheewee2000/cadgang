@@ -68,6 +68,15 @@ const GUESS = [
   [/\bic\b|\bqfn\b|\blqfp\b|\bbga\b|\bsot-?\d|\bsod-?\d/i, 'epoxy'],
   [/pcb|\bboard\b|pcba/i, 'pcb'],
 ];
+// A finish the body's own name states, the default until the user picks one: "wall plate, stainless, brushed y",
+// "knob, 3D printed plastic", "plate, stainless, laser cut y" (a sheet as the laser shop sends it: deburred faces, cut edges). A trailing x, y or z is the grain's axis in the model (the brushing's direction, a print's
+// build direction); without it the grain runs along the body's longest side and a print is built along its shortest.
+const NAME_FINISH = [[/\blaser.?cut(?:\s+([xyz]))?\b/i, 'lasercut'], [/\bbrushed(?:\s+([xyz]))?\b/i, 'brushed'], [/\bbead.?blast/i, 'blasted'], [/\btumbled\b/i, 'tumbled'], [/\b(?:3d.?printed|fdm)(?:\s+([xyz]))?\b/i, 'printed']];
+export function nameFinish(name = '') {
+  for (const [re, key] of NAME_FINISH) { const m = re.exec(name); if (m) return { key, axis: m[1] ? 'xyz'.indexOf(m[1].toLowerCase()) : -1 }; }
+  return null;
+}
+
 // The body's own name decides first; its groups only fill in, and a group named "PCB" holds the
 // parts on the board, not more board.
 const guess = (text, skip) => GUESS.find(([re, k]) => k !== skip && re.test(text))?.[1];

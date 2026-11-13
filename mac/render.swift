@@ -80,7 +80,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     /// verts: [x y z nx ny nz] per vertex, world space. idx: 3 per triangle. tri: material per triangle.
     /// mats: [r g b metalness roughness transmission ior texture glow grain axes + 12] (linear colour; texture: an index into
     /// pngs or -1, glow: how much it lights itself, a screen's picture or a lamp's lens; grain: 0 none, 1 brushed, 2 bead blast,
-    /// 3 wood; axes: the body's longest axis * 4 + its middle one; then the three rows of world -> the body's own millimetres,
+    /// 3 wood, 4 3D printed, 5 laser cut sheet, 6 tumbled; axes: the grain's axis * 4 + the next (the body's longest and middle, a print's build direction first); then the three rows of world -> the body's own millimetres,
     /// where the grain lives, so it stays on a part that moves). uv: [u v] per vertex (zeros where untextured).
     /// lights: [x y z dx dy dz r g b cosOuter cosInner] per lamp (a glTF's spots and points; a point has cos -2, -1), colour times
     /// intensity in the sun's units at 1 m (scene mm), falling off with the square of the distance.
@@ -492,6 +492,12 @@ final class PathTracer: NSObject, MTKViewDelegate {
     //   1 brushed: scratches 0.07 to 0.3 mm apart along the body's length, tilting the normal across them (a highlight smears across the brushing)
     //   2 bead blast: 0.035 mm dimples (a fine glass bead, #200: a satin sheen at arm's length, a grain only up close)
     //   3 wood: growth lines 2 mm apart along the length, wandering, with fibres
+    //   4 3D printed (FDM): 0.2 mm layers stacked along A, each a rounded bead, so the normal rocks along the build direction once a layer;
+    //     a face square to the build direction (the top, the bed side) shows the 0.42 mm extrusion lines instead, laid along B
+    //   5 laser cut sheet, deburred (a fibre laser with nitrogen, then a linear deburr): the two faces carry the deburrer's fine brushing
+    //     along A, scratches 0.025 to 0.08 mm apart; every cut edge carries the laser's striations, fine lines through the thickness
+    //     about 0.1 mm apart on a duller, slightly rough surface, with a patch of straw heat tint here and there
+    //   6 tumbled (ceramic media): no direction, small scuffs 0.03 to 0.1 mm across, the same on faces and edges
     static void grain(Mat m, float3 pw, thread float3& n, thread float3& col) {
         int kind = int(m.tex.z + 0.5), code = int(m.tex.w + 0.5);
         float3 p = float3(dot(m.r0.xyz, pw) + m.r0.w, dot(m.r1.xyz, pw) + m.r1.w, dot(m.r2.xyz, pw) + m.r2.w);
@@ -503,6 +509,23 @@ final class PathTracer: NSObject, MTKViewDelegate {
             d = mix(cross(no, A) * ta, cross(no, B) * tb, smoothstep(0.75, 0.95, abs(dot(no, A)))) * 0.35;   // an end face is brushed along the middle axis
         } else if (kind == 2) {
             d = (float3(vnoise(p * 28.0), vnoise(p * 28.0 + 31.7), vnoise(p * 28.0 + 71.3)) - 0.5) * 0.5;
+        } else if (kind == 4) {
+            float3 C = cross(A, B);
+            float tl = fract(dot(p, A) / 0.2 + (vnoise(qa * 0.5 + A * dot(p, A) * 1.7) - 0.5) * 0.15) - 0.5;   // layers are not perfectly even
+            float tt = fract(dot(p, C) / 0.42) - 0.5;
+            d = mix((A - no * dot(no, A)) * tl * 1.3, (C - no * dot(no, C)) * tt * 0.7, smoothstep(0.9, 0.99, abs(dot(no, A))));
+        } else if (kind == 5) {
+            float3 T = cross(A, B), qt = p - T * dot(p, T);   // T: through the sheet
+            float face = smoothstep(0.6, 0.9, abs(dot(no, T)));
+            float tf = (vnoise(qa * 3.0) - 0.5) * 0.15 + (vnoise(qa * 12.0) - 0.5) * 0.6 + (vnoise(qa * 40.0) - 0.5) * 0.9;
+            float te = (vnoise(qt * 9.0) - 0.5) * 1.0 + (vnoise(qt * 30.0) - 0.5) * 0.6;
+            float3 rough = (float3(vnoise(p * 40.0), vnoise(p * 40.0 + 31.7), vnoise(p * 40.0 + 71.3)) - 0.5) * 0.3;
+            d = mix(cross(no, T) * te * 0.45 + rough, cross(no, A) * tf * 0.18, face);
+            float tint = smoothstep(0.5, 0.85, vnoise(qt * 0.3 + 3.0));
+            col *= mix(mix(float3(0.84), float3(0.86, 0.76, 0.54), tint * 0.6), float3(1.0), face);
+        } else if (kind == 6) {
+            d = (float3(vnoise(p * 9.0), vnoise(p * 9.0 + 31.7), vnoise(p * 9.0 + 71.3)) - 0.5) * 0.22
+              + (float3(vnoise(p * 30.0), vnoise(p * 30.0 + 17.3), vnoise(p * 30.0 + 53.9)) - 0.5) * 0.3;
         } else {
             float3 q = normalize(B + 0.5 * cross(A, B));   // across the width, leaning through the thickness: lines on the face and the edge
             float3 slow = qa * 0.05 + A * dot(p, A) * 0.012;   // the lines wander a little across the board and hardly at all along it

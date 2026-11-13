@@ -28,7 +28,7 @@ import { renderDrawing } from './drawing.js';
 import { createMeasure, cylinderFit, sphereFit } from './measure.js';
 import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { MATERIALS, materialOf, pickMaterial, pickedMaterial, materialFor } from './materials.js';
+import { MATERIALS, materialOf, pickMaterial, pickedMaterial, materialFor, nameFinish } from './materials.js';
 import { silhouetteEdges, silhouetteFor } from './silhouette.js';
 import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
 import { createViewCube } from './viewcube.js';
@@ -114,9 +114,10 @@ let tints = {};
 try { tints = JSON.parse(localStorage.getItem(TINT_KEY)) || {}; } catch {}
 const saveTints = () => { try { localStorage.setItem(TINT_KEY, JSON.stringify(tints)); } catch {} };
 // A finish the user gave a body (matte, satin, gloss, polished), kept the same way: how rough it renders.
-// Brushed and bead blast have a grain as well: RENDER in the Mac app draws it at its true size (render.swift grain); elsewhere they are a roughness.
+// Brushed, bead blast, 3D printed and laser cut sheet have a grain as well: RENDER in the Mac app draws it at its true size (render.swift grain); elsewhere they are a roughness.
+// A body whose name states one of those (materials.js nameFinish) has it until the user picks another.
 const FINISHES = { matte: { label: 'Matte', rough: 0.75 }, satin: { label: 'Satin', rough: 0.45 }, gloss: { label: 'Gloss', rough: 0.2 }, polished: { label: 'Polished', rough: 0.06 },
-  brushed: { label: 'Brushed', rough: 0.4, grain: 1 }, blasted: { label: 'Bead blast', rough: 0.6, grain: 2 } };
+  brushed: { label: 'Brushed', rough: 0.4, grain: 1 }, blasted: { label: 'Bead blast', rough: 0.6, grain: 2 }, printed: { label: '3D printed', rough: 0.5, grain: 4 }, lasercut: { label: 'Laser cut sheet', rough: 0.42, grain: 5 }, tumbled: { label: 'Tumbled', rough: 0.5, grain: 6 } };
 const FINISH_KEY = 'cadgang-finishes';
 let finishes = {};
 try { finishes = JSON.parse(localStorage.getItem(FINISH_KEY)) || {}; } catch {}
@@ -139,7 +140,7 @@ function styleMesh(m) {
     if (!ui.color && src.pbr && SOLID_LOOKS.has(ui.look)) Object.assign(mat, src.pbr);
     const tint = src.tint || m.userData.tint;
     if (!ui.color && tint && mat.color && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.color.setRGB(...tint, THREE.SRGBColorSpace);
-    const fin = src.finish || m.userData.finish;
+    const fin = src.finish || m.userData.finish || nameFinish(m.userData.name)?.key;
     if (fin && FINISHES[fin] && 'roughness' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) { mat.roughness = FINISHES[fin].rough; if (FINISHES[fin].grain) mat.userData.grain = FINISHES[fin].grain; }
     if (m.userData.opacity < 1 && SOLID_LOOKS.has(ui.look)) Object.assign(mat, { transparent: true, opacity: m.userData.opacity, depthWrite: false });
     if (m.userData.ghost) Object.assign(mat, { transparent: true, opacity: Math.min(mat.opacity, 0.15), depthWrite: false, transmission: 0 });
@@ -998,6 +999,7 @@ function paintFinishes() {
     const groups = m.userData.groups?.filter((g) => g.name) ?? [];
     const f = groups.length > 1 ? { ...finishFacts(m, groups[0]), finish: `${groups.length} finishes` } : finishFacts(m, groups[0] ?? m.userData);
     if (m.userData.finish) f.finish = FINISHES[m.userData.finish].label;
+    else if (nameFinish(m.userData.name)) f.finish = FINISHES[nameFinish(m.userData.name).key].label;
     const bits = el.querySelector('.bits');
     if (bits.contains(document.activeElement)) continue;   // a list or picker open in it: leave it be
     bits.replaceChildren(finishBits(f, m));
@@ -3113,10 +3115,12 @@ function nativeScene() {
     else tri.fill(base, to, to + n / 3);
     // a finish's grain is worked out in the body's own millimetres, along its length: the way back from the world (a glTF's metres scaled out), and its longest and middle axes
     if (!g.boundingBox) g.computeBoundingBox();
-    const size = g.boundingBox.getSize(v).toArray(), [long, mid] = [0, 1, 2].sort((a, b) => size[b] - size[a]);
+    const size = g.boundingBox.getSize(v).toArray(), bySize = [0, 1, 2].sort((a, b) => size[b] - size[a]), named = nameFinish(m.userData.name)?.axis ?? -1;
+    // the grain's axis and the next: the one the name gives, else the longest side (a print's build direction: the shortest)
+    const axes = (grain) => { const a = named >= 0 ? named : bySize[grain === 4 ? 2 : 0]; return a * 4 + bySize.find((b) => b !== a); };
     const e = inv.copy(m.matrixWorld).invert().elements, sc = Math.cbrt(Math.abs(m.matrixWorld.determinant()));
     const rows = [0, 1, 2].flatMap((r) => [e[r], e[r + 4], e[r + 8], e[r + 12]].map((x) => x * sc));
-    for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5, mat.map === map ? pic : -1, pic >= 0 || !m.userData.map ? m.userData.glow : 0, mat.userData.grain ?? 0, long * 4 + mid, ...rows]); }
+    for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5, mat.map === map ? pic : -1, pic >= 0 || !m.userData.map ? m.userData.glow : 0, mat.userData.grain ?? 0, axes(mat.userData.grain), ...rows]); }
     vo += pos.count; to += n / 3;
   });
   const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff);
