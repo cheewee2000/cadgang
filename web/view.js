@@ -3149,8 +3149,8 @@ function nativeCam() {
   const clip = section.axis && bbox ? [section.plane.normal.x, section.plane.normal.y, section.plane.normal.z, section.plane.constant] : null;
   const c = { cmd: 'renderCam', pos: [e[12], e[13], e[14]], fwd: [-e[8], -e[9], -e[10]], right: [e[0], e[1], e[2]], up: [e[4], e[5], e[6]],
     fov: persp.fov, ortho: ui.ortho, orthoH: camera.top ?? 1, clip, rect: [r.left, r.top, r.width, r.height], light: ui.light, under: key.position.z < 0 };
-  const key = JSON.stringify(c);
-  if (key !== rt.last) { rt.last = key; post(c); }
+  const sent = JSON.stringify(c);   // not `key`: that is the key light, read just above
+  if (sent !== rt.last) { rt.last = sent; post(c); }
 }
 $('#renderBtn').addEventListener('click', () => { setRender(!rt.on); commit(); });
 // RENDER's lighting, a preference like Trackpad / Mouse: SUN (the default) or STUDIO. The Metal render's, so the Mac app's only.
