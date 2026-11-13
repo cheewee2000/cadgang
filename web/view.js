@@ -2844,7 +2844,9 @@ function applyTheme(t) {
   for (const m of model.children) if (m.isLine) styleMesh(m);
   try { localStorage.setItem(THEME_KEY, t); } catch {}
 }
-$('#themeToggle').addEventListener('click', () => applyTheme(THEMES[(THEMES.indexOf(document.documentElement.dataset.bg) + 1) % THEMES.length]));
+// RENDER's ground takes the background's colour (at dusk and dawn the sky's straight-down one), so it reads as the backdrop with shadows on it.
+const groundColor = () => (SKIES[document.documentElement.dataset.bg] ? new THREE.Color(SKIES[document.documentElement.dataset.bg][0]) : scene.background.clone());
+$('#themeToggle').addEventListener('click', () => { applyTheme(THEMES[(THEMES.indexOf(document.documentElement.dataset.bg) + 1) % THEMES.length]); rerender(); });   // RENDER's background and ground follow
 let theme = 'light';
 try { theme = localStorage.getItem(THEME_KEY) || theme; } catch {}
 applyTheme(theme);
@@ -3050,6 +3052,7 @@ function syncRender() {
   for (const o of rt.hidden) o.visible = false;
   const b = new THREE.Box3().setFromObject(model), r = b.getSize(new THREE.Vector3()).length() || 1;
   rt.floor.scale.setScalar(r * 40);
+  rt.floor.material.color.copy(groundColor());
   rt.floor.position.set((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, b.min.z - r * 1e-4);
   scene.add(rt.floor);
   scene.environment = rt.env;
@@ -3123,9 +3126,9 @@ function nativeScene() {
     for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5, mat.map === map ? pic : -1, pic >= 0 || !m.userData.map ? m.userData.glow : 0, mat.userData.grain ?? 0, axes(mat.userData.grain), ...rows]); }
     vo += pos.count; to += n / 3;
   });
-  const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff);
+  const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff), floor = groundColor(), stops = SKIES[document.documentElement.dataset.bg];   // stops: dusk's or dawn's sky, sRGB as the page draws it
   const lamps = lights.map((l) => [...l.pos.clone().applyQuaternion(rot).toArray(), ...l.dir.clone().applyQuaternion(rot).toArray(), ...l.color.toArray(), ...l.cos]);   // turned with the bodies (Turn bakes into them)
-  post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b], uv: pics.length ? b64(uv) : '', pngs: pics.map(pngOf), lights: lamps });   // no picture: nothing to send (the shell's are zeros already), a sixth of the message on a large assembly
+  post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b], floor: [floor.r, floor.g, floor.b], sky: stops ? stops.map((h) => srgb(h).toArray()) : null, uv: pics.length ? b64(uv) : '', pngs: pics.map(pngOf), lights: lamps });   // no picture: nothing to send (the shell's are zeros already), a sixth of the message on a large assembly
 }
 // Glass pulled in by `d` along its welded normals (every copy of a corner moves the same way: no cracks), for
 // the tracer only. A pane lying on aluminium shares that face: the tracer took either surface per ray (speckle),
@@ -3567,7 +3570,7 @@ async function loadBundle(buf, { markupFromServer = false } = {}) {
   if (!markupFromServer) markupChanged(markup.items);
   if (st.joints === undefined) loadJoints();   // a file saved before joints or names existed: what the server kept for it stands
   if (st.names === undefined) loadNames();   // the file's markups replace whatever the server kept for this subject
-  applyTheme(head.theme);
+  applyTheme(head.theme); rerender();
   window.cadgangCamera(head.camera);
   return head;
 }

@@ -295,7 +295,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         if cmd == "renderScene",
            let v = (body["verts"] as? String).flatMap({ Data(base64Encoded: $0) }), let i = (body["idx"] as? String).flatMap({ Data(base64Encoded: $0) }),
            let tr = (body["tri"] as? String).flatMap({ Data(base64Encoded: $0) }), let mats = body["mats"] as? [[Double]] {
-            t.setScene(verts: v, idx: i, tri: tr, mats: mats, cap: (body["cap"] as? [Double]) ?? [0.04, 0.04, 0.04], bg: (body["bg"] as? [Double]) ?? [1, 1, 1],
+            t.setScene(verts: v, idx: i, tri: tr, mats: mats, cap: (body["cap"] as? [Double]) ?? [0.04, 0.04, 0.04], bg: (body["bg"] as? [Double]) ?? [1, 1, 1], sky: body["sky"] as? [[Double]], floor: (body["floor"] as? [Double]) ?? [0.035, 0.035, 0.035],
                        uv: (body["uv"] as? String).flatMap { Data(base64Encoded: $0) }, pngs: ((body["pngs"] as? [String]) ?? []).compactMap { Data(base64Encoded: $0) }, lights: (body["lights"] as? [[Double]]) ?? [])
         }
         if cmd == "renderCam" { t.setCamera(body) }

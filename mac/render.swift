@@ -19,6 +19,7 @@ struct RenderUniforms {
     var pPos = SIMD4<Float>(), pFwd = SIMD4<Float>(), pRight = SIMD4<Float>(), pUp = SIMD4<Float>()   // the camera of the frame before (motion)
     var fx = SIMD4<Float>()                          // x y: this frame's sub-pixel jitter, z: near (ortho: far) for depth, w: how much of the full-size samples shows over the upscaled picture
     var tick = SIMD4<UInt32>()                       // x: frame number, y: samples a pixel in the half-size pass
+    var stops = (SIMD4<Float>(), SIMD4<Float>(), SIMD4<Float>(), SIMD4<Float>(), SIMD4<Float>())   // bg.w = 1: the background is a sky, its five colours from straight down to straight up (sRGB)
 }
 
 final class PathTracer: NSObject, MTKViewDelegate {
@@ -84,7 +85,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     /// where the grain lives, so it stays on a part that moves). uv: [u v] per vertex (zeros where untextured).
     /// lights: [x y z dx dy dz r g b cosOuter cosInner] per lamp (a glTF's spots and points; a point has cos -2, -1), colour times
     /// intensity in the sun's units at 1 m (scene mm), falling off with the square of the distance.
-    func setScene(verts: Data, idx idxData: Data, tri triData: Data, mats matList: [[Double]], cap: [Double], bg: [Double], uv uvData: Data? = nil, pngs: [Data] = [], lights: [[Double]] = []) {
+    func setScene(verts: Data, idx idxData: Data, tri triData: Data, mats matList: [[Double]], cap: [Double], bg: [Double], sky: [[Double]]? = nil, floor: [Double] = [0.035, 0.035, 0.035], uv uvData: Data? = nil, pngs: [Data] = [], lights: [[Double]] = []) {
         let dev = view.device!
         var v = [Float](repeating: 0, count: verts.count / 4); _ = v.withUnsafeMutableBytes { verts.copyBytes(to: $0) }
         var ix = [UInt32](repeating: 0, count: idxData.count / 4); _ = ix.withUnsafeMutableBytes { idxData.copyBytes(to: $0) }
@@ -98,7 +99,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         for (x, y) in [(-r, -r), (r, -r), (r, r), (-r, r)] { v += [c.x + x, c.y + y, z, 0, 0, 1] }
         ix += [base, base + 1, base + 2, base, base + 2, base + 3]
         var m = matList.map { $0.map(Float.init) }
-        m.append([0.035, 0.035, 0.035, 0, 0.9, 0, 1.5])                       // floor: dark matte (Oct 21, Che-Wei)
+        m.append((floor.count == 3 ? floor.map(Float.init) : [0.035, 0.035, 0.035]) + [0, 0.9, 0, 1.5])   // floor: matte, in the background's colour (the page sends it: it follows LIGHT / DARK / DUSK / DAWN / NIGHT)
         m.append(cap.map(Float.init) + [0, 0.7, 0, 1.5])                       // section cap
         tm += [UInt32(m.count - 2), UInt32(m.count - 2)]
         let mats8: [Float] = m.flatMap { a -> [Float] in   // six float4 per material
@@ -118,7 +119,9 @@ final class PathTracer: NSObject, MTKViewDelegate {
         uvs = dev.makeBuffer(bytes: uv, length: uv.count * 4, options: .storageModeShared)
         let lm: [Float] = lights.filter { $0.count >= 11 }.flatMap { l in [0, 1, 2, 9, 3, 4, 5, 10, 6, 7, 8].map { Float(l[$0]) } + [0] }   // three float4 per lamp: pos + cosOuter, dir + cosInner, colour
         lamps = dev.makeBuffer(bytes: lm.isEmpty ? [Float](repeating: 0, count: 12) : lm, length: max(lm.count, 12) * 4, options: .storageModeShared)
-        u.bg = SIMD4(Float(bg[0]), Float(bg[1]), Float(bg[2]), 1)
+        let stops = (sky ?? []).filter { $0.count == 3 }.map { SIMD4(Float($0[0]), Float($0[1]), Float($0[2]), 0) }
+        if stops.count == 5 { u.stops = (stops[0], stops[1], stops[2], stops[3], stops[4]) }
+        u.bg = SIMD4(Float(bg[0]), Float(bg[1]), Float(bg[2]), stops.count == 5 ? 1 : 0)   // w: the background is the sky in u.stops (dusk, dawn), not this one colour
         fresh = true
         u.scene = SIMD4(diag, diag * 2e-5, z, Float(lm.count / 12))
         u.sunCol = SIMD4(2.6, 2.5, 2.35, 0) * (lm.isEmpty ? 1 : 0.35)   // the file's lamps light it; the sun drops to a fill so their pools read
@@ -346,7 +349,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     using namespace raytracing;
 
     struct U { float4 camPos, camFwd, camRight, camUp, sunDir, sunCol, skyTop, skyBot, bg, clip, scene; uint4 info;
-               float4 pPos, pFwd, pRight, pUp, fx; uint4 tick; };
+               float4 pPos, pFwd, pRight, pUp, fx; uint4 tick; float4 stops[5]; };
     struct Vtx { packed_float3 p; packed_float3 n; };
     struct Mat { float4 color; float4 prm; float4 tex; float4 r0, r1, r2; };   // prm: metalness, roughness, transmission, ior; tex: picture index (-1 none), glow, grain, axes; r: world -> the body's own mm
     struct Lamp { float4 pos; float4 dir; float4 col; };     // pos.w: cos of the cone's edge, dir.w: cos where it is full
@@ -358,6 +361,20 @@ final class PathTracer: NSObject, MTKViewDelegate {
         return v.x * t + v.y * cross(n, t) + v.z * n;
     }
     static float3 sky(constant U& u, float3 d) { return mix(u.skyBot.rgb, u.skyTop.rgb, smoothstep(-0.3, 0.8, d.z * u.skyBot.w)); }
+
+    // The background toward d: the page's colour, or at dusk and dawn its sky (view.js SKIES: five colours from straight down to straight
+    // up, most of the change within 25 degrees of the horizon), mixed in sRGB as the page mixes it. Never tone-mapped.
+    static float3 bgAt(constant U& u, float3 d) {
+        if (u.bg.w < 0.5) return u.bg.rgb;
+        const float B = 0.4363, H = 1.5708;
+        float e = asin(clamp(d.z, -1.0, 1.0));
+        float t = e < -B ? (e + H) / (H - B) : e < 0.0 ? 1.0 + (e + B) / B : e < B ? 2.0 + e / B : 3.0 + (e - B) / (H - B);
+        int i = clamp(int(t), 0, 3);
+        float3 c = mix(u.stops[i].rgb, u.stops[i + 1].rgb, t - float(i));
+        return select(pow((c + 0.055) / 1.055, 2.4), c / 12.92, c <= 0.04045);
+    }
+    // ... behind the pixel at px (-1..1, y up)
+    static float3 bgPx(constant U& u, float2 px) { return bgAt(u, u.info.y == 1 ? u.camFwd.xyz : normalize(u.camFwd.xyz + px.x * u.camRight.xyz + px.y * u.camUp.xyz)); }
 
     // STUDIO lighting (u.skyTop.w): three softboxes far away in a dim room, in place of the sun and the sky. A softbox is
     // a rectangle seen in direction c, h the tangent of its half angles across and up. They show in what reflects them.
@@ -661,7 +678,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         accum.write(acc, gid);
         float n = float(u.info.x + u.info.z), wHit = n - acc.a;
         float3 c = wHit > 0.0 ? neutral(acc.rgb / wHit) : 0.0;
-        c = mix(c, u.bg.rgb, acc.a / n);   // the background is the page's own colour, untouched by tone mapping
+        c = mix(c, bgPx(u, ((float2(gid) + 0.5) / float2(size) * 2.0 - 1.0) * float2(1.0, -1.0)), acc.a / n);   // the background is the page's own colour, untouched by tone mapping
         if (u.fx.w < 1.0) c = mix(held.read(gid).rgb, c, u.fx.w);   // the first samples fade in over the upscaled picture
         out.write(float4(srgb(c), 1.0), gid);
     }
@@ -701,7 +718,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         float3 L = acc.a < 1.0 ? acc.rgb / (1.0 - acc.a) : float3(0.0);
         float lum = dot(L, float3(0.2126, 0.7152, 0.0722));
         if (lum > 3.0) L *= 3.0 / lum;   // brighter than this (it is white on screen already) and MetalFX hollows a highlight out into a ring
-        if (acc.a > 0.0) L = unneutral(mix(neutral(L), u.bg.rgb, acc.a));
+        if (acc.a > 0.0) L = unneutral(mix(neutral(L), bgPx(u, px), acc.a));
         color.write(float4(L, acc.a), gid);
         depth.write(float4(z), gid);
         motion.write(float4(was - uv, 0.0, 0.0), gid);
@@ -724,7 +741,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         t *= 1.5;
         float w = min(low.sample(lin, uv, level(0)).a, min(min(low.sample(lin, uv + t, level(0)).a, low.sample(lin, uv - t, level(0)).a),
                                                            min(low.sample(lin, uv + float2(t.x, -t.y), level(0)).a, low.sample(lin, uv + float2(-t.x, t.y), level(0)).a)));
-        float3 c = mix(neutral(max(upscaled.read(gid).rgb, 0.0)), u.bg.rgb, smoothstep(0.9, 1.0, w));
+        float3 c = mix(neutral(max(upscaled.read(gid).rgb, 0.0)), bgPx(u, float2(uv.x, 1.0 - uv.y) * 2.0 - 1.0), smoothstep(0.9, 1.0, w));
         held.write(float4(c, 1.0), gid);
         out.write(float4(srgb(c), 1.0), gid);
     }
