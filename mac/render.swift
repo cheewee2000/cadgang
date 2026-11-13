@@ -85,7 +85,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     /// where the grain lives, so it stays on a part that moves). uv: [u v] per vertex (zeros where untextured).
     /// lights: [x y z dx dy dz r g b cosOuter cosInner] per lamp (a glTF's spots and points; a point has cos -2, -1), colour times
     /// intensity in the sun's units at 1 m (scene mm), falling off with the square of the distance.
-    func setScene(verts: Data, idx idxData: Data, tri triData: Data, mats matList: [[Double]], cap: [Double], bg: [Double], sky: [[Double]]? = nil, floor: [Double] = [0.035, 0.035, 0.035], uv uvData: Data? = nil, pngs: [Data] = [], lights: [[Double]] = []) {
+    func setScene(verts: Data, idx idxData: Data, tri triData: Data, mats matList: [[Double]], cap: [Double], bg: [Double], sky: [[Double]]? = nil, floor: [Double]? = nil, uv uvData: Data? = nil, pngs: [Data] = [], lights: [[Double]] = []) {
         let dev = view.device!
         var v = [Float](repeating: 0, count: verts.count / 4); _ = v.withUnsafeMutableBytes { verts.copyBytes(to: $0) }
         var ix = [UInt32](repeating: 0, count: idxData.count / 4); _ = ix.withUnsafeMutableBytes { idxData.copyBytes(to: $0) }
@@ -94,12 +94,12 @@ final class PathTracer: NSObject, MTKViewDelegate {
         // A floor under the bodies, far wider than them; it fades into the background (shader).
         var lo = SIMD3<Float>(repeating: .infinity), hi = SIMD3<Float>(repeating: -.infinity)
         for i in stride(from: 0, to: v.count, by: 6) { let p = SIMD3(v[i], v[i + 1], v[i + 2]); lo = simd_min(lo, p); hi = simd_max(hi, p) }
-        let diag = max(simd_length(hi - lo), 1e-3), c = (lo + hi) / 2, r = diag * 40, z = lo.z - diag * 1e-4
+        let diag = max(simd_length(hi - lo), 1e-3), c = (lo + hi) / 2, r = floor == nil ? 0 : diag * 40, z = lo.z - diag * 1e-4   // no floor (the page's Ground: none): its two triangles stay, with no area, so nothing meets them
         let base = UInt32(v.count / 6)
         for (x, y) in [(-r, -r), (r, -r), (r, r), (-r, r)] { v += [c.x + x, c.y + y, z, 0, 0, 1] }
         ix += [base, base + 1, base + 2, base, base + 2, base + 3]
         var m = matList.map { $0.map(Float.init) }
-        m.append((floor.count == 3 ? floor.map(Float.init) : [0.035, 0.035, 0.035]) + [0, 0.9, 0, 1.5])   // floor: matte, in the background's colour (the page sends it: it follows LIGHT / DARK / DUSK / DAWN / NIGHT)
+        m.append((floor?.count == 3 ? floor!.map(Float.init) : [0, 0, 0]) + [0, 0.9, 0, 1.5])   // floor: matte, in the colour the page sends (its Ground list: the background's, white, black or the user's own)
         m.append(cap.map(Float.init) + [0, 0.7, 0, 1.5])                       // section cap
         tm += [UInt32(m.count - 2), UInt32(m.count - 2)]
         let mats8: [Float] = m.flatMap { a -> [Float] in   // six float4 per material

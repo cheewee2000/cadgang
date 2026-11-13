@@ -2759,6 +2759,7 @@ window.addEventListener('storage', (e) => {
   if (e.key !== PREFS_KEY) return;
   try { const v = JSON.parse(e.newValue)?.scroll; if (v === 'mouse' || v === 'trackpad') ui.scroll = $('#scrollSel').value = v; } catch {}
   try { const v = JSON.parse(e.newValue)?.light; if (v === 'sun' || v === 'studio') ui.light = $('#lightSel').value = v; } catch {}
+  try { const v = JSON.parse(e.newValue)?.ground; if (GROUND.test(v) && v !== ui.ground) setGround(v, false); } catch {}
 });
 $('#edgesBtn').addEventListener('click', () => toggle('edges', '#edgesBtn'));
 $('#wireBtn').addEventListener('click', () => toggle('wire', '#wireBtn'));
@@ -2844,8 +2845,32 @@ function applyTheme(t) {
   for (const m of model.children) if (m.isLine) styleMesh(m);
   try { localStorage.setItem(THEME_KEY, t); } catch {}
 }
-// RENDER's ground takes the background's colour (at dusk and dawn the sky's straight-down one), so it reads as the backdrop with shadows on it.
-const groundColor = () => (SKIES[document.documentElement.dataset.bg] ? new THREE.Color(SKIES[document.documentElement.dataset.bg][0]) : scene.background.clone());
+// RENDER's ground, a preference like Trackpad / Mouse (the footer's list beside the background): MATCH (the default) takes the
+// background's colour (at dusk and dawn the sky's straight-down one), so it reads as the backdrop with shadows on it; NONE is no
+// ground at all; WHITE, BLACK, or a colour of the user's own, kept as its #rrggbb.
+ui.ground = 'match';
+const GROUND = /^(match|none|white|black|#[0-9a-f]{6})$/;
+const groundColor = () => {
+  const g = ui.ground, t = document.documentElement.dataset.bg;
+  return new THREE.Color(g === 'white' ? '#ffffff' : g === 'black' ? '#000000' : g[0] === '#' ? g : SKIES[t] ? SKIES[t][0] : scene.background);
+};
+// The list shows what the ground is: a colour of the user's own gets a line of its own, above "color…" (which only opens the menu, so it can be chosen again).
+function showGround() {
+  const sel = $('#groundSel'), own = ui.ground[0] === '#';
+  let o = sel.querySelector('[value=color]');
+  if (own && !o) sel.insertBefore(o = new Option('', 'color'), sel.lastElementChild);
+  if (own) o.textContent = `Ground: ${ui.ground}`; else o?.remove();
+  sel.value = own ? 'color' : ui.ground;
+}
+function setGround(g, keep = true) {
+  ui.ground = g; showGround(); rerender();
+  if (keep) try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(PREFS_KEY)), ground: g })); } catch {}
+}
+$('#groundSel').addEventListener('change', (e) => {
+  if (e.target.value !== 'pick') return setGround(e.target.value === 'color' ? ui.ground : e.target.value);
+  showGround();
+  openColorMenu(e.target, `#${groundColor().getHexString()}`, (rgb) => setGround(hexOfRGB(rgb)), () => {});
+});
 $('#themeToggle').addEventListener('click', () => { applyTheme(THEMES[(THEMES.indexOf(document.documentElement.dataset.bg) + 1) % THEMES.length]); rerender(); });   // RENDER's background and ground follow
 let theme = 'light';
 try { theme = localStorage.getItem(THEME_KEY) || theme; } catch {}
@@ -3128,7 +3153,7 @@ function nativeScene() {
   });
   const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff), floor = groundColor(), stops = SKIES[document.documentElement.dataset.bg];   // stops: dusk's or dawn's sky, sRGB as the page draws it
   const lamps = lights.map((l) => [...l.pos.clone().applyQuaternion(rot).toArray(), ...l.dir.clone().applyQuaternion(rot).toArray(), ...l.color.toArray(), ...l.cos]);   // turned with the bodies (Turn bakes into them)
-  post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b], floor: [floor.r, floor.g, floor.b], sky: stops ? stops.map((h) => srgb(h).toArray()) : null, uv: pics.length ? b64(uv) : '', pngs: pics.map(pngOf), lights: lamps });   // no picture: nothing to send (the shell's are zeros already), a sixth of the message on a large assembly
+  post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b], floor: ui.ground === 'none' ? null : [floor.r, floor.g, floor.b], sky: stops ? stops.map((h) => srgb(h).toArray()) : null, uv: pics.length ? b64(uv) : '', pngs: pics.map(pngOf), lights: lamps });   // no picture: nothing to send (the shell's are zeros already), a sixth of the message on a large assembly
 }
 // Glass pulled in by `d` along its welded normals (every copy of a corner moves the same way: no cracks), for
 // the tracer only. A pane lying on aluminium shares that face: the tracer took either surface per ray (speckle),
@@ -3380,7 +3405,7 @@ function frame() {
   const above = (z) => (ui.ortho ? camera.getWorldDirection(new THREE.Vector3()).z < 0 : camera.position.z >= z);
   if (grid) grid.visible = ui.grid && above(grid.position.z);
   if (ruler) ruler.visible = ui.ruler && !!grid && above(grid.position.z);
-  if (rt.on && !NATIVE && rt.floor && rt.floor.visible !== above(rt.floor.position.z)) { rt.floor.visible = !rt.floor.visible; syncRender(); }
+  if (rt.on && !NATIVE && rt.floor && rt.floor.visible !== (ui.ground !== 'none' && above(rt.floor.position.z))) { rt.floor.visible = !rt.floor.visible; syncRender(); }
   // Seen from under the ground, the lights come from under it too (mirrored in it), so the bottom is the lit side.
   const under = !!grid && !above(grid.position.z);
   if (under !== key.position.z < 0) { key.position.z = under ? -120 : 120; fill.position.z = under ? 30 : -30; if (rt.on && !NATIVE) syncRender(); }
@@ -3772,7 +3797,7 @@ function commit() {
   if (s === history.list[history.i]) return;
   rerender();
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, scroll: ui.scroll, light: ui.light, color: ui.color, ortho: ui.ortho, mode: ui.mode })); } catch {}
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, scroll: ui.scroll, light: ui.light, ground: ui.ground, color: ui.color, ortho: ui.ortho, mode: ui.mode })); } catch {}
 }
 // View preferences outlive the page, like the theme. Section, explode and body
 // visibility belong to a file and start fresh with it.
@@ -3783,6 +3808,7 @@ try {
   if (UNIT_MM[p?.units]) { ui.units = $('#unitsSel').value = p.units; }
   if (p?.scroll === 'mouse') ui.scroll = $('#scrollSel').value = 'mouse';
   if (p?.light === 'studio') ui.light = $('#lightSel').value = 'studio';
+  if (GROUND.test(p?.ground)) setGround(p.ground, false);
   for (const k of ['edges', 'wire', 'grid', 'ruler', 'color']) if (typeof p?.[k] === 'boolean' && ui[k] !== p[k]) toggle(k, `#${k}Btn`);
   if (p?.ortho) setOrtho(true);
   if (p?.mode === 'joint') setMode('joint');
