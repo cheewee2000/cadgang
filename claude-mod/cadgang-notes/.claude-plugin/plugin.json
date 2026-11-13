@@ -1,0 +1,1 @@
+{ "name": "cadgang-notes", "version": "0.1.0", "description": "Watches CADgang for new notes and markups and hands them to Claude, so you never type \"check notes\".", "author": { "name": "CW&T" }, "types": "./types/index.d.ts" }

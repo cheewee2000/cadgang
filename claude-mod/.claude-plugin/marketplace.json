@@ -1,0 +1,5 @@
+{
+  "name": "cadgang",
+  "owner": { "name": "CW&T" },
+  "plugins": [{ "name": "cadgang-notes", "source": "./cadgang-notes", "description": "Watches CADgang for new notes and markups and hands them to Claude, so you never type \"check notes\"." }]
+}

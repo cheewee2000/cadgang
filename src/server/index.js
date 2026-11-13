@@ -20,6 +20,7 @@ import { viewRouter, mayReadLocal, pickDrawingPage } from './view.js';
 import { CellDocument } from '../core/cells.js';
 import { SoftgoodsDocument } from '../core/softgoods-document.js';
 import { softgoodsRouter } from './softgoods.js';
+import { setupClaude } from './claude-setup.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -297,3 +298,5 @@ wss.on('connection', (ws) => {
 });
 
 server.listen(PORT, () => console.log(`CADgang ${VERSION} at http://localhost:${PORT} (data: ${DATA})`));
+// The Mac app sets up Claude Code on its first launch (the cadgang-notes mod); a dev server leaves it alone.
+if (process.env.CADGANG_DESKTOP === '1') setupClaude({ dataDir: DATA, root: ROOT }).catch(() => {});

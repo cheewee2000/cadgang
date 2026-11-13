@@ -86,6 +86,10 @@ The template is documented in [`templates/drawing/README.md`](templates/drawing/
 
 Open the **Cells** page while Claude Code builds. The page automatically follows the project folder of the Claude session currently using the CADgang MCP tools, then refreshes after every committed cell change. Claude is instructed to build one reviewable feature or part per cell and evaluate/render it before continuing, so the model appears progressively instead of only after export. The project name in the Cells header shows which session document is on screen.
 
+## Claude Code mod: notes without typing
+
+The Mac app's first launch installs the `cadgang-notes` mod (`claude-mod/`) into Claude Code, once. It asks CADgang every few seconds for open markups on files in the session's folder: a markup you add while the session is running is sent to Claude by itself as soon as it carries text (Enter saves the text), or when the running turn ends, so you never type "check notes". Markups that were already open when the session started wait in a row above the prompt with **Send to Claude**, and ride along on the next prompt you send: reopening a tab does not start a turn. Remove it with `/plugin` in Claude Code and it stays removed. By hand, from a checkout: `claude plugin install cadgang-notes --marketplace /path/to/cadgang/claude-mod`.
+
 ## Claude Code (MCP)
 
 The repo ships `.mcp.json` (and `.codex/config.toml`), so opening it in Claude Code registers the `cadgang` MCP server. Manually: `claude mcp add cadgang -- node /path/to/cadgang/src/mcp/index.js`. The app or `npm start` must be running; set `CADGANG_URL` if it is not on port 4477.

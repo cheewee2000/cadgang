@@ -152,6 +152,22 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   const subjectOf = (req) => String(req.query.subject || req.body?.subject || latest?.subject || '');
 
   r.get('/markup', (req, res) => { const subject = subjectOf(req); res.json({ subject, markups: readMarkup(subject) }); });
+  // OPEN MARKUPS, for the cadgang-notes Claude Code mod: it asks every few seconds and hands new ones to its
+  // session, so nobody types "check notes". ?dir= is the asking session's folder. It gets the files inside it
+  // (the home folder holds everything, so it does not count) and, when it is the session that last used cadgang's
+  // tools, the files no other session's folder holds: ASK CLAUDE's own rule (order(), below), so the two agree.
+  // Only files seen since the server started: one a window showed, or one whose markups were written.
+  const marked = new Set();
+  r.get('/markup/open', (req, res) => {
+    const dir = String(req.query.dir || ''), home = os.homedir();
+    const held = (s, d) => !!d && d !== home && s.split('|').some((f) => inside(f, d));
+    const newest = [...lastUse.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const files = [...new Set([...shots.keys(), ...marked, latest?.subject])].filter(Boolean)
+      .filter((s) => held(s, dir) || (!!dir && dir === newest && ![...claude.values()].some((v) => held(s, v.cwd))))
+      .map((subject) => { const open = readMarkup(subject).filter((m) => !m.done); return { subject, ids: open.map((m) => m.id), noted: open.filter((m) => m.text).map((m) => m.id) }; })   // noted: the ones that carry text
+      .filter((f) => f.ids.length);
+    res.json({ files });
+  });
   r.put('/markup', (req, res, next) => {
     try {
       const subject = subjectOf(req);
@@ -159,6 +175,7 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       const markups = Array.isArray(req.body?.markups) ? req.body.markups : [];
       fsSync.mkdirSync(path.dirname(markupPath(subject)), { recursive: true });
       fsSync.writeFileSync(markupPath(subject), JSON.stringify(markups));
+      marked.add(subject);
       broadcast({ type: 'markup_changed', subject, count: markups.length });
       res.json({ subject, markups });
     } catch (e) { next(e); }

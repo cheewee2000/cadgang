@@ -33,7 +33,7 @@ if [ -d mac/AppIcon.icon ]; then
 elif [ -d mac/AppIcon.iconset ]; then
   iconutil -c icns mac/AppIcon.iconset -o "$RES/AppIcon.icns"
 fi
-rsync -a --exclude .cache --exclude __pycache__ package.json src web vercel stepdraw templates "$RES/app/"
+rsync -a --exclude .cache --exclude __pycache__ package.json src web vercel stepdraw templates claude-mod "$RES/app/"
 # three.js: the page has its own copy in web/vendor; the kernel's clash checks (src/core/cellapi.js) need the build only.
 rsync -a --exclude /node_modules/three/examples --exclude /node_modules/three/src node_modules "$RES/app/"
 # Native STEP/IGES/BREP import with its OCCT dylibs (src/core/step.js falls back to WASM without it).
