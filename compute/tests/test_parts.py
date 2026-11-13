@@ -90,7 +90,7 @@ class PartParsing(unittest.TestCase):
             self.assertEqual(rep['unknown_labels'], {'widget': 1})
             self.assertTrue(rep['fatal'], '6 bad lines of 50 is over the 1% default')
             self.assertGreaterEqual(rep['cross_group_duplicates'], 1)
-            self.assertEqual(set(rep['classes']), {'screw', 'nut', 'washer', 'standoff', 'pcb', 'bearing', 'other'})
+            self.assertEqual(set(rep['classes']), {'screw', 'nut', 'washer', 'standoff', 'bearing', 'magnet', 'spring', 'oring', 'pcb', 'component', 'battery', 'other'})
             self.assertEqual(rep['synthetic_rows'], n)
             self.assertIn('not ok to train', format_validation(rep))
             ok = validate(f'{t}/p.jsonl', n_points=128, max_invalid=0.5)
@@ -199,7 +199,7 @@ class PartTraining(unittest.TestCase):
         self.assertIn('unsupervised pretraining', md)
         self.assertIn('Synthetic data', md)
         m = json.loads(Path(rep + '.json').read_text())['metrics']
-        self.assertEqual(len(m['per_class']), 7)
+        self.assertEqual(len(m['per_class']), 12)
         args = build_parser().parse_args(['export', '--ckpt', f'{out}/best.pt', '--out', f'{self.t}/p.onnx'])
         try:
             code = T.export(args)

@@ -164,7 +164,7 @@ def export(args):
                            inputs=dict(points='(B, N, 3) N points sampled from the body, centred on their bbox and divided by '
                                               'its diagonal', size='(B, 3) log10 of the body bbox extents in mm, largest first, '
                                               'floored at 1e-3 mm'),
-                           outputs=dict(logits='(B, 7) softmax for probabilities, in classes order'))
+                           outputs=dict(logits=f'(B, {len(CLASSES)}) softmax for probabilities, in classes order'))
     atomic_write_json(Path(args.report or str(args.out) + '.json'), rep)
     if not rep.get('ok'):
         log_err(rep['error'])

@@ -1,6 +1,6 @@
 # Stage 3: part classifier
 
-Predicts screw, nut, washer, standoff, pcb, bearing or other from a body's shape and size, so unnamed bodies get a guess on import. The spec is the Stage 3 section of `compute/README.md`.
+Predicts screw, nut, washer, standoff, bearing, magnet, spring, O-ring, PCB, electronic component, battery or other from a body's shape and size, so unnamed bodies get a guess on import. The spec is the Stage 3 section of `compute/README.md`.
 
 **Status:** the code has unit tests and a self-test on synthetic data only. The labels (`compute/results/parts-labelled.jsonl[.gz]`) come from the Mac session on request and are not in the repo, so there are no real results yet.
 

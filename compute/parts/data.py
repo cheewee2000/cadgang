@@ -28,7 +28,7 @@ import numpy as np
 from cadnn.util import (SPLITS, atomic_write_json, file_sha256, normalize_cloud, random_rotation, rng_for,
                         rotation_about_z, sample_indices, split_of)
 
-CLASSES = ('screw', 'nut', 'washer', 'standoff', 'pcb', 'bearing', 'other')
+CLASSES = ('screw', 'nut', 'washer', 'standoff', 'bearing', 'magnet', 'spring', 'oring', 'pcb', 'component', 'battery', 'other')
 CLASS_ID = {c: i for i, c in enumerate(CLASSES)}
 PLURALS = {c + 's': c for c in CLASSES}
 LABEL_KEYS = ('label', 'class', 'category')

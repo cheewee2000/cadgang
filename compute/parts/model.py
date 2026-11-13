@@ -12,7 +12,7 @@ SIZE_DIM = 3
 
 
 class PartNet(nn.Module):
-    """(points (B, N, 3) normalised, size (B, 3) log10 extents in mm) -> class logits (B, 7)."""
+    """(points (B, N, 3) normalised, size (B, 3) log10 extents in mm) -> class logits (B, C)."""
 
     def __init__(self, widths=(64, 128, 256), head=(256, 128), dropout=0.3, n_classes=len(CLASSES)):
         super().__init__()

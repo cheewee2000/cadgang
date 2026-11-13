@@ -38,6 +38,23 @@ def make_points(cls, rng, n):
     if cls == 'bearing':
         ro = u(5, 20)
         return shapes.cylinder(ro, 0.35 * ro, n, rng, r_in=0.5 * ro)
+    if cls == 'magnet':
+        r = u(2, 12)
+        return shapes.cylinder(r, u(0.15, 0.8) * r, n, rng)
+    if cls == 'spring':
+        # A sampled helix with a wire-thickness jitter: enough to exercise the class path, not a physical mesh.
+        t = np.linspace(0, u(5, 12) * 2 * np.pi, n)
+        r, pitch = u(2, 8), u(0.5, 2)
+        return np.stack([r * np.cos(t), r * np.sin(t), pitch * t / (2 * np.pi)], 1) + rng.normal(0, r * 0.04, (n, 3))
+    if cls == 'oring':
+        a = rng.uniform(0, 2 * np.pi, n); b = rng.uniform(0, 2 * np.pi, n); ro, ri = u(3, 15), u(0.3, 1.5)
+        return np.stack([(ro + ri * np.cos(b)) * np.cos(a), (ro + ri * np.cos(b)) * np.sin(a), ri * np.sin(b)], 1)
+    if cls == 'component':
+        body = shapes.box((u(2, 12), u(2, 12), u(1, 5)), int(n * 0.8), rng)
+        leads = shapes.box((u(8, 20), u(0.3, 1), u(0.2, 0.8)), n - len(body), rng)
+        return np.concatenate([body, leads])
+    if cls == 'battery':
+        return shapes.cylinder(u(4, 10), u(3, 65), n, rng)
     kind = rng.integers(0, 3)
     if kind == 0:
         return shapes.box(u(5, 60, 3), n, rng)
