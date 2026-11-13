@@ -64,6 +64,8 @@ Data is the `--dump` output of stage 1: per assembly `<id>.json` (parts with the
 - Start with a PointNet-style encoder per part and an MLP on the pair, before anything fancier. JoinABLe is the reference for the harder B-rep graph version; its data cannot be used, its design can.
 - Split by assembly id, not by pair. Report type accuracy and axis angular error per type, and compare against the rule solver's own axis from the same dump (`solve[].dir` of the smaller part).
 
+**Code:** `compute/joints/` (see its README): `main.py index | train | eval | export`, with checkpoint/resume and SIGTERM handling, and `selftest.sh` on a synthetic dump. Not yet run on the real dumps.
+
 **Deliverable:** training script under `compute/joints/`, a report, and if the axis error beats the rule solver on CYLINDRICAL/SLIDER/REVOLUTE, an export path: weights small enough to ship (ONNX, < 10 MB) and a note on how to call it from `src/server/` so the viewer gets a joint suggestion for a selected pair (the J key) and `explodeOffsets` gets it as a hint. Wiring into the app is the Mac session's job.
 
 ## Stage 3: part classifier
@@ -78,6 +80,8 @@ gzip -k ~/cadgang-corpus/parts-labelled.jsonl      # then scp it to the cluster;
 One JSON line per named body: `label`, `name`, `file` (basename), `nVerts`, `size` (bbox, mm) and `pts`, 1024 vertices sampled evenly from the body's vertex list (not area-weighted), centred on the bbox centre, mm. The label is a regex on the cleaned name, first match wins: screw, nut, washer, standoff, bearing, magnet, spring, oring, pcb, component (R12, C3, connectors, ICs), battery, other. Bodies with CAD feature names (`body12`, `fillet3`) are skipped. The same shape repeated in one file (a pattern of screws) is one record. `other` is capped at 4 and `component` at 10 per file. Expect label noise: the names are what designers typed. Check a sample before trusting a class.
 
 Classes to predict: screw, nut, washer, standoff, pcb, component, other, and whatever else has a few hundred examples. Target: label the unnamed bodies on import (half the corpus's bodies have no name) so the Bodies panel shows a guess and the solver knows a fastener is a fastener. Same PointNet encoder as stage 2. AutoMate parts can pre-train the encoder unsupervised, and FASTENED-mate counts per part are a weak "fastener" label there.
+
+**Code:** `compute/parts/` (see its README): `validate.py` checks the labelled JSONL before any training, and `main.py cache | train | eval | export` trains and reports. `main.py pretrain` is the optional unsupervised AutoMate encoder pretraining. The FASTENED weak label is deliberately not implemented. Shared pieces are in `compute/cadnn/`; the tests are `python3 -m unittest discover -s compute/tests -v`.
 
 ## Reporting back
 
