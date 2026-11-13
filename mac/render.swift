@@ -20,6 +20,7 @@ struct RenderUniforms {
     var fx = SIMD4<Float>()                          // x y: this frame's sub-pixel jitter, z: near (ortho: far) for depth, w: how much of the full-size samples shows over the upscaled picture
     var tick = SIMD4<UInt32>()                       // x: frame number, y: samples a pixel in the half-size pass
     var stops = (SIMD4<Float>(), SIMD4<Float>(), SIMD4<Float>(), SIMD4<Float>(), SIMD4<Float>())   // bg.w = 1: the background is a sky, its five colours from straight down to straight up (sRGB)
+    var ground = SIMD4<Float>()                      // x y: the floor's middle, which it fades out around
 }
 
 final class PathTracer: NSObject, MTKViewDelegate {
@@ -124,6 +125,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         u.bg = SIMD4(Float(bg[0]), Float(bg[1]), Float(bg[2]), stops.count == 5 ? 1 : 0)   // w: the background is the sky in u.stops (dusk, dawn), not this one colour
         fresh = true
         u.scene = SIMD4(diag, diag * 2e-5, z, Float(lm.count / 12))
+        u.ground = SIMD4(c.x, c.y, 0, 0)
         u.sunCol = SIMD4(2.6, 2.5, 2.35, 0) * (lm.isEmpty ? 1 : 0.35)   // the file's lamps light it; the sun drops to a fill so their pools read
         u.info.w = UInt32(ix.count / 3 - 2)
 
@@ -349,7 +351,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     using namespace raytracing;
 
     struct U { float4 camPos, camFwd, camRight, camUp, sunDir, sunCol, skyTop, skyBot, bg, clip, scene; uint4 info;
-               float4 pPos, pFwd, pRight, pUp, fx; uint4 tick; float4 stops[5]; };
+               float4 pPos, pFwd, pRight, pUp, fx; uint4 tick; float4 stops[5]; float4 ground; };
     struct Vtx { packed_float3 p; packed_float3 n; };
     struct Mat { float4 color; float4 prm; float4 tex; float4 r0, r1, r2; };   // prm: metalness, roughness, transmission, ior; tex: picture index (-1 none), glow, grain, axes; r: world -> the body's own mm
     struct Lamp { float4 pos; float4 dir; float4 col; };     // pos.w: cos of the cone's edge, dir.w: cos where it is full
@@ -567,7 +569,12 @@ final class PathTracer: NSObject, MTKViewDelegate {
         constexpr sampler pic(filter::linear, address::clamp_to_edge);
         float diag = u.scene.x, eps = u.scene.y;
         float3 o = u.camPos.xyz, d;
-        if (u.info.y == 1) { o += px.x * u.camRight.xyz + px.y * u.camUp.xyz - u.camFwd.xyz * diag * 4.0; d = u.camFwd.xyz; }
+        if (u.info.y == 1) {
+            o += px.x * u.camRight.xyz + px.y * u.camUp.xyz - u.camFwd.xyz * diag * 4.0; d = u.camFwd.xyz;
+            // An ortho ray looking down starts above the floor, however far back that is: started under it (a pixel low in a
+            // side-on view) it met nothing, and the floor stopped at a hard line across the picture.
+            if (d.z < 0.0 && o.z < u.scene.z + diag) o += d * ((u.scene.z + diag - o.z) / d.z);
+        }
         else d = normalize(u.camFwd.xyz + px.x * u.camRight.xyz + px.y * u.camUp.xyz);
         float3 L = 0.0, T = 1.0;
         float bgw = 0.0;
@@ -586,7 +593,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
             }
             float3 p = o + d * h.t;
             bool isFloor = !h.cap && h.prim >= u.info.w;
-            if (depth == 0 && isFloor) bgw = smoothstep(diag * 1.5, diag * 10.0, h.t);   // the floor melts into the background
+            if (depth == 0 && isFloor) bgw = smoothstep(diag * 1.5, diag * 10.0, length(p.xy - u.ground.xy));   // the floor melts into the background, by how far it is from the bodies (not from the eye: an ortho view's rays start far behind it, and it was all but gone)
             Mat m = mats[h.cap ? (u.info.w > 0 ? tri[u.info.w] + 1 : 0) : h.mat];
             float3 col = m.color.rgb;
             if (!h.cap && m.tex.x >= 0.0) {   // a picture: its colour at the hit, and a screen lights itself
