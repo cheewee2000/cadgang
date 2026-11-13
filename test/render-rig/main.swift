@@ -69,7 +69,11 @@ t.setCamera(cam(a1))
 let one = target(); var cb = q.makeCommandBuffer()!; _ = t.encode(into: one, cb); cb.commit(); cb.waitUntilCompleted(); save(one, "\(out)/moving-before.png")
 // the converged picture
 t.setCamera(cam(a1))
-try! t.png(size: CGSize(width: W, height: H))!.data.write(to: URL(fileURLWithPath: "\(out)/reference.png"))
+var ref: Data?, said = 0   // the capture gathers in steps on the main queue and reports as it goes
+t.png(size: CGSize(width: W, height: H), progress: { n, want in said += 1; precondition(n <= want) }) { ref = $0!.data }
+while ref == nil { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+precondition(said > 1, "the capture never said how far it was")
+try! ref!.write(to: URL(fileURLWithPath: "\(out)/reference.png"))
 if #available(macOS 26.0, *) {
     let tex = target()
     // warm up (MetalFX compiles its pipelines in the background), then an orbit that ends on a1, timed

@@ -3431,12 +3431,26 @@ function capture() {
   if (!bbox) return say('open a file first', true);
   // Render on, in the Mac app: the ray-traced picture is drawn by the shell under the page, so the shell hands it over
   // (cadgangRenderShot), traced again at the size of the window.
-  if (rt.on && NATIVE) return window.webkit.messageHandlers.cadgang.postMessage({ cmd: 'renderShot' });
+  // It gathers as many samples as the screen has (a converged picture: thousands, the better part of a minute), so a bar says how far it is.
+  if (rt.on && NATIVE) {
+    if (shooting) return say('still capturing the render…');
+    shooting = true; window.cadgangRenderShotProgress(0, 1);
+    return window.webkit.messageHandlers.cadgang.postMessage({ cmd: 'renderShot' });
+  }
   viewport.classList.add('capture'); frame();
   let url, size; try { url = markup.snapshot(); size = `${renderer.domElement.width} × ${renderer.domElement.height}`; } finally { viewport.classList.remove('capture'); frame(); }
   saveCapture(url, size);
 }
-window.cadgangRenderShot = (b64, w, h) => (b64 ? saveCapture(`data:image/png;base64,${b64}`, `${w} × ${h}`) : say('the render is not up yet: try again in a moment', true));
+let shooting = false;
+window.cadgangRenderShotProgress = (n, want) => {
+  const el = $('#progress');
+  el.hidden = false; el.classList.remove('guess'); el.querySelector('.track > div').style.width = `${100 * n / want}%`;
+  el.querySelector('span').textContent = n ? `capturing the render: ${n} of ${want} samples` : 'capturing the render…';
+};
+window.cadgangRenderShot = (b64, w, h) => {
+  shooting = false; progressEnd();
+  b64 ? saveCapture(`data:image/png;base64,${b64}`, `${w} × ${h}`) : say('the render is not up yet: try again in a moment', true);
+};
 async function saveCapture(url, size) {
   if (follow || window.cadgangServerless) return savePng(url, size);   // no Mac of the viewer's own behind this page: a download
   try {

@@ -43,6 +43,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     private var u = RenderUniforms()
     private var cam: [String: Any] = [:]
     static let maxSamples: UInt32 = 4096
+    private var shooting = false, moved = false   // a CAPTURE is gathering (the screen's draws wait); the view changed while it was
 
     init?(frame: NSRect) {
         guard let dev = MTLCreateSystemDefaultDevice(), dev.supportsRaytracing, let q = dev.makeCommandQueue() else { return nil }
@@ -154,7 +155,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         restart()
     }
 
-    private func restart() { u.info.x = 0; warm = 0; view.isPaused = accel == nil || !shown }
+    private func restart() { u.info.x = 0; warm = 0; moved = true; view.isPaused = accel == nil || !shown }
 
     private func basis(aspect: Float) {
         func v(_ k: String) -> SIMD3<Float> { let a = (cam[k] as? [Double]) ?? [0, 0, 0]; return SIMD3(Float(a[0]), Float(a[1]), Float(a[2])) }
@@ -169,6 +170,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
 
     func draw(in v: MTKView) {
         if !shown { v.isPaused = true; return }
+        if shooting { return }   // accum and the sample count are the capture's for now
         guard let drawable = v.currentDrawable, let cb = queue.makeCommandBuffer() else { return }
         let t = drawable.texture
         var drawn = false
@@ -184,31 +186,47 @@ final class PathTracer: NSObject, MTKViewDelegate {
     }
 
     /// The picture as a PNG of `size` pixels (CAPTURE wants the window's, which the view is not): traced afresh into
-    /// its own textures, to as many samples as the screen has gathered (64 at least), and read back. The screen's
-    /// own samples are put back after. Nil with no scene loaded.
-    func png(size: CGSize) -> (data: Data, width: Int, height: Int)? {
+    /// its own textures, to as many samples as the screen has gathered (64 at least), and read back. It gathers a few
+    /// frames at a time and says how far it is (`progress`: samples so far, samples wanted), so the app stays live and
+    /// the page can show a bar; the screen holds its picture meanwhile and gets its own samples back after. A view
+    /// that changes under it starts the capture over. `done` gets nil with no scene loaded or a capture already going.
+    func png(size: CGSize, progress: @escaping (UInt32, UInt32) -> Void = { _, _ in }, done: @escaping ((data: Data, width: Int, height: Int)?) -> Void) {
         let w = Int(size.width), h = Int(size.height)
-        guard accel != nil, w > 0, h > 0, let dev = view.device else { return nil }
+        guard !shooting, accel != nil, w > 0, h > 0, let dev = view.device else { return done(nil) }
         let td = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
         td.usage = [.shaderRead, .shaderWrite]; td.storageMode = dev.hasUnifiedMemory ? .shared : .managed
-        guard let tex = dev.makeTexture(descriptor: td) else { return nil }
+        guard let tex = dev.makeTexture(descriptor: td) else { return done(nil) }
         let screen = (accum, u.info.x)
-        accum = nil   // encode makes one of this size and counts from nought
-        defer { accum = screen.0; u.info.x = screen.1 }
         let want = min(max(screen.1, 64), Self.maxSamples)
-        var last: MTLCommandBuffer?
-        repeat {
-            guard let cb = queue.makeCommandBuffer(), encode(into: tex, cb) else { return nil }
-            if u.info.x >= want, td.storageMode == .managed, let blit = cb.makeBlitCommandEncoder() { blit.synchronize(resource: tex); blit.endEncoding() }   // a discrete GPU: bring the pixels back
-            cb.commit(); last = cb
-        } while u.info.x < want
-        last?.waitUntilCompleted()
-        var px = [UInt8](repeating: 0, count: w * h * 4)
-        tex.getBytes(&px, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
-        let info = CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue   // BGRA, alpha unused
-        guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: info),
-              let img = ctx.makeImage(), let data = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) else { return nil }
-        return (data, w, h)
+        accum = nil   // encode makes one of this size and counts from nought
+        shooting = true; moved = false
+        func finish(_ ok: Bool) {
+            accum = screen.0; u.info.x = moved ? 0 : screen.1; shooting = false   // moved: the screen's samples are of the old view
+            view.isPaused = accel == nil || !shown || u.info.x >= Self.maxSamples
+            guard ok else { return done(nil) }
+            var px = [UInt8](repeating: 0, count: w * h * 4)
+            tex.getBytes(&px, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+            let info = CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue   // BGRA, alpha unused
+            guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: info),
+                  let img = ctx.makeImage(), let data = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) else { return done(nil) }
+            done((data, w, h))
+        }
+        func step() {   // eight frames, then a word to the page once the GPU has done them
+            for i in 0..<8 {
+                guard let cb = queue.makeCommandBuffer(), encode(into: tex, cb) else { return finish(false) }
+                let end = u.info.x >= want
+                if end, td.storageMode == .managed, let blit = cb.makeBlitCommandEncoder() { blit.synchronize(resource: tex); blit.endEncoding() }   // a discrete GPU: bring the pixels back
+                if end || i == 7 {
+                    cb.addCompletedHandler { _ in DispatchQueue.main.async {
+                        progress(min(self.u.info.x, want), want)
+                        if self.u.info.x >= want { finish(true) } else { step() }   // short again only if the view changed while these frames ran
+                    } }
+                }
+                cb.commit()
+                if end { break }
+            }
+        }
+        step()
     }
 
     /// One frame of samples into accum, tone-mapped into out.

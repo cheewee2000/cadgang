@@ -279,8 +279,11 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         // CAPTURE with Render on: the ray-traced picture is the shell's, not the page's, so the page asks for it here,
         // at the window's size like the page's own capture.
         if cmd == "renderShot" {
-            if let shot = w.tracer?.png(size: w.convertToBacking(w.bounds).size) { w.evaluateJavaScript("window.cadgangRenderShot?.('\(shot.data.base64EncodedString())', \(shot.width), \(shot.height))") }
-            else { w.evaluateJavaScript("window.cadgangRenderShot?.(null)") }
+            guard let t = w.tracer else { w.evaluateJavaScript("window.cadgangRenderShot?.(null)"); return }
+            t.png(size: w.convertToBacking(w.bounds).size, progress: { [weak w] n, want in w?.evaluateJavaScript("window.cadgangRenderShotProgress?.(\(n), \(want))") }) { [weak w] shot in
+                if let shot { w?.evaluateJavaScript("window.cadgangRenderShot?.('\(shot.data.base64EncodedString())', \(shot.width), \(shot.height))") }
+                else { w?.evaluateJavaScript("window.cadgangRenderShot?.(null)") }
+            }
             return
         }
         if w.tracer == nil, let box = w.superview {
