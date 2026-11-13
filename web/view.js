@@ -3055,7 +3055,7 @@ function syncRender() {
   scene.environment = rt.env;
   scene.environmentIntensity = 0.8;
   renderer.toneMapping = THREE.NeutralToneMapping;   // the lights plus the sky overexpose a linear canvas; Neutral keeps white white
-  scene.environmentRotation.set(Math.PI / 2, 0, 0);   // the gradient is Y-up, the model is Z-up
+  scene.environmentRotation.set(key.position.z < 0 ? -Math.PI / 2 : Math.PI / 2, 0, 0);   // the gradient is Y-up, the model is Z-up; from under the ground its bright half is below
   rt.pt.setScene(scene, camera);
 }
 function renderSample() {
@@ -3148,7 +3148,7 @@ function nativeCam() {
   const r = renderer.domElement.getBoundingClientRect(), e = camera.matrixWorld.elements;
   const clip = section.axis && bbox ? [section.plane.normal.x, section.plane.normal.y, section.plane.normal.z, section.plane.constant] : null;
   const c = { cmd: 'renderCam', pos: [e[12], e[13], e[14]], fwd: [-e[8], -e[9], -e[10]], right: [e[0], e[1], e[2]], up: [e[4], e[5], e[6]],
-    fov: persp.fov, ortho: ui.ortho, orthoH: camera.top ?? 1, clip, rect: [r.left, r.top, r.width, r.height], light: ui.light };
+    fov: persp.fov, ortho: ui.ortho, orthoH: camera.top ?? 1, clip, rect: [r.left, r.top, r.width, r.height], light: ui.light, under: key.position.z < 0 };
   const key = JSON.stringify(c);
   if (key !== rt.last) { rt.last = key; post(c); }
 }
@@ -3378,6 +3378,9 @@ function frame() {
   if (grid) grid.visible = ui.grid && above(grid.position.z);
   if (ruler) ruler.visible = ui.ruler && !!grid && above(grid.position.z);
   if (rt.on && !NATIVE && rt.floor && rt.floor.visible !== above(rt.floor.position.z)) { rt.floor.visible = !rt.floor.visible; syncRender(); }
+  // Seen from under the ground, the lights come from under it too (mirrored in it), so the bottom is the lit side.
+  const under = !!grid && !above(grid.position.z);
+  if (under !== key.position.z < 0) { key.position.z = under ? -120 : 120; fill.position.z = under ? 30 : -30; if (rt.on && !NATIVE) syncRender(); }
   if (sky.visible) { sky.position.copy(orbit.target); sky.scale.setScalar(orbit.dist * 50); sky.material.uniforms.center.value.copy(orbit.target); }
   if (rt.on && NATIVE) nativeCam(); else if (rt.pt && rt.on) renderSample(); else renderer.render(scene, camera);
   viewCube.hidden = !bbox || ui.flat;

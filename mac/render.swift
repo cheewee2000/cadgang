@@ -65,7 +65,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         u.sunDir = SIMD4(normalize(SIMD3<Float>(60, -80, 120)), 0.03)   // the viewer's key light; w: sun radius (rad), the soft shadow edge
         u.sunCol = SIMD4(2.6, 2.5, 2.35, 0)
         u.skyTop = SIMD4(0.55, 0.57, 0.62, 0)
-        u.skyBot = SIMD4(0.22, 0.21, 0.2, 0)
+        u.skyBot = SIMD4(0.22, 0.21, 0.2, 1)   // w: 1, or -1 seen from under the ground (setCamera)
         // A background tab or a minimised window stops tracing and picks up where it left off when it shows again.
         NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main) { [weak self] n in
             guard let self, n.object as? NSWindow === self.view.window, self.shown else { return }
@@ -141,7 +141,8 @@ final class PathTracer: NSObject, MTKViewDelegate {
 
     /// pos/fwd/right/up: the camera's world basis; fov (deg, vertical) or ortho with orthoH (half height);
     /// clip: the section plane [nx ny nz c] or nil; rect: the viewport in the page's points, top-left origin;
-    /// light: "studio" for softboxes, else the sun.
+    /// light: "studio" for softboxes, else the sun; under: the view is from under the ground, so the lighting is mirrored
+    /// in it (the sun, the sky and the softboxes come from below, and there is no floor): the bottom is the lit side.
     func setCamera(_ c: [String: Any]) {
         cam = c
         if let r = c["rect"] as? [Double], r.count == 4 {
@@ -151,6 +152,8 @@ final class PathTracer: NSObject, MTKViewDelegate {
         let p = (c["clip"] as? [Double]) ?? [0, 0, 0, 0]
         u.clip = SIMD4(Float(p[0]), Float(p[1]), Float(p[2]), Float(p[3]))
         u.skyTop.w = (c["light"] as? String) == "studio" ? 1 : 0   // the lighting: the sun and sky, or softboxes
+        u.skyBot.w = (c["under"] as? Bool) == true ? -1 : 1
+        u.sunDir.z = abs(u.sunDir.z) * u.skyBot.w
         view.isHidden = false
         restart()
     }
@@ -354,7 +357,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         float3 t = abs(n.z) < 0.999 ? normalize(cross(float3(0, 0, 1), n)) : float3(1, 0, 0);
         return v.x * t + v.y * cross(n, t) + v.z * n;
     }
-    static float3 sky(constant U& u, float3 d) { return mix(u.skyBot.rgb, u.skyTop.rgb, smoothstep(-0.3, 0.8, d.z)); }
+    static float3 sky(constant U& u, float3 d) { return mix(u.skyBot.rgb, u.skyTop.rgb, smoothstep(-0.3, 0.8, d.z * u.skyBot.w)); }
 
     // STUDIO lighting (u.skyTop.w): three softboxes far away in a dim room, in place of the sun and the sky. A softbox is
     // a rectangle seen in direction c, h the tangent of its half angles across and up. They show in what reflects them.
@@ -402,7 +405,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
             float3 p = o + d * x.distance;
             uint i = x.primitive_id;
             bool isFloor = i >= u.info.w;
-            if (isFloor && d.z > 0.0) { tmin = x.distance + u.scene.y; continue; }   // met from underneath, it would hide the model: no floor (an ortho view looking up starts its rays under it while the camera is above)
+            if (isFloor && (d.z > 0.0 || u.skyBot.w < 0.0)) { tmin = x.distance + u.scene.y; continue; }   // met from underneath, it would hide the model: no floor (an ortho view looking up starts its rays under it while the camera is above)
             if (clipOn && !isFloor && dot(u.clip.xyz, p) + u.clip.w < 0.0) { tmin = x.distance + u.scene.y; continue; }
             float3 a = vtx[idx[3 * i]].p, b = vtx[idx[3 * i + 1]].p, c = vtx[idx[3 * i + 2]].p;
             float3 ng = normalize(cross(b - a, c - a));
@@ -560,7 +563,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
             if (depth == 1 && mirror) f.reach = h.hit ? h.t : diag * 100.0;
             if (!h.hit) {
                 if (depth == 0) { bgw = 1.0; f.p = o + d * diag * 1e3; }
-                else if (studio) { float pl; float3 B = boxes(d, pl); L += T * (sky(u, d) * 0.3 + B * lastPdf / (lastPdf + pl)); }   // a softbox met by chance: weighed against the sample aimed at it
+                else if (studio) { float pl; float3 B = boxes(d * float3(1.0, 1.0, u.skyBot.w), pl); L += T * (sky(u, d) * 0.3 + B * lastPdf / (lastPdf + pl)); }   // a softbox met by chance: weighed against the sample aimed at it
                 else L += T * sky(u, d);
                 break;
             }
@@ -599,6 +602,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
                 float3 t, bt; boxAxes(b, t, bt);
                 float3 sd = normalize(b.c + (rnd(seed) * 2.0 - 1.0) * b.h.x * t + (rnd(seed) * 2.0 - 1.0) * b.h.y * bt);
                 float pl; float3 B = boxes(sd, pl);
+                sd.z *= u.skyBot.w;   // from under the ground the softboxes are below it
                 if (dot(n, sd) > 0.0 && pl > 0.0)
                     L += T * brdf(n, v, sd, col, metal, a2) * dot(n, sd) * B / (pl + lobePdf(n, v, sd, a2, pSpec)) * shadow(u, accel, vtx, idx, tri, mats, o, sd);
             } else {   // Sun: one shadowed sample inside its disc (soft shadow edge).
