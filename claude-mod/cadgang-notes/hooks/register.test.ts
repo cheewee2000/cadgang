@@ -53,3 +53,43 @@ test('a note is sent by itself once it carries text, and held while a turn runs'
   await clock.advance(3000)
   expect(sent.length).toBe(2)
 })
+
+test('a note goes with its brief, and CADgang is asked to hold the request until one lands', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.env(on, { HOME: '/Users/me' })
+  let files: File[] = []
+  const urls: string[] = []
+  const sent: string[] = []
+  on('http.fetch', (_, e) => {
+    urls.push(e.url)
+    const withBrief = e.url.includes('brief=1')
+    return {
+      value: {
+        status: 200,
+        ok: true,
+        headers: {},
+        text: JSON.stringify({ rev: 7, files: files.map(f => (withBrief ? { ...f, brief: 'BRIEF b1' } : f)) }),
+      },
+    }
+  })
+  on('session.cwd', () => ({ value: '/proj' }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('prompt.submit', (_, e) => {
+    sent.push(e.text)
+    return { text: e.text }
+  })
+
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  await clock.advance(3000) // the first look: nothing open, and CADgang says it counts (rev)
+  files = [{ subject: '/proj/cadgang/cells.json', ids: ['b1'], noted: ['b1'] }]
+  await clock.advance(50)
+  await clock.advance(50)
+  expect(urls.some(u => u.includes('since=7') && u.includes('wait='))).toBe(true)
+  expect(sent).toEqual(['BRIEF b1'])
+
+  // Told: it is not sent again.
+  await clock.advance(50)
+  await clock.advance(50)
+  expect(sent.length).toBe(1)
+})

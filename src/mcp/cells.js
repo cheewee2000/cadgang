@@ -278,9 +278,11 @@ export function registerCellTools(server, { call, ok, fail, base, headers }) {
     evaluate: z.boolean().optional().describe('false: return at once without evaluating (default true: the answer carries the evaluation, so no cadgang_cells_evaluate call is needed)'),
     look: z.union([z.boolean(), z.object({ yaw: z.number().optional(), pitch: z.number().optional() })]).optional()
       .describe('true: also return a rendered picture of the result (no cadgang_cells_render call needed); {yaw, pitch} picks the view'),
+    done: z.array(z.string()).optional()
+      .describe("Ids of the user's notes (markups) this change answers: marked done once the cell evaluates ok, so no cadgang_markup_done call is needed. Left open if it fails."),
   };
-  async function after(result, id, { evaluate = true, look } = {}) {
-    if (!evaluate && !look) return ok(result);
+  async function after(result, id, { evaluate = true, look, done } = {}) {
+    if (!evaluate && !look && !done?.length) return ok(result);
     const out = { cell: { id: result.id, status: result.status, params: result.params } }, content = [];   // not the code back again: Claude just wrote it
     if (evaluate) {
       try {
@@ -296,6 +298,11 @@ export function registerCellTools(server, { call, ok, fail, base, headers }) {
           measures: ev.measures,
         };
       } catch (e) { out.evaluation = { error: e.message }; }
+    }
+    if (done?.length) {   // the note goes green when its change is on screen, not before
+      const mine = out.evaluation?.cells?.find((c) => c.id === result.id);
+      try { out.notes = !evaluate || mine?.status === 'ok' || out.evaluation?.ok?.includes(result.id) ? await call('/view/markup/done', { method: 'POST', body: { ids: done } }) : { done: [], left: 'open: the cell did not evaluate ok' }; }
+      catch (e) { out.notes = { error: e.message }; }
     }
     if (look) {
       const qs = new URLSearchParams({ yaw: String(look.yaw ?? -35), pitch: String(look.pitch ?? 25), width: '640', height: '480' });
@@ -313,7 +320,8 @@ export function registerCellTools(server, { call, ok, fail, base, headers }) {
     if (code == null) throw new Error(`Cell '${id}' has no code to edit`);
     for (const e of edits) {
       const n = code.split(e.old).length - 1;
-      if (n !== 1) throw new Error(`edit 'old' must occur exactly once in cell '${id}', found ${n}: ${JSON.stringify(e.old.slice(0, 80))}`);
+      // The code as it stands rides on the error: an edit written from memory of an older version is put right in the next call, with no read between.
+      if (n !== 1) throw new Error(`edit 'old' must occur exactly once in cell '${id}', found ${n}: ${JSON.stringify(e.old.slice(0, 80))}. Nothing was changed. The cell's code now:\n${code.length > 30000 ? '(long: cadgang_cells_get with this id)' : code}`);
       code = code.replace(e.old, () => e.new);
     }
     return code;
@@ -367,11 +375,16 @@ Args:
 A document is an ordered stack, not a free graph. A cell with no 'refs' consumes the previous cell's result. Explicit refs may only point BACKWARDS, which is what makes cycles impossible.
 
 ${CELL_STATUS}`,
-      inputSchema: {},
+      inputSchema: { id: z.string().optional().describe('Only this cell: much less to read than the whole document when one cell is all you need') },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async () => {
-      try { return ok(await call('/cells/document')); } catch (e) { return fail(e); }
+    async ({ id }) => {
+      try {
+        const doc = await call('/cells/document');
+        if (!id) return ok(doc);
+        const cell = doc.cells.find((c) => c.id === id);
+        return cell ? ok({ revision: doc.revision, cell }) : fail(new Error(`No cell '${id}': the document has ${doc.cells.map((c) => c.id).join(', ')}`));
+      } catch (e) { return fail(e); }
     }
   );
 
@@ -413,10 +426,10 @@ ${CELL_API}`,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ checks, evaluate, look, ...args }) => {
+    async ({ checks, evaluate, look, done, ...args }) => {
       try {
         if (checks !== undefined) await call('/cells/document/checks', { method: 'POST', body: { on: checks } });
-        return after(await call('/cells', { method: 'POST', body: args }), args.id, { evaluate, look });
+        return after(await call('/cells', { method: 'POST', body: args }), args.id, { evaluate, look, done });
       } catch (e) { return fail(e); }
     }
   );
@@ -447,11 +460,11 @@ ${CELL_STATUS}`,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ id, checks, evaluate, look, edits, ...body }) => {
+    async ({ id, checks, evaluate, look, done, edits, ...body }) => {
       try {
         if (checks !== undefined) await call('/cells/document/checks', { method: 'POST', body: { on: checks } });
         if (edits?.length) body.code = await editedCode(id, edits);
-        return after(await call(`/cells/${encodeURIComponent(id)}`, { method: 'PATCH', body }), id, { evaluate, look });
+        return after(await call(`/cells/${encodeURIComponent(id)}`, { method: 'PATCH', body }), id, { evaluate, look, done });
       } catch (e) { return fail(e); }
     }
   );
@@ -478,11 +491,11 @@ ${CELL_API}`,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ id, evaluate, look, edits, ...body }) => {
+    async ({ id, evaluate, look, done, edits, ...body }) => {
       try {
         if (edits?.length) body.code = await editedCode(id, edits);
         if (body.code == null) throw new Error("cadgang_cells_compile needs 'code' or 'edits'");
-        return after(await call(`/cells/${encodeURIComponent(id)}/compile`, { method: 'POST', body }), id, { evaluate, look });
+        return after(await call(`/cells/${encodeURIComponent(id)}/compile`, { method: 'POST', body }), id, { evaluate, look, done });
       } catch (e) { return fail(e); }
     }
   );

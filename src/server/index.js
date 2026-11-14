@@ -84,7 +84,19 @@ function tabs() {
 }
 const broadcastTabs = () => broadcast({ type: 'tabs', tabs: tabs() });
 app.get('/api/view/tabs', (req, res) => res.json({ tabs: tabs() }));
-app.use('/api/view', viewRouter({ dataDir: DATA, broadcast }));
+// What a note on a live cell document points at (the notes brief in view.js): asked of that project's kernel,
+// the way the proxy below reaches it. Starting the kernel here is no waste: Claude's edit is its next request.
+async function pointed(file, body, point) {
+  const dir = path.dirname(path.dirname(file)), entry = dir === project.dir ? null : sessionFor(dir);
+  const k = kernelFor(entry ? path.join(entry.dir, 'cadgang', 'cells.json') : cells.filePath);
+  k.inflight++;
+  try {
+    await k.ready;
+    const r = await fetch(`http://127.0.0.1:${k.port}/api/cells/pointed?point=${point.join(',')}&body=${encodeURIComponent(body || '')}`, { headers: { 'x-cadgang-dir': dir, 'x-cadgang-session': entry?.key ?? '' } });
+    return r.ok ? await r.json() : null;
+  } finally { k.inflight--; }
+}
+app.use('/api/view', viewRouter({ dataDir: DATA, broadcast, pointed }));
 app.use('/api/softgoods', softgoodsRouter(softgoods, { exportDir: () => project.dir || process.cwd(), broadcast }));
 // The kernels: one process per cell document (kernel.js), so a build in one project blocks neither
 // this server nor another project's build, and a kernel whose heap fills is replaced on its own —

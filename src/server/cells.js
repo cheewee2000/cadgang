@@ -37,7 +37,7 @@ import { renderMesh } from '../core/render.js';
 import { fea, refine, heat, colouredPLY, bandedGLB, drawScale } from '../core/fea.js';
 import {
   initBrep, beginBrepScope, tessellate, tessellateBodies, tessellateEdges, exportStep, tightBounds, progress,
-  brepDistance, brepBBox,
+  brepDistance, brepBBox, compoundParts, looseBounds,
 } from '../core/brep.js';
 
 import { pack } from './view.js';
@@ -480,6 +480,38 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
         const t = topology(shape);
         res.json({ cell: target, revision: doc.revision, ...t, measures: measuresOf(shape) });
       });
+    } catch (e) { fail(res, e); }
+  });
+
+  /**
+   * What a note points at: the edges of the shown model nearest a point, and the cell that makes the body it
+   * is on. The notes brief (view.js) hands this to Claude with the note, so its first call is the edit and
+   * not three lookups. ?point=x,y,z (world mm) &body=<the body's name in the viewer>.
+   */
+  r.get('/pointed', async (req, res) => {
+    try {
+      const p = String(req.query.point || '').split(',').map(Number);
+      if (p.length !== 3 || !p.every(Number.isFinite)) throw new GraphError('point=x,y,z');
+      const name = String(req.query.body || '').replace(/#\d+$/, '').trim();
+      // ponytail: the cell that makes a body is the one whose id or code carries its name; when a part is
+      // named in the assembly cell and built in another, that is the wrong one of the two (both are listed)
+      const made = !name ? [] : doc.cells.filter((c) => c.kind !== 'assert' && (c.id === name || (c.code || '').includes(name)));
+      const cells = (made.length ? made : doc.cells.length === 1 ? doc.cells : []).map((c) => ({ id: c.id, code: c.code || '' }));
+      await withShape(req, ({ shape }) => {
+        const toBox = (b) => Math.hypot(...[0, 1, 2].map((k) => Math.max(b.min[k] - p[k], 0, p[k] - b.max[k])));
+        const toLine = (a, b) => {   // a straight edge: to the segment itself
+          const ab = [0, 1, 2].map((k) => b[k] - a[k]), len2 = ab.reduce((n, x) => n + x * x, 0);
+          const t = len2 ? Math.min(1, Math.max(0, [0, 1, 2].reduce((n, k) => n + (p[k] - a[k]) * ab[k], 0) / len2)) : 0;
+          return Math.hypot(...[0, 1, 2].map((k) => a[k] + ab[k] * t - p[k]));
+        };
+        // Only the part under the point is read: an assembly's every edge would take seconds.
+        const part = (compoundParts.of(shape) || [shape]).map((s) => ({ s, d: toBox(looseBounds(s)) })).sort((a, b) => a.d - b.d)[0].s;
+        // ponytail: a curved edge is as far as its box, so a point inside a big arc's box reads 0; project onto the curve if that ever misleads
+        const edges = enumerate(part, 'edge').filter((e) => !e.d.seam)
+          .map(({ d }) => ({ kind: d.kind, length: d.length, start: d.start, end: d.end, ...(d.direction && { direction: d.direction }), ...(d.radius != null && { radius: d.radius }), center: d.center, away: Math.round((d.kind === 'LINE' ? toLine(d.start, d.end) : toBox(d.bbox)) * 100) / 100 }))
+          .sort((a, b) => a.away - b.away || a.length - b.length).slice(0, 4);
+        res.json({ revision: doc.revision, cells, edges });
+      }, { partial: true, quick: true });
     } catch (e) { fail(res, e); }
   });
 

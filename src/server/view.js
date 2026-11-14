@@ -134,7 +134,7 @@ export function pickDrawingPage(pages, active, { dir, source } = {}) {
   return pool.includes(active) ? active : newest(pool);
 }
 
-export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
+export function viewRouter({ dataDir, broadcast = () => {}, pointed = async () => null } = {}) {
   const watch = fileWatcher(broadcast);
   const local = async (req) => { const f = await localFile(req); watch(f.path); return f; };
   const r = express.Router();
@@ -157,16 +157,67 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
   // (the home folder holds everything, so it does not count) and, when it is the session that last used cadgang's
   // tools, the files no other session's folder holds: ASK CLAUDE's own rule (order(), below), so the two agree.
   // Only files seen since the server started: one a window showed, or one whose markups were written.
+  // ?since=<rev>&wait=<s> holds the answer until a markup is written (rev is in every answer), so the mod hears of
+  // a note as it lands and not at its next look. ?brief=1 adds each file's brief: what Claude needs to act at once.
   const marked = new Set();
-  r.get('/markup/open', (req, res) => {
+  let rev = Date.now(); const waiting = new Set();
+  const wrote = (subject, markups) => { marked.add(subject); rev++; for (const go of [...waiting]) go(); broadcast({ type: 'markup_changed', subject, count: markups.length }); };
+  r.get('/markup/open', async (req, res) => {
+    if (req.query.wait && Number(req.query.since) === rev) await new Promise((done) => {
+      const go = () => { clearTimeout(timer); waiting.delete(go); done(); };
+      const timer = setTimeout(go, Math.min(Number(req.query.wait) || 0, 25) * 1000);
+      waiting.add(go); res.once('close', go);
+    });
     const dir = String(req.query.dir || ''), home = os.homedir();
     const held = (s, d) => !!d && d !== home && s.split('|').some((f) => inside(f, d));
     const newest = [...lastUse.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
     const files = [...new Set([...shots.keys(), ...marked, latest?.subject])].filter(Boolean)
       .filter((s) => held(s, dir) || (!!dir && dir === newest && ![...claude.values()].some((v) => held(s, v.cwd))))
-      .map((subject) => { const open = readMarkup(subject).filter((m) => !m.done); return { subject, ids: open.map((m) => m.id), noted: open.filter((m) => m.text).map((m) => m.id) }; })   // noted: the ones that carry text
+      .map((subject) => { const open = readMarkup(subject).filter((m) => !m.done), noted = open.filter((m) => m.text); return { subject, ids: open.map((m) => m.id), noted: noted.map((m) => m.id) }; })   // noted: the ones that carry text
       .filter((f) => f.ids.length);
-    res.json({ files });
+    if (req.query.brief === '1') for (const f of files) f.brief = await brief(f.subject, readMarkup(f.subject).filter((m) => !m.done));
+    res.json({ rev, files });
+  });
+  // THE BRIEF: a file's open markups as Claude reads them, with the note. On a live cell document each note comes
+  // with the edges it points at and the code of the cell that makes that body (the kernel's /pointed), so the
+  // first thing Claude does is the edit: finding those took it three calls, and each call is a model turn.
+  // ponytail: the mod can only send the brief as the prompt itself, in the person's sight (a mod's own prompt takes no
+  // hidden context), so a cell's code rides along only when short. Raise CODE_MAX if a mod's prompt ever can carry it.
+  const LIVE = /\/cadgang\/cells\.json$/, CODE_MAX = 4000;
+  const n3 = (v) => `[${v.map((x) => +Number(x).toFixed(2)).join(', ')}]`;
+  const edgeLine = (e) => `${e.kind === 'LINE' ? `a straight edge along ${n3(e.direction)}, ${e.length} mm, ${n3(e.start)} to ${n3(e.end)}` : `${e.kind === 'CIRCLE' ? `a circular edge, radius ${e.radius}` : `a ${e.kind.toLowerCase()} edge`}, ${e.length} mm long, centred ${n3(e.center)}`} (${e.away} mm from the point)`;
+  async function brief(subject, open) {
+    const live = subject.split('|').find((f) => LIVE.test(f)), shown = new Set(), lines = [];
+    for (const m of open) {
+      const p = m.points?.[m.points.length - 1];   // an arrow's head, a note's anchor
+      let line = `Note ${m.id}${m.text ? `: "${m.text}"` : ` (a ${m.kind} mark, no text)`}`;
+      if (p && m.kind !== 'pen' && m.kind !== 'path') line += `, ${m.kind === 'arrow' ? 'an arrow pointing at' : 'at'} ${n3(p)} mm`;
+      if (m.body) line += ` on body "${m.body.replace(/#\d+$/, '')}"`;
+      if (m.normal) line += `, on a face whose normal is ${n3(m.normal)}`;
+      const hit = live && p && m.text ? await Promise.race([pointed(live, m.body, p), new Promise((r) => setTimeout(r, 2500))]).catch(() => null) : null;   // a kernel deep in a build: the note goes without
+      if (hit?.edges?.length) line += `.\n  The edges of that body nearest the point (world mm): ${hit.edges.map(edgeLine).join('; ')}. In cell code the first of them is q.edges(s).near(${n3(hit.edges[0].center)}, 0.1), s being the shape it is on`;
+      const cells = hit?.cells ?? [];
+      if (cells.length === 1 && shown.has(cells[0].id)) line += `.\n  Cell '${cells[0].id}' (above) makes that body`;
+      else if (cells.length === 1 && cells[0].code.length <= CODE_MAX) { shown.add(cells[0].id); line += `.\n  Cell '${cells[0].id}' makes that body. Its code now:\n\`\`\`js\n${cells[0].code}\n\`\`\``; }
+      else if (cells.length) line += `.\n  ${cells.length === 1 ? `Cell '${cells[0].id}' makes that body` : `One of these cells makes that body: ${cells.map((c) => c.id).join(', ')}`}`;
+      lines.push(line.endsWith('```') ? line : line + '.');
+    }
+    const ids = JSON.stringify(open.filter((m) => m.text).map((m) => m.id));
+    return live
+      ? `CADgang notes on the live cell document of ${path.dirname(path.dirname(live))}, to be made now (the window is being watched):\n\n${lines.join('\n')}\n\nMake each change with ONE cadgang_cells_update call on that cell: edits [{old, new}] for the code, and done ${ids} (the ids of the notes that call answers), which marks them done once it evaluates. Do not call cadgang_screen or cadgang_cells_topology first, do not export, and do not look the cell language up: what a note points at is above, and the window redraws by itself. A cell is export default ({ p, brep, q }) => shape, with brep.fillet(s, edges, radius) and brep.chamfer(s, edges, distance) taking a q.edges(s) query on the shape s they change (a selector above holds where the body is not moved after that step). A cell's code that is not above: edit it from this conversation if you wrote or read it here (an edit that no longer matches changes nothing and answers with the code as it stands), otherwise read that one cell with cadgang_cells_get {id}. Look further only if the evaluation reports an error. Then say what changed in one line.`
+      : `CADgang notes on ${subject}:\n\n${lines.join('\n')}\n\nMake each change in the model's source, re-export, check it in CADgang (cadgang_screen shows the picture with every markup drawn on), and mark the ones you did with cadgang_markup_done.`;
+  }
+  // Mark notes done by id, whichever file they are on: cadgang_cells_update's 'done', so the edit and the mark are one call.
+  r.post('/markup/done', express.json(), (req, res) => {
+    const want = new Set(Array.isArray(req.body?.ids) ? req.body.ids.map(String) : []), at = new Date().toISOString(), done = [];
+    for (const subject of new Set([...shots.keys(), ...marked, latest?.subject].filter(Boolean))) {
+      const markups = readMarkup(subject);
+      if (!markups.some((m) => want.has(m.id) && !m.done)) continue;
+      const next = markups.map((m) => (want.has(m.id) && !m.done ? (done.push(m.id), { ...m, done: true, doneAt: at }) : m));
+      fsSync.writeFileSync(markupPath(subject), JSON.stringify(next));
+      wrote(subject, next);
+    }
+    res.json({ done, unknown: [...want].filter((id) => !done.includes(id)) });
   });
   r.put('/markup', (req, res, next) => {
     try {
@@ -175,8 +226,7 @@ export function viewRouter({ dataDir, broadcast = () => {} } = {}) {
       const markups = Array.isArray(req.body?.markups) ? req.body.markups : [];
       fsSync.mkdirSync(path.dirname(markupPath(subject)), { recursive: true });
       fsSync.writeFileSync(markupPath(subject), JSON.stringify(markups));
-      marked.add(subject);
-      broadcast({ type: 'markup_changed', subject, count: markups.length });
+      wrote(subject, markups);
       res.json({ subject, markups });
     } catch (e) { next(e); }
   });
