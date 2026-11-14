@@ -834,4 +834,50 @@ Args:
       } catch (e) { return fail(e); }
     }
   );
+
+  const vec3 = z.array(z.number()).length(3);
+  const region = {
+    box: z.array(vec3).length(2).optional().describe('[[x,y,z],[x,y,z]]: two opposite corners'),
+    cylinder: z.object({ from: vec3, to: vec3, radius: z.number().positive() }).optional().describe('everything within radius of the segment from..to: a bore, a pin, a boss'),
+  };
+  server.registerTool(
+    'cadgang_fea',
+    {
+      title: 'Stress analysis (FEA) of one body',
+      description: `Linear static stress analysis of ONE body under ONE load case, and the stress map as pictures. Use it to size a part: run it, thicken or fillet where it is red, thin where it is blue, run it again.
+
+The body is cut into equal cubes of 'size' mm (voxels) and solved as 8-node elements; no mesher. Units: mm, N, MPa. Answers with peakStress and p99 (von Mises, MPa; both leave out the elements touching a fixed node, where a rigid hold makes stress meaningless), peakAt, maxDisp (mm), safetyFactor (yield / peak, when material.yield is given), and one picture per view with the colour scale. It also writes, in <project>/cadgang/fea/: <name>.ply (the body coloured by stress: open it with cadgang_open to show the user), <name>-<n>.png and <name>.json.
+
+READ THE RESULT AS A FIRST PASS, NOT A CERTIFICATE. The voxel surface is stair-stepped, so the peak is noisy: compare p99 as well, and compare designs at the SAME size and scale. A wall wants 3 or more voxels through it. Contact is not modelled: a load pulls on its region as hard as it pushes. Halve 'size' once to see whether the numbers hold (each halving costs about 16x the time; 30k elements solve in seconds, 300k in minutes).
+
+Args:
+  - cell: the cell holding the body (default: the output cell)
+  - body: its name there, or the start of it ('hub right'); needed when the cell has several bodies
+  - size: voxel edge in mm
+  - material: { E (MPa), nu (default 0.33), yield (MPa, optional) } — give the numbers; nothing is assumed
+  - fixed: regions whose nodes are held rigid ({box} or {cylinder}); a region reaches half a voxel past its surface
+  - loads: regions with a force [fx,fy,fz] in N spread over their nodes. 'at' is the point the force really acts at (a pole's tip, a lever's end): the moment it makes about the region is applied too. 'moment' [mx,my,mz] N·mm adds a pure couple.
+  - scale: MPa at the red end (default: the peak) — set it to compare two designs on one scale
+  - views: [{yaw, pitch}] (default two, front and back)
+  - name: file name for the outputs (default: the body's name)`,
+      inputSchema: {
+        cell: z.string().optional(),
+        body: z.string().optional(),
+        size: z.number().positive(),
+        material: z.object({ E: z.number().positive(), nu: z.number().min(0).max(0.49).optional(), yield: z.number().positive().optional() }),
+        fixed: z.array(z.object(region)).min(1),
+        loads: z.array(z.object({ ...region, force: vec3, at: vec3.optional(), moment: vec3.optional() })).min(1),
+        scale: z.number().positive().optional(),
+        views: z.array(z.object({ yaw: z.number(), pitch: z.number() })).max(6).optional(),
+        name: z.string().regex(/^[\w.-]+$/).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (args) => {
+      try {
+        const { images = [], ...summary } = await call('/cells/fea', { method: 'POST', body: args });
+        return { content: [...images.map((data) => ({ type: 'image', data, mimeType: 'image/png' })), { type: 'text', text: JSON.stringify(summary, null, 2) }] };
+      } catch (e) { return fail(e); }
+    }
+  );
 }

@@ -104,6 +104,7 @@ The repo ships `.mcp.json` (and `.codex/config.toml`), so opening it in Claude C
 | `cadgang_joint` | Add, change, drive (set `value`) or remove a joint; a body's longest round face gives the axis when none is passed |
 | `cadgang_drawing_request` | What the user asked a drawing of, and the questions to ask them |
 | `cadgang_drawing_make` | Send the answered spec; the viewer renders and saves the sheet |
+| `cadgang_fea` | Stress analysis of one body under one load case (`src/core/fea.js`: a voxel FEA, no mesher): peak and p99 von Mises stress, deflection, safety factor, the stress map as pictures, and `<project>/cadgang/fea/<name>.ply` — the body coloured by stress, which the viewer opens. A first pass for sizing a part, not a certificate |
 
 ## Softgoods workspace (foundation)
 
@@ -119,6 +120,7 @@ Softgoods are prompt-authored through `cadgang_softgoods_get` / `cadgang_softgoo
 | `POST /api/view/snapshot` · `GET /api/view/screen?fresh=1` · `GET /api/view/screen.png` | The page posts what it shows; Claude reads it |
 | `POST /api/view/open {paths}` | Tell open pages to open files |
 | `POST/GET /api/view/drawing/request` · `POST /api/view/drawing/make {spec}` · `GET /api/view/drawing` | The drawing round trip: request, spec in, the rendered sheet out |
+| `POST /api/cells/fea {body, size, material, fixed, loads}` | The stress analysis behind `cadgang_fea`: numbers and PNGs back, the coloured PLY and a JSON record written to `cadgang/fea/` |
 | `GET /api/health` | Version and connected pages |
 
 `ws://…/ws` says hello with the server version (pages reload when it changed) and broadcasts `markup_changed`, `snapshot_request`, `open`, `drawing` and `file_changed` (a local file opened by path was rewritten).

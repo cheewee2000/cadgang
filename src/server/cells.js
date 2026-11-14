@@ -34,6 +34,7 @@ function meshingBounds(bbox, padFraction = 0.05) {
 }
 import { meshStats } from '../core/mesher.js';
 import { renderMesh } from '../core/render.js';
+import { fea, refine, heat, colouredPLY, bandedGLB, drawScale } from '../core/fea.js';
 import {
   initBrep, beginBrepScope, tessellate, tessellateBodies, tessellateEdges, exportStep, tightBounds, progress,
   brepDistance, brepBBox,
@@ -570,7 +571,7 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
   r.get('/live', async (req, res) => {
     try {
       await withShape(req, ({ shape, shown }) => {
-        res.type('application/octet-stream').set('X-Cadgang-Revision', String(doc.revision)).send(pack(tessellateBodies(shape, { tolerance: tolerance(req, shape) }, shown)));
+        res.type('application/octet-stream').set('X-Cadgang-Revision', String(doc.revision)).send(pack(tessellateBodies(shape, { tolerance: tolerance(req, shape), fit: req.query.fit === '1' }, shown)));   // fit=1: the mesh Send to Bambu Studio prints
       }, { partial: true, quick: true });
     } catch (e) { fail(res, e); }
   });
@@ -602,11 +603,11 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
     } catch (e) { fail(res, e); }
   });
 
-  /** STL for printing: the exact solid tessellated at the viewport tolerance (or ?tolerance=). Refuses like STEP does. */
+  /** STL for printing: the exact solid tessellated at 0.004 mm (or ?tolerance=), or the finest its triangle budget allows. Refuses like STEP does. */
   r.get('/export/stl', async (req, res) => {
     try {
       await withShape(req, ({ shape, target }) => {
-        const t = tessellate(shape, { tolerance: tolerance(req, shape) });
+        const t = tessellate(shape, { tolerance: req.query.tolerance ? tolerance(req, shape) : 0.004, fit: true });   // the viewport's tolerance printed a 40 mm knob with 79 flats
         const stl = toBinarySTL(t.positions, t.indices, target);
         const savedTo = saveExport(req.query.file, 'stl', stl);
         res.setHeader('Content-Type', 'model/stl');
@@ -638,6 +639,63 @@ export function cellsRouter(doc, rootDir, { project = {} } = {}) {
   });
 
   /** PNG preview: the exact solid's tessellation, rasterised with its edges drawn over. */
+  /**
+   * Stress analysis of one body, one load case (core/fea.js: what it is and is not). Answers with the
+   * numbers and the stress map as pictures, and writes beside cells.json, in fea/: <name>.ply (the body
+   * coloured by von Mises stress, which the viewer opens), <name>-<n>.png and <name>.json.
+   *
+   * Body: { cell?, body?, size, material: { E, nu?, yield? }, fixed: [region], loads: [{ ...region, force, at?, moment? }],
+   *         scale? (MPa at red; default the peak), views? [{ yaw, pitch }], name? }
+   */
+  r.post('/fea', async (req, res) => {
+    try {
+      const b = req.body || {};
+      await withShape(req, ({ shape, shown }) => {
+        const all = tessellateBodies(shape, { tolerance: 0.05 }, shown), names = all.bodies.map((x) => x.name).join('; ');
+        const exact = b.body ? all.bodies.filter((x) => x.name === b.body) : all.bodies;
+        const found = exact.length || !b.body ? exact : all.bodies.filter((x) => x.name.startsWith(b.body));
+        if (found.length !== 1) throw new GraphError(b.body ? `'${shown}' has no single body named '${b.body}'. Its bodies: ${names}` : `'${shown}' has ${all.bodies.length} bodies; name one with body. Its bodies: ${names}`);
+        const part = found[0], indices = all.indices.subarray(part.first * 3, (part.first + part.count) * 3), m = b.material || {};
+        const began = performance.now();
+        let out;
+        try { out = fea({ positions: all.positions, indices }, { size: b.size, E: m.E, nu: m.nu, fixed: b.fixed, loads: b.loads, tol: b.tol, maxIter: b.maxIter }); }
+        catch (e) { throw new GraphError(e.message); }
+        const ms = Math.round(performance.now() - began);
+        // the surface, cut fine enough to carry the map, coloured by the stress under each vertex
+        const soup = refine(all.positions, indices, Math.max(out.size, 0.5)), nv = soup.length / 3;
+        const top = b.scale > 0 ? b.scale : out.peak.stress || 1, colours = new Float32Array(soup.length), stress = new Float32Array(nv);
+        const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+        for (let v = 0; v < nv; v++) {
+          stress[v] = out.stressAt(soup[3 * v], soup[3 * v + 1], soup[3 * v + 2]);
+          colours.set(heat(stress[v] / top), 3 * v);
+          for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], soup[3 * v + k]); max[k] = Math.max(max[k], soup[3 * v + k]); }
+        }
+        const views = b.views?.length ? b.views : [{ yaw: -35, pitch: 25 }, { yaw: 145, pitch: 25 }];
+        const pngs = views.map((v) => renderMesh({ positions: soup, indices: Uint32Array.from({ length: nv }, (_, i) => i) }, null, { min, max }, {
+          width: 900, height: 700, yaw: v.yaw ?? -35, pitch: v.pitch ?? 25, theme: 'paper', colors: colours, overlay: (px, w, h) => drawScale(px, w, h, top),
+        }));
+        const { stressAt, peak, ...numbers } = out;
+        const summary = {
+          cell: shown, body: part.name, ...numbers, ms,
+          peakStress: +peak.stress.toFixed(2), peakAt: peak.at?.map((x) => +x.toFixed(2)) ?? null, p99: +out.p99.toFixed(2), maxDisp: +out.maxDisp.toFixed(5),
+          scale: +top.toFixed(2), material: m, safetyFactor: m.yield && peak.stress ? +(m.yield / peak.stress).toFixed(2) : null,
+          units: 'mm, N, MPa; stress is von Mises; peak and p99 leave out the elements that touch a fixed node',
+        };
+        const cellsFile = doc.filePath || process.env.CADGANG_CELLS;
+        if (cellsFile) {
+          const dir = path.join(path.dirname(cellsFile), 'fea'), name = String(b.name || part.name).replace(/[^\w.-]+/g, '_');
+          fs.mkdirSync(dir, { recursive: true });
+          summary.files = { ply: path.join(dir, `${name}.ply`), glb: path.join(dir, `${name}.glb`), png: pngs.map((_, i) => path.join(dir, `${name}-${i + 1}.png`)), json: path.join(dir, `${name}.json`) };
+          fs.writeFileSync(summary.files.ply, colouredPLY(soup, colours));
+          fs.writeFileSync(summary.files.glb, bandedGLB(soup, stress, top));   // the same map as coloured bands, for viewers that ignore vertex colours
+          pngs.forEach((png, i) => fs.writeFileSync(summary.files.png[i], png));
+          fs.writeFileSync(summary.files.json, JSON.stringify({ ...summary, request: b }, null, 2));
+        }
+        res.json({ ...summary, images: pngs.map((png) => png.toString('base64')) });
+      }, { quick: true });
+    } catch (e) { fail(res, e); }
+  });
+
   r.get('/preview.png', async (req, res) => {
     try {
       await withShape(req, ({ shape, shown }) => {

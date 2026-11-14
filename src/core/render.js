@@ -33,6 +33,7 @@ export function renderMesh(mesh, edges, bounds, opts = {}) {
   }
 
   const P = mesh.positions; const I = mesh.indices;
+  const C = opts.colors ?? null;
   const nVerts = P.length / 3;
   const sx = new Float32Array(nVerts), sy = new Float32Array(nVerts), sz = new Float32Array(nVerts);
   for (let v = 0; v < nVerts; v++) {
@@ -57,10 +58,12 @@ export function renderMesh(mesh, edges, bounds, opts = {}) {
     const rim = Math.pow(1 - Math.max(-dot3(n, cam.fwd), 0), 3) * 0.35;
     const spec = Math.pow(Math.max(dot3(reflect(cam.fwd, n), l1), 0), 24) * 0.5;
     const L = (paper ? 0.42 : 0.16) + d1 * (paper ? 0.6 : 0.85) + d2;
+    // opts.colors: [r, g, b] 0..1 at each vertex (a stress map): the triangle takes their mean, and no highlight washes it out
+    const tint = C ? [0, 1, 2].map((k) => 85 * (C[3 * a + k] + C[3 * b + k] + C[3 * c + k])) : base, shine = C ? 0 : glow;
     const col = [
-      clamp8(base[0] * L + 255 * (spec + rim * 0.6) * glow),
-      clamp8(base[1] * L + 255 * (spec + rim * 0.6) * glow),
-      clamp8(base[2] * L + 255 * (spec + rim) * glow),
+      clamp8(tint[0] * L + 255 * (spec + rim * 0.6) * shine),
+      clamp8(tint[1] * L + 255 * (spec + rim * 0.6) * shine),
+      clamp8(tint[2] * L + 255 * (spec + rim) * shine),
     ];
     rasterTriangle(px, depth, width, height, [sx[a], sy[a], sz[a]], [sx[b], sy[b], sz[b]], [sx[c], sy[c], sz[c]], col);
   }
@@ -74,6 +77,7 @@ export function renderMesh(mesh, edges, bounds, opts = {}) {
     if (p[2] <= 0 || q[2] <= 0) continue;
     rasterLine(px, depth, width, height, p, q, dark, cam.radius * 4e-3);
   }
+  opts.overlay?.(px, width, height);   // drawn over the picture: a colour scale
   return encodePNG(px, width, height);
 }
 

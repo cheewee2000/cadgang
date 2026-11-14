@@ -41,6 +41,9 @@ var mats: [[Double]] = [[0.03, 0.03, 0.035, 1, 0.38, 0, 1.5], [0.56, 0.57, 0.58,
 if CommandLine.arguments.contains("grain") {   // a brushed aluminium plate, a bead-blasted ball, a brushed brass block, wooden fins: [.. texture glow grain axes]
     mats[0] = [0.65, 0.66, 0.68, 1, 0.4, 0, 1.5, -1, 0, 1, 1]; mats[1] += [-1, 0, 2, 1]; mats[3] += [-1, 0, 1, 9]; mats[4] = [0.48, 0.25, 0.1, 0, 0.75, 0, 1.5, -1, 0, 3, 9]
 }
+if CommandLine.arguments.contains("fabric") {   // a Cordura plate, a velcro ball, a webbing block
+    mats[0] = [0.12, 0.12, 0.13, 0, 0.9, 0, 1.5, -1, 0, 7, 1]; mats[2] = [0.3, 0.3, 0.3, 0, 1, 0, 1.5, -1, 0, 9, 1]; mats[3] = [0.6, 0.02, 0.02, 0, 0.85, 0, 1.5, -1, 0, 8, 1]
+}
 
 guard let t = PathTracer(frame: .zero) else { print("no ray tracing"); exit(1) }
 t.setScene(verts: f32(v), idx: u32(ix), tri: u32(tm), mats: mats, cap: [0.5, 0.5, 0.5], bg: [1, 1, 1])

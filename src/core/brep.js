@@ -1784,8 +1784,8 @@ const MESH_CACHE_BYTES = parseInt(process.env.CADGANG_MESH_CACHE_MB || '192', 10
 const meshCache = new Map();
 let meshCacheBytes = 0;
 const meshBytes = (v) => (v.positions?.byteLength ?? 0) + (v.normals?.byteLength ?? 0) + (v.indices?.byteLength ?? 0) + (v.lines?.length ?? 0) * 8 + 1024;
-const cachedMesh = (shape, tolerance, angularTolerance, make) => {
-  const k = shape?.__key ? `${shape.__key}|${tolerance}|${angularTolerance}` : null;
+const cachedMesh = (shape, tolerance, angularTolerance, make, tag = '') => {
+  const k = shape?.__key ? `${shape.__key}|${tolerance}|${angularTolerance}${tag}` : null;
   if (k && meshCache.has(k)) { const v = meshCache.get(k); meshCache.delete(k); meshCache.set(k, v); return v; }
   const v = make();
   if (k && v) {
@@ -1830,10 +1830,10 @@ const mergeMeshes = (parts) => {
   return { positions, normals, indices, faces };
 };
 export function tessellate(shape, opts = {}) {
-  const { tolerance = 0.01, angularTolerance = 0.3 } = opts;
+  const { tolerance = 0.01, angularTolerance = 0.3, fit = false } = opts, tag = fit ? '|fit' : '';   // fit: a mesh to PRINT (below)
   requireSolid(shape, 'shape');
   const kids = compoundParts.of(shape);
-  if (kids?.length) return cachedMesh(shape, tolerance, angularTolerance, () => mergeMeshes(kids.map((k) => tessellate(k, opts))));
+  if (kids?.length) return cachedMesh(shape, tolerance, angularTolerance, () => mergeMeshes(kids.map((k) => tessellate(k, opts))), tag);
   return cachedMesh(shape, tolerance, angularTolerance, () => {
     // A moved copy's mesh is its source's mesh, moved: a knob turn or an explode re-meshes nothing.
     const mv = movedMesh.of(shape), src = mv?.from();
@@ -1843,11 +1843,7 @@ export function tessellate(shape, opts = {}) {
     // 21k-triangle thread refine into 259k triangles and 9 s.
     // The coarse mesh is asked for as a mesh of its own, so it is kept: a part over the budget is the same mesh at
     // every finer tolerance, and the viewer (diag/2000) and the clash checks (0.05) each meshed an engraved cap for half a second.
-    if (tolerance < COARSE) {
-      const coarse = tessellate(shape, { tolerance: COARSE, angularTolerance });
-      if ((coarse.indices.length / 3) * (COARSE / tolerance) > MESH_BUDGET) return coarse;
-    }
-    return meshOnDisk(shape, tolerance, angularTolerance, () => attempt('tessellation', () => {
+    const meshAt = (tolerance) => meshOnDisk(shape, tolerance, angularTolerance, () => attempt('tessellation', () => {
     const mesh = shape.mesh({ tolerance, angularTolerance });
     const groups = mesh.faceGroups ?? [];
     return {
@@ -1859,7 +1855,21 @@ export function tessellate(shape, opts = {}) {
       faces: groups.map((g) => ({ first: g.start / 3, count: g.count / 3, faceId: g.faceId })),
     };
     }));
-  });
+    if (tolerance < COARSE) {
+      const coarse = tessellate(shape, { tolerance: COARSE, angularTolerance });
+      const finest = COARSE * (coarse.indices.length / 3) / MESH_BUDGET;   // the finest tolerance that guess allows
+      if (tolerance < finest) {
+        if (!fit || finest >= COARSE) return coarse;
+        // fit: a mesh to PRINT wants round, not fast: a knob with a serrated bore, sent to the slicer at the coarse 0.1,
+        // printed as a 45-sided polygon. So it starts at the finest the guess allows and is refined by halves while the
+        // REAL count stays under half the budget (many small faces make the guess several times too high).
+        let t = finest, mesh = meshAt(t);
+        while (t > tolerance && mesh.indices.length / 3 < MESH_BUDGET / 2) { t = Math.max(tolerance, t / 2); mesh = meshAt(t); }
+        return mesh;
+      }
+    }
+    return meshAt(tolerance);
+  }, tag);
 }
 
 const HEX_IN_NAME = /\s*#([0-9a-f]{6})\b/i;

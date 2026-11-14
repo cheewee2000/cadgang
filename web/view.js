@@ -145,6 +145,7 @@ function styleMesh(m) {
     if (m.userData.opacity < 1 && SOLID_LOOKS.has(ui.look)) Object.assign(mat, { transparent: true, opacity: m.userData.opacity, depthWrite: false });
     if (m.userData.ghost) Object.assign(mat, { transparent: true, opacity: Math.min(mat.opacity, 0.15), depthWrite: false, transmission: 0 });
     if (m.userData.map && !ui.color && 'map' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) { mat.map = m.userData.map; mat.color?.set(0xffffff); }
+    if (m.geometry.getAttribute('color') && !ui.color && 'vertexColors' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) { mat.vertexColors = true; mat.color?.set(0xffffff); if ('metalness' in mat) mat.metalness = 0; }   // a mesh with a colour at each vertex (a PLY scan, an FEA stress map) shows it
     if (m.userData.glow && !m.userData.map && !ui.color && 'emissive' in mat && (SOLID_LOOKS.has(ui.look) || ui.look === 'materials')) mat.emissive.copy(mat.color).multiplyScalar(m.userData.glow);   // a lamp's lens: lit in every solid look
     mat.side = section.axis && bbox ? THREE.FrontSide : THREE.DoubleSide;
     mat.flatShading = !!m.userData.flat;
@@ -3185,8 +3186,8 @@ $('#lightSel').hidden = !NATIVE;
 $('#lightSel').addEventListener('change', (e) => {
   ui.light = e.target.value;
   try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(PREFS_KEY)), light: ui.light })); } catch {}
-});
   saveDisplay();
+});
 
 // -------------------------------------------------------------------- loop
 
@@ -3573,8 +3574,8 @@ async function loadBundle(buf, { markupFromServer = false } = {}) {
   const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
   if (!Array.isArray(head.files) || typeof head.state !== 'string') throw new Error('not a CADgang file');
   clearModel();
-  let off = 4 + n;
   displayFor = null;   // the file's state goes in first (below), and it is not this Mac's to keep until loadDisplay has had its say
+  let off = 4 + n;
   for (const f of head.files) {
     const part = buf.slice(off, off + f.bytes); off += f.bytes;
     const parts = f.cad ? parseCad(part) : await parseMesh(f.name.toLowerCase().split('.').pop(), part, f.name);
@@ -3799,8 +3800,8 @@ function commit() {
   rerender();
   history.list.splice(history.i + 1); history.list.push(s); history.i = history.list.length - 1;
   try { localStorage.setItem(PREFS_KEY, JSON.stringify({ look: ui.look, edges: ui.edges, wire: ui.wire, grid: ui.grid, ruler: ui.ruler, units: ui.units, scroll: ui.scroll, light: ui.light, ground: ui.ground, color: ui.color, ortho: ui.ortho, mode: ui.mode })); } catch {}
-}
   saveDisplay();
+}
 // View preferences outlive the page, like the theme. Section, explode and body
 // visibility belong to a file and start fresh with it.
 const PREFS_KEY = 'cadgang-view';
@@ -3897,8 +3898,8 @@ function partCmds(m) {
 }
 // SEND TO BAMBU STUDIO: each part as a binary STL in mm, placed as it sits now (explode, joints, turn), all
 // opened in the slicer together so they keep their places on the plate.
-function stlOf(m) {
-  const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry, p = g.getAttribute('position'), n = p.count / 3 | 0;
+function stlOf(m, geo = m.geometry) {
+  const g = geo.index ? geo.toNonIndexed() : geo, p = g.getAttribute('position'), n = p.count / 3 | 0;
   const dv = new DataView(new ArrayBuffer(84 + 50 * n)), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), nm = new THREE.Vector3();
   dv.setUint32(80, n, true);
   m.updateWorldMatrix(true, false);
@@ -3907,21 +3908,30 @@ function stlOf(m) {
     THREE.Triangle.getNormal(a, b, c, nm);
     [nm, a, b, c].forEach((v, k) => { dv.setFloat32(o + 12 * k, v.x, true); dv.setFloat32(o + 12 * k + 4, v.y, true); dv.setFloat32(o + 12 * k + 8, v.z, true); });
   }
-  if (g !== m.geometry) g.dispose();
+  if (g !== geo) g.dispose();
   return dv.buffer;
 }
 async function sendToSlicer(bodies) {
   bodies = bodies.filter((m) => m.isMesh && model.children.includes(m));
   if (!bodies.length) return;
   const batch = Date.now().toString(36) + Math.random().toString(36).slice(2, 8), used = new Map();
+  // A live cell document is meshed again to print (fit: as fine as each part's triangle budget allows). The mesh on screen is
+  // sized to look right in the whole view: a 40 mm knob in a wide assembly went to the slicer as a 45-sided polygon.
+  let fine = null;
+  if (liveKey !== undefined) try {
+    const all = model.children.filter((c) => c.isMesh);
+    const parts = parseCad(await fetchBuffer(`api/cells/live?tolerance=0.004&fit=1${liveKey ? `&session=${encodeURIComponent(liveKey)}` : ''}`));
+    if (parts.length === all.length && parts.every((p, i) => !p.name || p.name === all[i].userData.name))
+      fine = new Map(all.map((m, i) => { rightSideOut(parts[i].geo); return [m, parts[i].geo.applyQuaternion(rot)]; }));   // turned as the screen's is (bakeRot)
+  } catch { /* the mesh on screen goes instead */ }
   try {
     for (const m of bodies) {
       const base = nameOf(m).replace(/\.[^.]+$/, '').replace(/[^\w .-]/g, '_') || 'part', k = used.get(base) ?? 0;
       used.set(base, k + 1);
-      await fetchBuffer(`api/view/slicer?batch=${batch}&name=${encodeURIComponent(`${base}${k ? `_${k}` : ''}.stl`)}`, { method: 'PUT', body: stlOf(m) });
+      await fetchBuffer(`api/view/slicer?batch=${batch}&name=${encodeURIComponent(`${base}${k ? `_${k}` : ''}.stl`)}`, { method: 'PUT', body: stlOf(m, fine?.get(m)) });
     }
     await api('/slicer/open', { method: 'POST', body: { batch } });
-    say(`sent ${bodies.length} part${bodies.length > 1 ? 's' : ''} to Bambu Studio`);
+    say(`sent ${bodies.length} part${bodies.length > 1 ? 's' : ''} to Bambu Studio${liveKey !== undefined && !fine ? ' (as meshed for the screen: the print mesh did not line up)' : ''}`);
   } catch (e) { say(`send to Bambu Studio failed: ${e.message}`, true); }
 }
 function showMenu(x, y, part) { showItems(x, y, [...partCmds(part), ...CMDS.filter((c) => !(ui.mode === 'joint' && /^Explode/.test(c.label)))]); }

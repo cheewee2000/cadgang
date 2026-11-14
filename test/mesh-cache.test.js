@@ -100,3 +100,16 @@ test('a part over the triangle budget is meshed once for every finer tolerance',
   assert.equal(tessellate(run.value, { tolerance: 0.1, angularTolerance: 0.02 }), fine);
   assert.equal(brepOperationStats().tessellation.count, 1);
 });
+
+test('a mesh to print (fit) is the finest the triangle budget allows, where the screen gets the coarse one', async () => {
+  await initBrep(); clearCellCache();
+  const doc = new CellDocument();
+  doc.addCell({ id: 'knob', prompt: 'k', code: 'export default ({ brep }) => brep.cylinder(20, 30)' });
+  const knob = evaluateCells(doc, 'knob').value, tris = (m) => m.indices.length / 3;
+  const coarse = tessellate(knob, { tolerance: 0.1 }), tiny = 1e-4;   // far finer than the budget allows for any part
+  assert.equal(tessellate(knob, { tolerance: tiny }), coarse, 'over the budget, the screen keeps the coarse mesh');
+  const print = tessellate(knob, { tolerance: tiny, fit: true });
+  assert.ok(tris(print) > 4 * tris(coarse), `the print mesh is much finer: ${tris(print)} triangles against ${tris(coarse)}`);
+  assert.ok(tris(print) <= 2 * 40000, `and stays near the budget: ${tris(print)}`);
+  assert.equal(tessellate(knob, { tolerance: tiny }), coarse, 'and asking for it does not change what the screen gets');
+});

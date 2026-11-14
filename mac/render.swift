@@ -82,7 +82,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     /// verts: [x y z nx ny nz] per vertex, world space. idx: 3 per triangle. tri: material per triangle.
     /// mats: [r g b metalness roughness transmission ior texture glow grain axes + 12] (linear colour; texture: an index into
     /// pngs or -1, glow: how much it lights itself, a screen's picture or a lamp's lens; grain: 0 none, 1 brushed, 2 bead blast,
-    /// 3 wood, 4 3D printed, 5 laser cut sheet, 6 tumbled; axes: the grain's axis * 4 + the next (the body's longest and middle, a print's build direction first); then the three rows of world -> the body's own millimetres,
+    /// 3 wood, 4 3D printed, 5 laser cut sheet, 6 tumbled, 7 Cordura, 8 webbing, 9 velcro; axes: the grain's axis * 4 + the next (the body's longest and middle, a print's build direction first); then the three rows of world -> the body's own millimetres,
     /// where the grain lives, so it stays on a part that moves). uv: [u v] per vertex (zeros where untextured).
     /// lights: [x y z dx dy dz r g b cosOuter cosInner] per lamp (a glTF's spots and points; a point has cos -2, -1), colour times
     /// intensity in the sun's units at 1 m (scene mm), falling off with the square of the distance.
@@ -522,6 +522,8 @@ final class PathTracer: NSObject, MTKViewDelegate {
     //     along A, scratches 0.025 to 0.08 mm apart; every cut edge carries the laser's striations, fine lines through the thickness
     //     about 0.1 mm apart on a duller, slightly rough surface, with a patch of straw heat tint here and there
     //   6 tumbled (ceramic media): no direction, small scuffs 0.03 to 0.1 mm across, the same on faces and edges
+    //   7 Cordura: a plain weave on the pair of the body's axes the face lies in, yarns about 0.7 mm apart going over and under, each a
+    //     rounded ridge with its filaments; 8 webbing: ribs across the width, about 1.2 mm apart along A; 9 velcro loop: a fuzz
     static void grain(Mat m, float3 pw, thread float3& n, thread float3& col) {
         int kind = int(m.tex.z + 0.5), code = int(m.tex.w + 0.5);
         float3 p = float3(dot(m.r0.xyz, pw) + m.r0.w, dot(m.r1.xyz, pw) + m.r1.w, dot(m.r2.xyz, pw) + m.r2.w);
@@ -550,6 +552,22 @@ final class PathTracer: NSObject, MTKViewDelegate {
         } else if (kind == 6) {
             d = (float3(vnoise(p * 9.0), vnoise(p * 9.0 + 31.7), vnoise(p * 9.0 + 71.3)) - 0.5) * 0.22
               + (float3(vnoise(p * 30.0), vnoise(p * 30.0 + 17.3), vnoise(p * 30.0 + 53.9)) - 0.5) * 0.3;
+        } else if (kind == 7) {
+            float3 an = abs(no);
+            int k = an.z > an.x && an.z > an.y ? 2 : an.y > an.x ? 1 : 0;   // the axis the face looks along; the weave lies on the other two
+            float3 U = axis((k + 1) % 3), V = axis((k + 2) % 3);
+            float2 q = float2(dot(p, U), dot(p, V)) / 0.7, c = floor(q), f = fract(q) - 0.5;
+            bool over = fract((c.x + c.y) * 0.5) < 0.25;   // which yarn is on top here
+            float t = over ? f.y : f.x;                     // across it
+            d = (over ? V : U) * t * 1.1 + (float3(vnoise(p * 12.0), vnoise(p * 12.0 + 31.7), vnoise(p * 12.0 + 71.3)) - 0.5) * 0.25;
+            col *= 0.62 + 0.6 * cos(3.1416 * t);
+        } else if (kind == 8) {
+            float t = fract(dot(p, A) / 1.2) - 0.5;
+            d = (A - no * dot(no, A)) * t * 1.2 + (float3(vnoise(p * 10.0), vnoise(p * 10.0 + 31.7), vnoise(p * 10.0 + 71.3)) - 0.5) * 0.2;
+            col *= 0.62 + 0.6 * cos(3.1416 * t);
+        } else if (kind == 9) {
+            d = (float3(vnoise(p * 6.0), vnoise(p * 6.0 + 31.7), vnoise(p * 6.0 + 71.3)) - 0.5) * 1.2;
+            col *= 0.7 + 0.6 * vnoise(p * 3.0);
         } else {
             float3 q = normalize(B + 0.5 * cross(A, B));   // across the width, leaning through the thickness: lines on the face and the edge
             float3 slow = qa * 0.05 + A * dot(p, A) * 0.012;   // the lines wander a little across the board and hardly at all along it

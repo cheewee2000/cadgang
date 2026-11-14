@@ -26,6 +26,10 @@ test('material words in the name win', () => {
     ['UR controller, steel, white powder coat', [], 'powder_white'],
     ['cap, titanium', [], 'titanium'],
     ['plug Ti-6Al-4V grade 5', [], 'titanium'],
+    ['fabric tray A, laptop, Cordura nylon', [], 'cordura'],   // soft goods beat the nylon they are made of
+    ['laptop strap, nylon webbing', [], 'webbing'],
+    ['velcro loop patch, nylon', [], 'velcro'],
+    ['pull tag, nylon grosgrain', [], 'webbing'],
   ]) assert.equal(guessMaterial(name, path), want, name);
 });
 
