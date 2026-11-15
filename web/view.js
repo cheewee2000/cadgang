@@ -2669,14 +2669,14 @@ document.addEventListener('drop', async (e) => {
 });
 $('#openBtn').addEventListener('click', () => $('#fileInput').click());
 
-// RECENT, beside Open: the last ten files (or sets of files) opened by path, newest first, kept in
+// RECENT, beside Open: the last hundred files (or sets of files) opened by path, newest first, kept in
 // this browser. A file dropped in has no path to open again, so it is not listed.
 const RECENT_KEY = 'cadgang-recent';
 const recentList = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch { return []; } };
 function remember(paths) {
   if (follow || !paths.every((p) => p.startsWith('/'))) return;
   const k = paths.join('|');
-  const list = [{ paths, at: new Date().toISOString() }, ...recentList().filter((r) => r.paths.join('|') !== k)].slice(0, 10);
+  const list = [{ paths, at: new Date().toISOString() }, ...recentList().filter((r) => r.paths.join('|') !== k)].slice(0, 100);
   try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch {}
   window.webkit?.messageHandlers?.cadgang?.postMessage({ cmd: 'recent', list: list.map((r) => r.paths) });   // File › Open Recent
 }
