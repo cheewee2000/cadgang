@@ -34,6 +34,7 @@ assert.match(brief, /"fillet this corner 3mm"/);
 assert.match(brief, new RegExp(`a straight edge along \\[0, 0, -?1\\], ${edge.length} mm.*\\(0\\.4 mm from the point\\)`));   // the edge it points at, first
 assert.match(brief, /Cell 'plate' makes that body\. Its code now:\n```js\nexport const params/);
 assert.match(brief, /done \["n1"\]/);
+assert.equal((await api(`/markup?subject=${encodeURIComponent(subject)}`)).markups[0].working, true);   // handed over: orange in the window
 if (only === 'setup') { await client.close(); process.exit(0); }
 
 // A change that fails to evaluate leaves the note open; one that works marks it.

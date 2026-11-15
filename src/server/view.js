@@ -162,6 +162,14 @@ export function viewRouter({ dataDir, broadcast = () => {}, pointed = async () =
   const marked = new Set();
   let rev = Date.now(); const waiting = new Set();
   const wrote = (subject, markups) => { marked.add(subject); rev++; for (const go of [...waiting]) go(); broadcast({ type: 'markup_changed', subject, count: markups.length }); };
+  // Handed to Claude (the brief went out): the file's open marks are working, drawn orange until they are done.
+  // ponytail: nothing takes it back if that session dies first; the mark stays orange and open, and the next session is handed it again.
+  const began = (subject) => {
+    const markups = readMarkup(subject);
+    if (!markups.some((m) => !m.done && !m.working)) return;
+    const next = markups.map((m) => (m.done || m.working ? m : { ...m, working: true }));
+    fsSync.writeFileSync(markupPath(subject), JSON.stringify(next)); wrote(subject, next);
+  };
   r.get('/markup/open', async (req, res) => {
     if (req.query.wait && Number(req.query.since) === rev) await new Promise((done) => {
       const go = () => { clearTimeout(timer); waiting.delete(go); done(); };
@@ -175,7 +183,7 @@ export function viewRouter({ dataDir, broadcast = () => {}, pointed = async () =
       .filter((s) => held(s, dir) || (!!dir && dir === newest && ![...claude.values()].some((v) => held(s, v.cwd))))
       .map((subject) => { const open = readMarkup(subject).filter((m) => !m.done), noted = open.filter((m) => m.text); return { subject, ids: open.map((m) => m.id), noted: noted.map((m) => m.id) }; })   // noted: the ones that carry text
       .filter((f) => f.ids.length);
-    if (req.query.brief === '1') for (const f of files) f.brief = await brief(f.subject, readMarkup(f.subject).filter((m) => !m.done));
+    if (req.query.brief === '1') for (const f of files) { f.brief = await brief(f.subject, readMarkup(f.subject).filter((m) => !m.done)); began(f.subject); }
     res.json({ rev, files });
   });
   // THE BRIEF: a file's open markups as Claude reads them, with the note. On a live cell document each note comes

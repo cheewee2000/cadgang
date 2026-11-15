@@ -22,6 +22,10 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
   // A mark Claude has acted on (done: true, via cadgang_markup_done) stays as a record, in Infinite
   // Machine green at 30%: what was asked and where, without competing with what is still open.
   const DONE = '#00ff57', DONE_ALPHA = 0.3;
+  // A mark handed to Claude and not done yet (working: true, set by the server as the brief goes out) is orange:
+  // received, being worked on. Done wins over it.
+  const WORKING = '#ef8933';
+  const inkOf = (item) => (item.done ? DONE : item.working ? WORKING : item.color || COLOR);
   // The pen: colour + width (px) for the next mark, kept per viewer
   const PEN_KEY = 'cadgang.pen';
   let pen = { color: COLOR, width: 2 };
@@ -33,7 +37,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     if (!mats.has(k)) mats.set(k, { line: new LineMaterial({ color, linewidth: width, depthTest: false, transparent: true, opacity }), solid: new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: opacity < 1, opacity }) });
     return mats.get(k);
   };
-  const looks = (item) => (item.done ? [DONE, item.width, DONE_ALPHA] : [item.color, item.width, 1]);
+  const looks = (item) => (item.done ? [DONE, item.width, DONE_ALPHA] : [item.working ? WORKING : item.color, item.width, 1]);
   const fatLine = (pts, mat) => new Line2(new LineGeometry().setPositions(pts.flatMap((p) => p.toArray())), mat);
   let tool = null;
   let editId = null, imgDrag = null;   // the picture being edited (by id: the server's echo replaces items), and its drag
@@ -193,7 +197,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
     ctx.font = font;
     const lines = String(item.text).split('\n');
     c.width = Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width)) + px * 0.4); c.height = Math.ceil(px * 1.25 * lines.length + px * 0.2);
-    ctx.font = font; ctx.fillStyle = item.done ? DONE : item.color || COLOR; ctx.textBaseline = 'middle';
+    ctx.font = font; ctx.fillStyle = inkOf(item); ctx.textBaseline = 'middle';
     lines.forEach((l, i) => ctx.fillText(l, px * 0.2, px * (0.725 + 1.25 * i)));
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
     const h = (item.size || orbit.dist * 0.02) * lines.length, w = h * c.width / c.height;
@@ -368,7 +372,7 @@ export function createMarkup({ THREE, renderer, scene, getCamera, orbit, getTarg
         el.className = 'note-label' + (item.done ? ' done' : '');
         el.textContent = item.text;
         el.dataset.id = item.id;
-        el.style.setProperty('--tag', item.done ? DONE : item.color || COLOR);
+        el.style.setProperty('--tag', inkOf(item));
         layer.appendChild(el);
       }
     }
