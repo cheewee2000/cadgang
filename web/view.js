@@ -2523,7 +2523,7 @@ async function parseMesh(ext, buffer, name, beside = '') {   // beside: where a 
   return collectGeometries(gltf.scene, gltf.parser.associations);
 }
 
-function parseCad(buffer) {
+function parseCad(buffer, edges = true) {   // edges: false for a mesh that is only printed
   const [nPos, nIdx, nFaces, nBodies, nNameBytes, nNrm] = new Uint32Array(buffer, 0, 6);
   let off = 24;
   const pos = new Float32Array(buffer, off, nPos); off += nPos * 4;
@@ -2548,7 +2548,7 @@ function parseCad(buffer) {
     if (sub.nrm) geo.setAttribute('normal', new THREE.BufferAttribute(sub.nrm, 3));
     geo.setIndex(new THREE.BufferAttribute(sub.idx, 1));
     const n = typeof names[b] === 'string' ? { name: names[b] } : names[b];   // older servers send bare names
-    parts.push({ geo, edgeLines: faceBorderEdges(sub.pos, sub.idx, own), faces: own, name: n.name, path: n.path ?? [], color: n.color ?? null, material: n.material ?? '', opacity: n.opacity ?? 1 });
+    parts.push({ geo, edgeLines: edges ? faceBorderEdges(sub.pos, sub.idx, own) : null, faces: own, name: n.name, path: n.path ?? [], color: n.color ?? null, material: n.material ?? '', opacity: n.opacity ?? 1 });
   }
   return parts;
 }
@@ -3913,6 +3913,7 @@ function stlOf(m, geo = m.geometry) {
   if (g !== geo) g.dispose();
   return dv.buffer;
 }
+const PRINT_MM = 0.01, PRINT_RAD = 0.1;   // a CAD file's print mesh: chord error in mm, and the most a facet may turn (63 sides to the smallest circle)
 async function sendToSlicer(bodies) {
   bodies = bodies.filter((m) => m.isMesh && model.children.includes(m));
   if (!bodies.length) return;
@@ -3922,10 +3923,26 @@ async function sendToSlicer(bodies) {
   let fine = null;
   if (liveKey !== undefined) try {
     const all = model.children.filter((c) => c.isMesh);
-    const parts = parseCad(await fetchBuffer(`api/cells/live?tolerance=0.004&fit=1${liveKey ? `&session=${encodeURIComponent(liveKey)}` : ''}`));
+    const parts = parseCad(await fetchBuffer(`api/cells/live?tolerance=0.004&fit=1${liveKey ? `&session=${encodeURIComponent(liveKey)}` : ''}`), false);
     if (parts.length === all.length && parts.every((p, i) => !p.name || p.name === all[i].userData.name))
       fine = new Map(all.map((m, i) => { rightSideOut(parts[i].geo); return [m, parts[i].geo.applyQuaternion(rot)]; }));   // turned as the screen's is (bakeRot)
   } catch { /* the mesh on screen goes instead */ }
+  // A CAD file (STEP, IGES) opened by path is meshed again to print too. On screen its chord error is 0.0008 of the whole file's
+  // size and a facet may turn 0.5 rad: a caster housing in a suitcase went to the slicer with its bosses as 12-sided polygons.
+  // ponytail: the whole file is meshed again (10 s for a 25 MB assembly, then kept on disk), not just the parts sent, and a file
+  // dropped in or inside a .cadgang project has no path to read again, so it goes as meshed for the screen. A per-part mesh if that hurts.
+  else for (const file of new Set(bodies.map((m) => m.userData.file))) {
+    const p = subject.split('|').find((s) => s.includes('/') && s.split('/').pop() === file), all = model.children.filter((c) => c.isMesh && c.userData.file === file);
+    if (!p || !CAD_EXT.test(file) || all.reduce((n, m) => n + (m.geometry.index ?? m.geometry.attributes.position).count / 3, 0) > 1e6) continue;   // a million triangles on screen is ten at this fineness
+    try {
+      say(`meshing ${file} to print…`);
+      const back = new THREE.Matrix4().makeRotationFromQuaternion(rot.clone().invert());   // the file's own frame: the importer's deflection is a share of the box it measures there
+      const size = all.reduce((b, m) => b.union(m.geometry.boundingBox.clone().applyMatrix4(back)), new THREE.Box3()).getSize(new THREE.Vector3());
+      const parts = parseCad(await fetchBuffer(`api/view/tessellate?path=${encodeURIComponent(p)}&deflection=${(3 * PRINT_MM / (size.x + size.y + size.z)).toPrecision(2)}&angular=${PRINT_RAD}`, { method: 'POST' }), false);
+      if (parts.length === all.length && parts.every((q, i) => !q.name || q.name === all[i].userData.name))
+        all.forEach((m, i) => { rightSideOut(parts[i].geo); (fine ??= new Map()).set(m, parts[i].geo.applyQuaternion(rot)); });
+    } catch { /* the mesh on screen goes instead */ }
+  }
   try {
     for (const m of bodies) {
       const base = nameOf(m).replace(/\.[^.]+$/, '').replace(/[^\w .-]/g, '_') || 'part', k = used.get(base) ?? 0;
@@ -3933,7 +3950,7 @@ async function sendToSlicer(bodies) {
       await fetchBuffer(`api/view/slicer?batch=${batch}&name=${encodeURIComponent(`${base}${k ? `_${k}` : ''}.stl`)}`, { method: 'PUT', body: stlOf(m, fine?.get(m)) });
     }
     await api('/slicer/open', { method: 'POST', body: { batch } });
-    say(`sent ${bodies.length} part${bodies.length > 1 ? 's' : ''} to Bambu Studio${liveKey !== undefined && !fine ? ' (as meshed for the screen: the print mesh did not line up)' : ''}`);
+    say(`sent ${bodies.length} part${bodies.length > 1 ? 's' : ''} to Bambu Studio${bodies.some((m) => !fine?.get(m) && (liveKey !== undefined || CAD_EXT.test(m.userData.file))) ? ' (as meshed for the screen: no print mesh for it)' : ''}`);
   } catch (e) { say(`send to Bambu Studio failed: ${e.message}`, true); }
 }
 function showMenu(x, y, part) { showItems(x, y, [...partCmds(part), ...CMDS.filter((c) => !(ui.mode === 'joint' && /^Explode/.test(c.label)))]); }

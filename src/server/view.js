@@ -535,14 +535,15 @@ export function viewRouter({ dataDir, broadcast = () => {}, pointed = async () =
       const t0 = Date.now();
       // Deflection is a bbox ratio: 0.001 is CAD-viewer quality; coarser for huge assemblies is the caller's call.
       const deflection = parseFloat(req.query.deflection || '0.0008');
+      const angular = parseFloat(req.query.angular || '0.5');   // radians a facet may turn; Send to Bambu Studio asks for 0.1 and a finer deflection
       // The same bytes, read the same way, by the same importer: the import made last time is on disk.
-      const key = crypto.createHash('sha1').update(src.buffer).update(`|${path.basename(src.name)}|${deflection}|${IMPORT_STAMP}`).digest('hex');
+      const key = crypto.createHash('sha1').update(src.buffer).update(`|${path.basename(src.name)}|${deflection}${angular === 0.5 ? '' : `|${angular}`}|${IMPORT_STAMP}`).digest('hex');
       const file = IMPORT_DIR && path.join(IMPORT_DIR, key);
       let packed = file && await fs.readFile(file).catch(() => null), timings = { cached: true };
       if (packed) fs.utimes(file, new Date(), new Date()).catch(() => {});   // read again: the last to be pruned
       else if (importing.has(key)) ({ packed, timings } = await importing.get(key).then((r) => ({ ...r, timings: { ...r.timings, shared: true } })));
       else {
-        const job = importCadFile(src.buffer, { name: src.name, linearDeflection: deflection }).then((m) => ({ packed: pack(m), timings: m.timings ?? {} })).finally(() => importing.delete(key));
+        const job = importCadFile(src.buffer, { name: src.name, linearDeflection: deflection, angularDeflection: angular }).then((m) => ({ packed: pack(m), timings: m.timings ?? {} })).finally(() => importing.delete(key));
         importing.set(key, job);
         ({ packed, timings } = await job);
         if (file) fs.mkdir(IMPORT_DIR, { recursive: true }).then(() => fs.writeFile(`${file}.tmp`, packed)).then(() => fs.rename(`${file}.tmp`, file)).catch(() => {});   // a cache: never half a file under the real name
