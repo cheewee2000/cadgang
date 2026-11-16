@@ -16,6 +16,14 @@ Download the latest `cadgang-<version>.zip` from the [releases](https://github.c
 
 To build it yourself: `npm install && npm run build` → `dist/cadgang.app` (Swift WKWebView shell, bundled node, Sparkle). `npm run release` builds, signs the zip for Sparkle, publishes the zip and appcast to the VPS, and creates the GitHub release.
 
+## iPhone and iPad
+
+`ios/` is a second screen for the Mac app: it shows what the Mac has open, follows when that changes (the Mac's windows are a strip of tabs; **Follow** trails the one in front), and its markups are the Mac's, so an arrow drawn on the phone reaches Claude like one drawn on the Mac. It is the Mac's own page (`/view?follow`) in a web view, so the phone and the Mac must be on the same network and CADgang must be open on the Mac.
+
+The app finds the Mac by itself: it looks up the Macs on the network and asks each whether CADgang is open there. With several, it lists them; **Mac** in the footer brings the list back. A Mac it cannot find (Handoff and AirPlay receiving both off, or another network such as a VPN) is typed in by address.
+
+`ios/build.sh` builds it for the simulator; `ios/build.sh <device name>` builds, signs and installs it on a device (Xcode and `xcodegen` needed; the team is set in `ios/project.yml`). On a phone the page gives the model the screen: one-line header and footer, the lists folded.
+
 ## Web
 
 ```bash

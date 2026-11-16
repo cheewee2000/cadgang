@@ -573,12 +573,14 @@ new ResizeObserver(() => { clearTimeout(fitNames.t); fitNames.t = setTimeout(fit
  * Both are remembered per browser.
  */
 const BODIES_KEY = 'cadgang.bodies';
+// A phone, or a tablet held upright (the iOS app): the Bodies, Joints and States lists start folded, so the model shows. Whoever unfolds one keeps it so.
+const PHONE = matchMedia('(pointer: coarse) and (max-width: 1100px), (pointer: coarse) and (max-height: 500px)').matches;
 function bodiesHead() {
   const panel = $('#bodies'), column = panel.parentElement;
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(BODIES_KEY) || '{}'); } catch {}
   if (saved.width) column.style.width = `${saved.width}px`;
-  panel.classList.toggle('min', !!saved.min);
+  panel.classList.toggle('min', !!(saved.min ?? PHONE));
   const head = document.createElement('div'); head.className = 'bodies-head';
   const btn = document.createElement('button'); btn.className = 'ghost fold';   // at the left, like every other panel's fold
   const paint = () => { const min = panel.classList.contains('min'); btn.textContent = min ? '+' : '−'; btn.title = min ? 'Show the bodies' : 'Fold the list'; };
@@ -2102,7 +2104,7 @@ function renderJoints() {
   el.hidden = !joints.length && ui.mode !== 'joint';   // the joints in either mode; in Joint mode the hints even before the first one
   const div = (className, textContent) => Object.assign(document.createElement('div'), { className, textContent });
   const head = div('joints-head', '');
-  const panelFolded = !!jointFolds.panel;
+  const panelFolded = !!(jointFolds.panel ?? PHONE);
   el.classList.toggle('folded', panelFolded);
   head.append(foldBtn(panelFolded, () => { jointFolds.panel = !panelFolded; saveJointFolds(); renderJoints(); }),
     Object.assign(document.createElement('span'), { className: 'joints-title', textContent: joints.length ? `Joints (${joints.length})` : 'Joints', title: JOINT_HINTS }));   // how to make and move joints: on hover, not always in the way
@@ -2291,7 +2293,7 @@ const STATE_FOLD = 'cadgang.statesFold';
 function renderStates() {
   const el = $('#states');
   el.hidden = !model.children.length;
-  const folded = localStorage.getItem(STATE_FOLD) === '1';
+  const folded = (localStorage.getItem(STATE_FOLD) ?? (PHONE ? '1' : '0')) === '1';
   el.classList.toggle('folded', folded);
   const btn = (textContent, title, onclick) => Object.assign(document.createElement('button'), { className: 'ghost', textContent, title, onclick });
   const head = Object.assign(document.createElement('div'), { className: 'joints-head' });

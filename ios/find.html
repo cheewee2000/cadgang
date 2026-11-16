@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CADgang</title>
+<style>
+  @font-face { font-family: "Space Mono"; src: url(SpaceMono-Regular.ttf); }
+  * { box-sizing: border-box; border-radius: 0; font: 400 14px/20px "Space Mono", monospace; color: #000000; -webkit-appearance: none; }
+  body { margin: 0; padding: 24px 16px; min-height: 100vh; background: #ffffff; display: flex; flex-direction: column; gap: 24px; }
+  p { margin: 0; max-width: 44ch; }
+  #macs, form { display: flex; flex-direction: column; gap: 8px; max-width: 44ch; }
+  button, input { border: 1px solid #000000; background: #ffffff; padding: 12px; text-align: left; width: 100%; }
+  footer { margin-top: auto; font-size: 12px; }
+</style>
+</head>
+<body>
+  <div>CW&amp;T&nbsp;·&nbsp;CADGANG</div>
+  <p id="say">Looking for CADgang on this network…</p>
+  <div id="macs"></div>
+  <form id="by">
+    <label for="addr">Or the Mac's address</label>
+    <input id="addr" placeholder="192.168.1.20" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button>Open</button>
+  </form>
+  <footer>CWT_SW_CADGANG_VIEW</footer>
+<script>
+  const go = (addr) => { location.href = `http://${/:\d+$/.test(addr) ? addr : addr + ':4477'}/view?follow`; };
+  // The app calls this with the Macs it has found: { macs: [{ name, addr }], note }.
+  window.macs = ({ macs, note }) => {
+    document.querySelector('#say').textContent = note || (macs.length ? 'CADgang is open on:' : 'Looking for CADgang on this network… Open CADgang on a Mac on the same Wi-Fi.');
+    document.querySelector('#macs').replaceChildren(...macs.map((m) => {
+      const b = Object.assign(document.createElement('button'), { textContent: `${m.name}  ${m.addr.replace(/:4477$/, '')}` });
+      b.onclick = () => go(m.addr);
+      return b;
+    }));
+  };
+  document.querySelector('#by').onsubmit = (e) => { e.preventDefault(); const v = document.querySelector('#addr').value.trim(); if (v) go(v); };
+</script>
+</body>
+</html>

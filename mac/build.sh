@@ -27,7 +27,7 @@ cp "$(command -v node)" "$RES/node"
 # the iconset-built icns is the fallback for older macOS. Both come from mac/icon/make.mjs.
 if [ -d mac/AppIcon.icon ]; then
   ICONS=$(mktemp -d)
-  xcrun actool mac/AppIcon.icon --compile "$ICONS" --platform macosx --minimum-deployment-target "$MIN" \
+  xcrun actool "$PWD/mac/AppIcon.icon" --compile "$ICONS" --platform macosx --minimum-deployment-target "$MIN" \
     --app-icon AppIcon --output-partial-info-plist "$ICONS/p.plist" >/dev/null
   cp "$ICONS/Assets.car" "$RES/Assets.car"; cp "$ICONS/AppIcon.icns" "$RES/AppIcon.icns"; rm -rf "$ICONS"
 elif [ -d mac/AppIcon.iconset ]; then

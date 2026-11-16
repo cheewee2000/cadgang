@@ -450,3 +450,34 @@ header #explode { width: 100px; }
 #cellsGrip:hover { background: var(--rule); }
 #cellsFrame { flex: 1 1 auto; min-width: 0; border: 0; height: 100%; }
 body.cells-drag #cellsFrame, body.cells-drag #viewport { pointer-events: none; }   /* the iframe would swallow the drag */
+/* A PHONE-SIZED WINDOW (the iOS app, ios/): the model gets the screen. The header and the footer are one line each,
+   scrolled sideways; the file buttons and Share go (a phone follows the Mac's files, and a menu would be cut by the
+   scrolling line); the markup tools wrap along the top of the view; the Bodies, Joints and States lists start
+   folded (view.js PHONE). */
+@media (pointer: coarse) and (max-width: 700px), (pointer: coarse) and (max-height: 500px) {   /* coarse: a narrow Mac window keeps the desktop layout */
+  header, footer { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; padding: 4px var(--sp-2); scrollbar-width: none; }
+  header::-webkit-scrollbar, footer::-webkit-scrollbar, .tabs::-webkit-scrollbar { display: none; }
+  header .logo, header .proj-sep, header .file-tools, header .share { display: none; }
+  header .brand { flex: none; min-width: 0; max-width: 40vw; }
+  header .toolbar { margin-left: 0; }
+  footer > *, footer > #measures, footer > #weight, footer > #stats { flex: none; }
+  .tabs { padding: 4px var(--sp-2); }
+  .markup-tools { left: var(--sp-2); right: var(--sp-2); top: var(--sp-2); flex-wrap: wrap; justify-content: flex-end; }
+  .hud { left: var(--sp-2); }
+  .hud-tl { top: calc(var(--sp-2) + 68px); }   /* under the two rows of markup tools */
+  .hud-tl, .bodies, .joints, .states { max-width: calc(100vw - 2 * var(--sp-2)); }
+  .hud-br { right: var(--sp-2); bottom: var(--sp-2); }
+  .hud-br > .viewcube { align-self: flex-end; flex-direction: column-reverse; }   /* Fit and the scale reference over a smaller cube, at the right edge */
+  .viewcube canvas { width: 80px; height: 80px; }
+  .hud-bl { bottom: calc(var(--sp-2) + 40px); flex-wrap: wrap-reverse; max-width: calc(100% - 110px); }   /* over the section bar, left of the cube, stacking upward */
+}
+@media (pointer: coarse) and (max-height: 500px) and (min-width: 701px) { .hud-tl { top: calc(var(--sp-2) + 34px); } }   /* a phone on its side: the markup tools are one row */
+/* A TABLET UPRIGHT (an iPad in portrait, or sharing its screen): the header wraps instead of running off the edge, the
+   lists start a row lower so the markup tools clear the Planes row, and the footer scrolls sideways. */
+@media (pointer: coarse) and (min-width: 701px) and (max-width: 1100px) and (min-height: 501px) {
+  header { flex-wrap: wrap; }
+  .hud-tl { top: calc(var(--sp-3) + 34px); }
+  footer { justify-content: flex-start; overflow-x: auto; scrollbar-width: none; }
+  footer::-webkit-scrollbar { display: none; }
+  footer > *, footer > #measures, footer > #weight, footer > #stats { flex: none; }
+}
