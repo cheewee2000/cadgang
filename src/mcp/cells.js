@@ -199,7 +199,10 @@ soft — softgoods the way CLO works a garment: pieces cut flat from fabric, sew
   'name  cut N  fabric  W x H mm  allowance a' on TEXT). THE PATTERN IS THE DELIVERABLE: the sewer cuts from the DXF,
   so get names, quantities, allowances, notches and lengths right first; the drape is a rough picture of how the pieces
   sit (it settles to the rest shape; it is not an animation). mm throughout.
-  soft.fabric('cordura-500d' | 'nylon-210d' | 'spacer-mesh' | 'eva-10mm' | {weight g/m², thickness, stretch, shear, bend 0..1, friction, maxStretch %})
+  soft.fabric('cordura-500d' | 'nylon-210d' | 'spacer-mesh' | 'eva-10mm' | {weight g/m², thickness, stretch, shear, bend 0..1, friction, maxStretch %, rigidity N·mm})
+    rigidity is a MEASURED bending stiffness and replaces the bend factor: the fabric's weight in N/mm² times its bending length cubed (the
+    bending length is half the overhang at which a strip droops 41.5°, ASTM D1388). A cantilever of it then droops what a beam does, so a
+    panel holds or loses its shape as the real cloth would. Without it bend is a solver factor and the shape is only a picture.
   soft.avatar({chest: 1000, waist: 860, hip: 980, torso: 480, shoulders: 400, neck: 390, head: 230, arm: 300})  a mannequin to
     drape on (torso, neck, head, arms at the sides): circumferences and lengths, standing up z, hip at z 0, front toward +y,
     centred on x; translate it to where the wearer stands against the frame. A strap over the shoulder passes between
@@ -214,6 +217,10 @@ soft — softgoods the way CLO works a garment: pieces cut flat from fabric, sew
       .pin([u, v], [x, y, z])  tack a pattern point to a world point (a bar tack, a rivet, a strap end on its frame anchor);
         pins hold the piece inextensible from there, so a strap between two pins hangs as it would
       .edge(i, j = i + 1)  the outline from point i to point j, for seams
+    g.weight(name, [x, y, z], grams, {at, x, y})  a rigid block the cloth carries (a laptop in its sleeve, a bottle in a pocket), starting
+      centred at 'at' with its sides along x and y: it falls with gravity, rests on the cloth and the body, and sinks until the cloth under
+      it is taut (taut cloth holds any weight; bending holds only what its rigidity can). After make() it has at, axes, moved (mm), tilt
+      (deg) and turn {deg, axis} about start: draw the thing with brep.rotate(block, w.turn.deg, w.turn.axis, w.start), then translate by at - start
     g.seam(a.edge(1), b.edge(3), {flip: false, ease: 0.03})  sew two edges start to start (flip runs the second backwards);
       their lengths must match within ease, recorded like assert.*
     g.make({body, gravity: [0, 0, -1], g: 9810, steps, dt, iterations, clearance: 0.5})  -> the garment as faces; body is the

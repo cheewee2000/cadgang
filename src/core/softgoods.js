@@ -20,8 +20,12 @@
  * body as a signed distance field of its tessellation. It settles, it does not
  * simulate time: the answer is the rest shape, like CLO's "simulate" left running.
  *
- * ponytail: fabric stiffnesses are solver factors (0..1), not measured moduli —
- * move to XPBD compliance from tensile tests when a drape has to match a sample.
+ * A fabric given a measured `rigidity` (N·mm) bends as a beam of it does, and a weight
+ * (`garment.weight`) is a rigid block the cloth carries: it sinks until the cloth under
+ * it is taut.
+ *
+ * ponytail: stretch and shear are still solver factors (0..1), not measured moduli —
+ * move them to XPBD compliance from tensile tests when a strain has to match a sample.
  * No self collision, no thickness in the result (faces), no darts or pleats.
  */
 
@@ -33,6 +37,7 @@ import { GraphError } from './errors.js';
 import { toDXF } from './sheetmetal.js';
 
 // weight g/m², thickness mm, stretch/shear/bend solver stiffness 0..1, friction against the body 0..1,
+// (a spec may add rigidity, N·mm: a measured bending stiffness, used in place of bend)
 // maxStretch % elongation the fabric takes before it reads as overstrained in the checks
 const FABRICS = {
   'cordura-500d': { weight: 250, thickness: 0.6, stretch: 1.0, shear: 0.6, bend: 0.05, friction: 0.5, maxStretch: 3 },
@@ -195,7 +200,22 @@ function bodyField(body) {
 }
 
 class Garment {
-  constructor(name) { this.name = name; this.pieces = []; this.seams = []; }
+  constructor(name) { this.name = name; this.pieces = []; this.seams = []; this.weights = []; }
+
+  /**
+   * A rigid block the cloth carries (a laptop in a sleeve, a bottle in a pocket): size [x, y, z] mm and mass in grams,
+   * starting centred at `at` with its sides along x and y. It falls with gravity and comes to rest on the cloth and on the
+   * body. After make() it says where: `at` (centre), `axes`, `moved` mm, `tilt` degrees, and `turn` {deg, axis} about `start`,
+   * so the cell can draw it: brep.translate(brep.rotate(block, w.turn.deg, w.turn.axis, w.start), [w.at[0] - w.start[0], ...]).
+   */
+  weight(name, size, grams, { at = [0, 0, 0], x = [1, 0, 0], y = [0, 1, 0] } = {}) {
+    if (!Array.isArray(size) || size.length !== 3 || !size.every((s) => s > 0) || !(grams > 0)) throw new GraphError(`soft.weight('${name}') needs a size [x, y, z] in mm and a mass in grams`);
+    if (Math.hypot(...cross(norm(x), y)) < 1e-9) throw new GraphError(`soft.weight('${name}'): x and y must not be parallel`);
+    const X = norm(x), Z = norm(cross(X, y)), Y = cross(Z, X);
+    const wt = { name, size: size.map(Number), grams: Number(grams), start: [...at], axes0: [X, Y, Z], at: [...at], axes: [X, Y, Z], moved: 0, tilt: 0, turn: { deg: 0, axis: [0, 0, 1] } };
+    this.weights.push(wt);
+    return wt;
+  }
 
   /** A new piece: soft.garment('harness').piece('strap', [[0,0],[60,0],[60,500],[0,500]], soft.fabric('cordura-500d'), {grid: 10, allowance: 10, pattern: 'strap', grain: 0}); pieces naming the same pattern are one DXF, cut N */
   piece(name, outline, fab = fabric(), opts) {
@@ -228,6 +248,7 @@ class Garment {
     const x = new Float64Array(count * 3), x0 = new Float64Array(count * 3), vel = new Float64Array(count * 3), invm = new Float64Array(count);
     const fabricOf = new Array(count), thick = new Float64Array(count), cloth = new Uint8Array(count);   // cloth: inside the outline, not the rim
     const cons = [];  // [a, b, rest, k, kind]
+    const bends = [];  // [a, middle, b, compliance / dt²]: a fabric with a measured rigidity
     const bf = body ? bodyField(body) : null, field = bf?.distance ?? null;
 
     for (const gr of grids) {
@@ -247,7 +268,17 @@ class Garment {
           };
           link(i + 1, j, hu, f.stretch, 's'); link(i, j + 1, hv, f.stretch, 's');
           link(i + 1, j + 1, Math.hypot(hu, hv), f.shear, 'h'); if (i > 0) link(i - 1, j + 1, Math.hypot(hu, hv), f.shear, 'h');
-          link(i + 2, j, 2 * hu, f.bend, 'b'); link(i, j + 2, 2 * hv, f.bend, 'b');
+          if (!(f.rigidity > 0)) { link(i + 2, j, 2 * hu, f.bend, 'b'); link(i, j + 2, 2 * hv, f.bend, 'b'); continue; }
+          // ponytail: a stiff panel on a fine grid still reads softer than it is (2 N·mm on a 6 mm grid droops 3x a beam's at 4
+          // iterations; cloth, under about 1 N·mm on a 10 to 15 mm grid, is within a few percent): raise iterations for foam and board,
+          // or solve the bending implicitly when panels like that matter.
+          // a measured flexural rigidity (N·mm per mm of width) instead of the bend factor: three nodes in a row keep straight
+          // as a beam one cell wide does, k = rigidity × width / spacing³ (the solver's force unit is 1e-6 N: g, mm, s)
+          const beam = (i0, j0, i2, j2, h, wd) => {
+            if (i0 < 0 || j0 < 0 || i2 >= nu || j2 >= nv || !active[i * nv + j] || !active[i0 * nv + j0] || !active[i2 * nv + j2]) return;
+            bends.push([at(i0, j0), n, at(i2, j2), (h * h * h) / (f.rigidity * 1e6 * wd) / (dt * dt)]);
+          };
+          beam(i - 1, j, i + 1, j, hu, hv); beam(i, j - 1, i, j + 1, hv, hu);
         }
       }
     }
@@ -294,6 +325,57 @@ class Garment {
       if (Bw) for (let c = 0; c < 4; c++) { const n = Bw.nodes[c], s = Bw.w[c] * invm[n]; x[n * 3] += s * dx; x[n * 3 + 1] += s * dy; x[n * 3 + 2] += s * dz; }
     };
 
+    // Weights: rigid blocks the cloth carries. The cloth gives way to a block (it is far lighter); where the cloth is taut and
+    // comes back into it, the block gives way to the cloth instead. So a block sinks until the cloth under it is out of slack.
+    // ponytail: taut cloth holds any weight (cloth does not stretch or tear here), so the stretch reported under a load is
+    // still the solver's residual and not a strain; a block is a box, blocks do not meet each other, and cloth can dip between
+    // its own nodes round a block's corner. Compliant stretch with its multipliers kept (XPBD) when a seam's load has to be read off.
+    const blocks = this.weights.map((wt) => {
+      const [sx, sy, sz] = wt.size, M = wt.grams;
+      return { wt, h: [sx / 2, sy / 2, sz / 2], c: [...wt.start], A: wt.axes0.map((a) => [...a]), v: [0, 0, 0], om: [0, 0, 0], M, I: [(M / 12) * (sy * sy + sz * sz), (M / 12) * (sx * sx + sz * sz), (M / 12) * (sx * sx + sy * sy)], cp: null, Ap: null, sp: null };
+    });
+    const turn = (b, d) => {   // a small rotation d (radians, about world axes) of the block's own axes, kept square
+      for (let i = 0; i < 3; i++) b.A[i] = add(b.A[i], cross(d, b.A[i]));
+      b.A[0] = norm(b.A[0]); b.A[2] = norm(cross(b.A[0], b.A[1])); b.A[1] = cross(b.A[2], b.A[0]);
+    };
+    // Push the block at its point r from the centre along n, as a rigid body is pushed: against something that will not
+    // give (wn 0) the point goes the whole `depth`; against a node of inverse mass wn they share it by their masses.
+    const shove = (b, r, n, depth, wn = 0) => {
+      const rn = cross(r, n), ir = [0, 1, 2].reduce((acc, i) => add(acc, mul(b.A[i], dot(b.A[i], rn) / b.I[i])), [0, 0, 0]);
+      const s = depth / (1 / b.M + dot(rn, ir) + wn);
+      b.c = add(b.c, mul(n, s / b.M)); turn(b, mul(ir, s));
+    };
+    const into = (b, n) => {   // a node inside a block (grown by the cloth's half thickness and the clearance): how deep, and the way out through the nearest face
+      const rx = x[n * 3] - b.c[0], ry = x[n * 3 + 1] - b.c[1], rz = x[n * 3 + 2] - b.c[2];
+      let best = Infinity, k = 0, sg = 1;
+      for (let i = 0; i < 3; i++) { const a = b.A[i], pl = rx * a[0] + ry * a[1] + rz * a[2], d = b.h[i] + thick[n] - Math.abs(pl); if (d <= 0) return null; if (d < best) { best = d; k = i; sg = pl < 0 ? -1 : 1; } }
+      return { depth: best, n: mul(b.A[k], sg), r: [rx, ry, rz] };
+    };
+    const feelers = [];   // where a block feels the body: its corners, edge middles and face centres
+    for (const i of [-1, 0, 1]) for (const j of [-1, 0, 1]) for (const k of [-1, 0, 1]) if (i || j || k) feelers.push([i, j, k]);
+    const feelerAt = (b, [i, j, k]) => add(b.c, add(mul(b.A[0], i * b.h[0]), add(mul(b.A[1], j * b.h[1]), mul(b.A[2], k * b.h[2]))));
+    const pushOut = (b) => { for (let n = 0; n < count; n++) { if (!invm[n]) continue; const hit = into(b, n); if (hit) { x[n * 3] += hit.n[0] * hit.depth; x[n * 3 + 1] += hit.n[1] * hit.depth; x[n * 3 + 2] += hit.n[2] * hit.depth; } } };
+    const lam = new Float64Array(bends.length);
+    // one pass of the grid's springs (all of them, or the stretch ones alone), and one of what holds the cloth to the world and to itself
+    const links = (all) => {
+      for (const [a, b, rest, k, kind] of cons) {
+        if (!all && kind !== 's') continue;
+        const dx = x[b * 3] - x[a * 3], dy = x[b * 3 + 1] - x[a * 3 + 1], dz = x[b * 3 + 2] - x[a * 3 + 2];
+        const d = Math.hypot(dx, dy, dz); if (d < 1e-12) continue;
+        const w = invm[a] + invm[b]; if (!w) continue;
+        const s = ((d - rest) / d) * k / w;
+        x[a * 3] += dx * s * invm[a]; x[a * 3 + 1] += dy * s * invm[a]; x[a * 3 + 2] += dz * s * invm[a];
+        x[b * 3] -= dx * s * invm[b]; x[b * 3 + 1] -= dy * s * invm[b]; x[b * 3 + 2] -= dz * s * invm[b];
+      }
+    };
+    const anchors = () => {
+      for (const [n, to, max] of tethers) {
+        const dx = x[n * 3] - to[0], dy = x[n * 3 + 1] - to[1], dz = x[n * 3 + 2] - to[2], d = Math.hypot(dx, dy, dz);
+        if (d > max && d > 1e-9) { const s = (d - Math.min(d - max, RAMP)) / d; x[n * 3] = to[0] + dx * s; x[n * 3 + 1] = to[1] + dy * s; x[n * 3 + 2] = to[2] + dz * s; }
+      }
+      for (const p of pairs) project(p.A, p.to, p.B);
+    };
+
     const prev = new Float64Array(count * 3);
     // the body distance is the expensive query, so each node keeps its last answer and asks again only once it has
     // moved far enough that it could have reached the body since (a strap mid air asks almost never)
@@ -310,20 +392,42 @@ class Garment {
         vel[n * 3] = (vel[n * 3] + G[0] * dt) * 0.98; vel[n * 3 + 1] = (vel[n * 3 + 1] + G[1] * dt) * 0.98; vel[n * 3 + 2] = (vel[n * 3 + 2] + G[2] * dt) * 0.98;
         x[n * 3] += vel[n * 3] * dt; x[n * 3 + 1] += vel[n * 3 + 1] * dt; x[n * 3 + 2] += vel[n * 3 + 2] * dt;
       }
+      for (const b of blocks) {
+        b.cp = [...b.c]; b.Ap = b.A.map((a) => [...a]); b.sp = field ? feelers.map((s) => feelerAt(b, s)) : null;
+        b.v = mul(add(b.v, mul(G, dt)), 0.98); b.c = add(b.c, mul(b.v, dt)); b.om = mul(b.om, 0.98); turn(b, mul(b.om, dt));
+        pushOut(b);
+      }
+      lam.fill(0);
       for (let it = 0; it < iterations; it++) {
-        for (const [a, b, rest, k] of cons) {
-          const dx = x[b * 3] - x[a * 3], dy = x[b * 3 + 1] - x[a * 3 + 1], dz = x[b * 3 + 2] - x[a * 3 + 2];
-          const d = Math.hypot(dx, dy, dz); if (d < 1e-12) continue;
-          const w = invm[a] + invm[b]; if (!w) continue;
-          const s = ((d - rest) / d) * k / w;
-          x[a * 3] += dx * s * invm[a]; x[a * 3 + 1] += dy * s * invm[a]; x[a * 3 + 2] += dz * s * invm[a];
-          x[b * 3] -= dx * s * invm[b]; x[b * 3 + 1] -= dy * s * invm[b]; x[b * 3 + 2] -= dz * s * invm[b];
+        // bending is cheap and slow to carry along a stiff panel: four sweeps of it per iteration, there and back
+        for (let sweep = 0, nb = bends.length; sweep < 4 * nb; sweep++) {
+          const q = (sweep / nb | 0) & 1 ? nb - 1 - (sweep % nb) : sweep % nb;
+          const [a, m, b, aT] = bends[q], ws = invm[a] + 4 * invm[m] + invm[b];
+          const lx = x[a * 3] - 2 * x[m * 3] + x[b * 3], ly = x[a * 3 + 1] - 2 * x[m * 3 + 1] + x[b * 3 + 1], lz = x[a * 3 + 2] - 2 * x[m * 3 + 2] + x[b * 3 + 2], C = Math.hypot(lx, ly, lz);
+          if (C < 1e-9 || !ws) continue;
+          const dl = (-C - aT * lam[q]) / (ws + aT), s = dl / C; lam[q] += dl;
+          x[a * 3] += invm[a] * s * lx; x[a * 3 + 1] += invm[a] * s * ly; x[a * 3 + 2] += invm[a] * s * lz;
+          x[m * 3] -= 2 * invm[m] * s * lx; x[m * 3 + 1] -= 2 * invm[m] * s * ly; x[m * 3 + 2] -= 2 * invm[m] * s * lz;
+          x[b * 3] += invm[b] * s * lx; x[b * 3 + 1] += invm[b] * s * ly; x[b * 3 + 2] += invm[b] * s * lz;
         }
-        for (const [n, to, max] of tethers) {
-          const dx = x[n * 3] - to[0], dy = x[n * 3 + 1] - to[1], dz = x[n * 3 + 2] - to[2], d = Math.hypot(dx, dy, dz);
-          if (d > max && d > 1e-9) { const s = (d - Math.min(d - max, RAMP)) / d; x[n * 3] = to[0] + dx * s; x[n * 3 + 1] = to[1] + dy * s; x[n * 3 + 2] = to[2] + dz * s; }
+        links(true); anchors();
+      }
+      // What a weight rests on. Cloth the solve has just brought back into a block pushes on it with the momentum that took:
+      // little, cloth being light, so a limp panel's bending carries next to nothing and a foam one's a real share. Cloth that
+      // cannot give holds it outright: the block presses the cloth out and what cannot stretch (the stretch springs, tethers,
+      // seams, pins) answers, over and over; what still comes back into the block after that is taut, and the block moves off it.
+      // (Those pushes are taken all at once and shared out: one after another in grid order, a block crept toward the grid's start.)
+      for (const b of blocks) {
+        b.held = false;
+        for (let n = 0; n < count; n++) { if (!invm[n]) continue; const hit = into(b, n); if (hit) shove(b, hit.r, mul(hit.n, -1), hit.depth, invm[n]); }
+        for (let it = 0; it < iterations; it++) { pushOut(b); links(false); anchors(); }
+        for (let pass = 0; pass < 3; pass++) {
+          const hits = [];
+          for (let n = 0; n < count; n++) { if (!invm[n]) continue; const hit = into(b, n); if (hit) hits.push(hit); }
+          if (!hits.length) break;
+          b.held = true;
+          for (const hit of hits) shove(b, hit.r, mul(hit.n, -1), hit.depth / hits.length);
         }
-        for (const p of pairs) project(p.A, p.to, p.B);
       }
       // the body: push a node that passed inside back out along the field's gradient, and let it drag (friction)
       let maxMove = 0;
@@ -358,6 +462,18 @@ class Garment {
         const mv = cloth[n] ? Math.max(Math.abs(mx), Math.abs(my), Math.abs(mz)) : 0;
         if (mv > maxMove) { maxMove = mv; fastest = n; }
       }
+      for (const b of blocks) {
+        if (field) feelers.forEach((s, q) => {   // the block against the body, as the cloth is: out the side it came from
+          const P = feelerAt(b, s), d0 = Math.abs(field(P[0], P[1], P[2])), cl = [bf.closest[0], bf.closest[1], bf.closest[2]];
+          const out = sub(P, cl), crossed = dot(out, sub(b.sp[q], cl)) < 0, gapNow = crossed ? -d0 : d0;
+          if (gapNow < clearance) shove(b, sub(P, b.c), norm(crossed ? mul(out, -1) : out), clearance - gapNow);
+        });
+        const moved = sub(b.c, b.cp);
+        let d = [0, 0, 0]; for (let i = 0; i < 3; i++) d = add(d, mul(cross(b.Ap[i], b.A[i]), 0.5));
+        const keep = b.held ? 0.5 : 1;   // held by cloth, it does not skate on it: the cloth's friction, roughly
+        b.v = mul(moved, keep / dt); b.om = mul(d, keep / dt);
+        maxMove = Math.max(maxMove, Math.hypot(...moved) + Math.hypot(...d) * Math.max(...b.h));
+      }
       lastSpeed = maxMove / dt;
       settled = lastSpeed < settle ? settled + 1 : 0;
       stepsRun = step + 1;
@@ -368,6 +484,15 @@ class Garment {
     let gap = Infinity;
     if (field) for (let n = 0; n < count; n++) if (cloth[n]) gap = Math.min(gap, Math.abs(field(x[n * 3], x[n * 3 + 1], x[n * 3 + 2])) - fabricOf[n].thickness / 2);
     checked.push({ label: `${this.name} settled`, ok: settled >= 20, value: stepsRun, limit: steps, unit: 'steps', detail: { fastestNodeMmPerS: Number(lastSpeed.toFixed(1)), node: fastest, at: fastest < 0 ? null : [x[fastest * 3], x[fastest * 3 + 1], x[fastest * 3 + 2]].map((v) => Number(v.toFixed(1))), piece: grids.find((gr) => fastest >= gr.base && fastest < gr.base + gr.nu * gr.nv)?.piece.name ?? null } });
+    // where each weight came to rest, and the turn that takes it there from where it started
+    for (const b of blocks) {
+      const wt = b.wt, Rm = [0, 1, 2].map((r) => [0, 1, 2].map((cc) => b.A.reduce((acc, a, i) => acc + a[r] * wt.axes0[i][cc], 0)));
+      const ang = Math.acos(Math.max(-1, Math.min(1, (Rm[0][0] + Rm[1][1] + Rm[2][2] - 1) / 2)));
+      wt.at = b.c.map((q) => Number(q.toFixed(2))); wt.axes = b.A.map((a) => a.map((q) => Number(q.toFixed(5))));
+      wt.moved = Number(Math.hypot(...sub(b.c, wt.start)).toFixed(1)); wt.tilt = Number((ang * 180 / Math.PI).toFixed(1));
+      wt.turn = { deg: wt.tilt, axis: ang > 1e-6 ? norm([Rm[2][1] - Rm[1][2], Rm[0][2] - Rm[2][0], Rm[1][0] - Rm[0][1]]) : [0, 0, 1] };
+      checked.push({ label: `${wt.name} carried`, ok: true, value: wt.moved, limit: null, unit: 'mm', detail: { at: wt.at, tiltDeg: wt.tilt, grams: wt.grams, note: 'how far the weight moved from where it started before the cloth and the body held it' } });
+    }
     // did each seam close: the widest gap left between its sewn points
     const where = (A) => [0, 1, 2].map((k) => A.nodes.reduce((acc, n, c) => acc + A.w[c] * x[n * 3 + k], 0));
     for (const s of this.seams) {

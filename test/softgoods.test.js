@@ -75,3 +75,39 @@ test('avatar: torso, neck, head and two arms at the sizes asked for; seam and fa
     assert.throws(() => soft.garment().make(), /no pieces/);
   } finally { scope.dispose(); }
 });
+
+test('a weight sinks into a slack strap until the cloth under it is taut, and is carried there', () => {
+  const scope = beginBrepScope();
+  try {
+    const checked = [], soft = softNamespace(checked, []);
+    const g = soft.garment('sling');
+    // 300 of strap between corners held 260 apart: a 60 wide block in the middle hangs it in a V, 120 of cloth over 100 of span each side
+    g.piece('strap', rect(300, 100), fabric('cordura-500d'), { grid: 12.5 }).place([0, 0, 0], [1, 0, 0], [0, 1, 0])
+      .pin([0, 0], [20, 0, 0]).pin([0, 100], [20, 100, 0]).pin([300, 0], [280, 0, 0]).pin([300, 100], [280, 100, 0]);
+    const w = g.weight('block', [60, 60, 20], 1000, { at: [150, 50, 15] });
+    g.make({ steps: 8000, settle: 10 });
+    const drop = Math.sqrt(120 * 120 - 100 * 100);   // 66: how far below the pins the taut V puts the block's underside
+    assert.ok(row(checked, 'sling settled').ok, `settled: ${JSON.stringify(row(checked, 'sling settled'))}`);
+    assert.ok(Math.abs(w.at[2] - (10 - drop)) < 10, `the block hangs where the taut cloth puts it (centre z ${w.at[2]}, a taut V gives ${(10 - drop).toFixed(1)})`);
+    assert.ok(Math.abs(w.at[0] - 150) < 3 && Math.abs(w.at[1] - 50) < 3 && w.tilt < 5, `and stays put on it, level (at ${w.at}, tilt ${w.tilt})`);
+    assert.equal(row(checked, 'block carried').value, w.moved);
+  } finally { scope.dispose(); }
+});
+
+test('a fabric with a measured rigidity droops as a beam does; without one it hangs', () => {
+  const tip = (fab) => {
+    const scope = beginBrepScope();
+    try {
+      const g = softNamespace([], []).garment('flag');
+      // 100 of strip held flat over its first 12.5 (two rows of tacks), the other 87.5 free
+      g.piece('strip', rect(100, 40), fab, { grid: 12.5 }).place([0, 0, 0], [1, 0, 0], [0, 1, 0])
+        .pin([0, 0], [0, 0, 0]).pin([0, 40], [0, 40, 0]).pin([12.5, 0], [12.5, 0, 0]).pin([12.5, 40], [12.5, 40, 0]);
+      return -ops.bbox(g.make({ steps: 8000, settle: 5 })).min[2];
+    } finally { scope.dispose(); }
+  };
+  const limp = tip(fabric('cordura-500d')), stiff = tip(fabric({ name: 'stiff', rigidity: 0.5 }));
+  // a cantilever under its own weight: q L^4 / (8 D), q = 250 g/m2 = 2.45e-6 N/mm2, L = 87.5, D = 0.5 N.mm
+  const beam = (2.45e-6 * 87.5 ** 4) / (8 * 0.5);
+  assert.ok(limp > 60, `the limp strip hangs down (tip ${limp.toFixed(1)} mm below the tacks)`);
+  assert.ok(Math.abs(stiff - beam) < 0.25 * beam, `the stiff strip droops ${stiff.toFixed(1)} mm; a beam of that rigidity droops ${beam.toFixed(1)}`);
+});
