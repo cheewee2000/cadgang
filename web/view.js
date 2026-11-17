@@ -2375,11 +2375,15 @@ function closedMesh(g) {
     id[i] = j;
   }
   const N = weld.size, edges = new Map(), at = (k) => id[ix ? ix.getX(k) : k];
-  for (let k = 0; k + 2 < n; k += 3) for (let e = 0; e < 3; e++) {
-    const a = at(k + e), b = at(k + (e + 1) % 3);
-    if (a === b) continue;
-    const key = a < b ? a * N + b : b * N + a, d = a < b ? 1 : -1;
-    edges.set(key, (edges.get(key) ?? 0) + d * 1e6 + 1);   // count + 1e6·(forward − backward)
+  for (let k = 0; k + 2 < n; k += 3) {
+    // a sliver whose corners weld together has no area and bounds nothing: leave it out whole. Its two other edges are one
+    // edge twice, and counted they made a closed body look open (one such triangle in a 16,000-triangle overmold).
+    if (at(k) === at(k + 1) || at(k + 1) === at(k + 2) || at(k + 2) === at(k)) continue;
+    for (let e = 0; e < 3; e++) {
+      const a = at(k + e), b = at(k + (e + 1) % 3);
+      const key = a < b ? a * N + b : b * N + a, d = a < b ? 1 : -1;
+      edges.set(key, (edges.get(key) ?? 0) + d * 1e6 + 1);   // count + 1e6·(forward − backward)
+    }
   }
   for (const v of edges.values()) if (v !== 2) return (g.userData.closed = false);
   return (g.userData.closed = true);
