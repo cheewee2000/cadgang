@@ -106,7 +106,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         let mats8: [Float] = m.flatMap { a -> [Float] in   // six float4 per material
             func at(_ i: Int, _ d: Float) -> Float { a.count > i ? a[i] : d }
             let rows: [Float] = a.count >= 23 ? Array(a[11..<23]) : [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0]
-            return [a[0], a[1], a[2], 0, a[3], a[4], a[5], at(6, 1.5), at(7, -1), at(8, 0), at(9, 0), at(10, 0)] + rows
+            return [a[0], a[1], a[2], at(23, 0), a[3], a[4], a[5], at(6, 1.5), at(7, -1), at(8, 0), at(9, 0), at(10, 0)] + rows
         }
         var uv = [Float](repeating: 0, count: v.count / 6 * 2)   // the floor's four corners included, untextured
         if let uvData { _ = uv.withUnsafeMutableBytes { uvData.copyBytes(to: $0, count: min(uvData.count, $0.count)) } }
@@ -355,7 +355,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     struct U { float4 camPos, camFwd, camRight, camUp, sunDir, sunCol, skyTop, skyBot, bg, clip, scene; uint4 info;
                float4 pPos, pFwd, pRight, pUp, fx; uint4 tick; float4 stops[5]; float4 ground; };
     struct Vtx { packed_float3 p; packed_float3 n; };
-    struct Mat { float4 color; float4 prm; float4 tex; float4 r0, r1, r2; };   // prm: metalness, roughness, transmission, ior; tex: picture index (-1 none), glow, grain, axes; r: world -> the body's own mm
+    struct Mat { float4 color; float4 prm; float4 tex; float4 r0, r1, r2; };   // color.a: the body it is of (its first material + 1) if that body is a closed solid, else 0; prm: metalness, roughness, transmission, ior; tex: picture index (-1 none), glow, grain, axes; r: world -> the body's own mm
     struct Lamp { float4 pos; float4 dir; float4 col; };     // pos.w: cos of the cone's edge, dir.w: cos where it is full
 
     static uint pcg(thread uint& s) { s = s * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
@@ -409,32 +409,69 @@ final class PathTracer: NSObject, MTKViewDelegate {
 
     struct Hit { bool hit; float t; float3 ng; float3 n; uint mat; bool cap; uint prim; float2 bc; };
 
+    // The solid that o + d * tp is inside (its first material + 1), or 0. Every face met from there on is counted for
+    // its own body, a back face up and a front face down, and a body left more often than entered is one the point is
+    // in: the viewer's stencil count. Bodies that mate share a surface (a wire in its insulation), and the nearest hit
+    // there is either body's by chance, a ray at a time; a count kept per body does not care which comes first.
+    // Where solids overlap the last body wins, as in the viewer. Open meshes are not counted (color.a 0).
+    static uint inside(constant U& u, primitive_acceleration_structure accel, device const Vtx* vtx, device const uint* idx,
+                       device const uint* tri, device const Mat* mats, float3 o, float3 d, float tp) {
+        intersection_params prm;
+        prm.assume_geometry_type(geometry_type::triangle);
+        prm.force_opacity(forced_opacity::non_opaque);   // every face on the ray is a candidate, and none is taken
+        intersection_query<triangle_data> q(ray(o, d, tp, INFINITY), accel, prm);
+        uint ids[24]; int cnt[24]; int n = 0;
+        while (q.next()) {
+            uint i = q.get_candidate_primitive_id();
+            if (i >= u.info.w) continue;   // the floor
+            uint body = uint(mats[tri[i]].color.a);
+            if (body == 0) continue;
+            float3 a = vtx[idx[3 * i]].p, b = vtx[idx[3 * i + 1]].p, c = vtx[idx[3 * i + 2]].p;
+            int k = 0;
+            while (k < n && ids[k] != body) k++;
+            if (k == 24) continue;   // ponytail: 24 solids behind one point of the cut; the ones past that fall back to the first-hit rule in closest()
+            if (k == n) { ids[n] = body; cnt[n] = 0; n++; }
+            cnt[k] += dot(cross(b - a, c - a), d) > 0.0 ? 1 : -1;
+        }
+        uint best = 0;
+        for (int k = 0; k < n; k++) if (cnt[k] != 0 && ids[k] > best) best = ids[k];
+        return best;
+    }
+
     // Closest hit on the KEPT side of the section plane. Hits on the cut-away side are stepped past.
-    // A first kept hit on a back face means the ray entered a solid through the cut: that is the cap,
-    // at the plane (the viewer's back-face trick).
+    // A ray that comes through the plane inside a solid meets the cap there, in that solid's material (inside()).
+    // For an open mesh, a first kept hit on a back face means the same (the viewer's back-face trick).
     static Hit closest(constant U& u, primitive_acceleration_structure accel, device const Vtx* vtx, device const uint* idx,
-                       device const uint* tri, float3 o, float3 d, float tmax) {
+                       device const uint* tri, device const Mat* mats, float3 o, float3 d, float tmax) {
         intersector<triangle_data> isect;
         isect.assume_geometry_type(geometry_type::triangle);
         Hit h; h.hit = false; h.cap = false;
         bool clipOn = any(u.clip.xyz != 0.0);
         float tmin = 0.0;
+        Hit cap; cap.hit = false; cap.cap = true; cap.t = INFINITY; cap.ng = -normalize(u.clip.xyz); cap.n = cap.ng; cap.prim = 0;
+        if (clipOn) {
+            float so = dot(u.clip.xyz, o) + u.clip.w, den = dot(u.clip.xyz, d);
+            float tp = so < 0.0 && den > 0.0 ? -so / den : tmax;
+            uint body = tp < tmax ? inside(u, accel, vtx, idx, tri, mats, o, d, tp) : 0;
+            if (body > 0) { cap.hit = true; cap.t = tp; cap.mat = body - 1; }
+        }
         for (int k = 0; k < 64; k++) {
             ray r(o, d, tmin, tmax);
             auto x = isect.intersect(r, accel);
-            if (x.type == intersection_type::none) return h;
+            if (x.type == intersection_type::none) { if (cap.hit) return cap; return h; }
             float3 p = o + d * x.distance;
             uint i = x.primitive_id;
             bool isFloor = i >= u.info.w;
             if (isFloor && (d.z > 0.0 || u.skyBot.w < 0.0)) { tmin = x.distance + u.scene.y; continue; }   // met from underneath, it would hide the model: no floor (an ortho view looking up starts its rays under it while the camera is above)
             if (clipOn && !isFloor && dot(u.clip.xyz, p) + u.clip.w < 0.0) { tmin = x.distance + u.scene.y; continue; }
+            if (cap.t < x.distance) return cap;   // the cut is nearer than anything kept (the floor can be nearer than the cut)
             float3 a = vtx[idx[3 * i]].p, b = vtx[idx[3 * i + 1]].p, c = vtx[idx[3 * i + 2]].p;
             float3 ng = normalize(cross(b - a, c - a));
             if (clipOn && !isFloor && dot(ng, d) > 0.0) {
                 float den = dot(u.clip.xyz, d);
                 float tp = den != 0.0 ? -(dot(u.clip.xyz, o) + u.clip.w) / den : -1.0;
                 if (tp >= 0.0 && tp < x.distance && dot(u.clip.xyz, o) + u.clip.w < 0.0) {
-                    h.hit = true; h.cap = true; h.t = tp; h.ng = -normalize(u.clip.xyz); h.n = h.ng; h.prim = i; return h;   // entering: den > 0, face the ray
+                    h.hit = true; h.cap = true; h.t = tp; h.ng = -normalize(u.clip.xyz); h.n = h.ng; h.prim = i; h.mat = tri[i]; return h;   // entering: den > 0, face the ray
                 }
             }
             float2 bc = x.triangle_barycentric_coord;
@@ -451,7 +488,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
                          device const uint* tri, device const Mat* mats, float3 o, float3 d, float tmax = INFINITY) {
         float3 t = 1.0;
         for (int k = 0; k < 8; k++) {
-            Hit h = closest(u, accel, vtx, idx, tri, o, d, tmax);
+            Hit h = closest(u, accel, vtx, idx, tri, mats, o, d, tmax);
             if (!h.hit) return t;
             if (h.cap || mats[h.mat].prm.z < 0.5) return 0.0;
             t *= mats[h.mat].color.rgb;
@@ -605,7 +642,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
         float lastPdf = 1e9;   // the chance the ray's direction was picked with (huge: a mirror or glass, no choice)
         f.hit = false; f.n = -d; f.diff = 0.0; f.spec = 0.0; f.rough = 1.0;
         for (int depth = 0; depth < 8; depth++) {
-            Hit h = closest(u, accel, vtx, idx, tri, o, d, INFINITY);
+            Hit h = closest(u, accel, vtx, idx, tri, mats, o, d, INFINITY);
             if (depth == 1 && mirror) f.reach = h.hit ? h.t : diag * 100.0;
             if (!h.hit) {
                 if (depth == 0) { bgw = 1.0; f.p = o + d * diag * 1e3; }
@@ -618,7 +655,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
             if (depth == 0 && isFloor) bgw = smoothstep(diag * 1.5, diag * 10.0, length(p.xy - u.ground.xy));   // the floor melts into the background, by how far it is from the bodies (not from the eye: an ortho view's rays start far behind it, and it was all but gone)
             Mat m = mats[h.cap ? (u.info.w > 0 ? tri[u.info.w] + 1 : 0) : h.mat];
             float3 col = m.color.rgb;
-            if (h.cap && col.r < 0.0) col = mats[tri[h.prim]].color.rgb * 0.4;   // the page asks (a cap colour below zero: COLOR, MATERIALS) for the cut body's own colour, darker
+            if (h.cap && col.r < 0.0) col = mats[h.mat].color.rgb * 0.4;   // the page asks (a cap colour below zero: COLOR, MATERIALS) for the cut body's own colour, darker
             if (!h.cap && m.tex.x >= 0.0) {   // a picture: its colour at the hit, and a screen lights itself
                 uint i = h.prim;
                 float2 uv = uvs[idx[3 * i]] * (1.0 - h.bc.x - h.bc.y) + uvs[idx[3 * i + 1]] * h.bc.x + uvs[idx[3 * i + 2]] * h.bc.y;

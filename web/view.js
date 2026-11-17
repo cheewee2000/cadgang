@@ -3162,7 +3162,8 @@ function nativeScene() {
     const axes = (grain) => { const a = named >= 0 ? named : bySize[grain === 4 ? 2 : 0]; return a * 4 + bySize.find((b) => b !== a); };
     const e = inv.copy(m.matrixWorld).invert().elements, sc = Math.cbrt(Math.abs(m.matrixWorld.determinant()));
     const rows = [0, 1, 2].flatMap((r) => [e[r], e[r + 4], e[r + 8], e[r + 12]].map((x) => x * sc));
-    for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5, mat.map === map ? pic : -1, pic >= 0 || !m.userData.map ? m.userData.glow : 0, mat.userData.grain ?? 0, axes(mat.userData.grain), ...rows]); }
+    const solid = closedMesh(g) ? base + 1 : 0;   // a closed body says so: the tracer counts its faces to know what a cut point is inside
+    for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5, mat.map === map ? pic : -1, pic >= 0 || !m.userData.map ? m.userData.glow : 0, mat.userData.grain ?? 0, axes(mat.userData.grain), ...rows, solid]); }
     vo += pos.count; to += n / 3;
   });
   const cap = ui.color || ui.look === 'materials' ? new THREE.Color(-1, -1, -1) : capColor(), bg = scene.background ?? new THREE.Color(0xffffff), floor = groundColor(), stops = SKIES[document.documentElement.dataset.bg];   // stops: dusk's or dawn's sky, sRGB as the page draws it
