@@ -8,7 +8,7 @@ https://github.com/user-attachments/assets/f583641c-d38d-479c-90d7-e1cd38e5bf87
 
 Try it: [experiments.cwandt.com/cadgang](https://www.experiments.cwandt.com/cadgang/) — drop a file on the page or press ⌘O. The hosted copy cannot open paths on your disk; the Mac app and a local `npm start` can.
 
-Earlier versions were a CAD authoring tool (a node graph of B-rep and distance-field blocks, then prompt-authored cells driving OpenCascade). That code is tagged `v0.8.0-alpha.28-full`; from 0.9 CADgang is the viewer.
+Earlier versions were a CAD authoring tool (a node graph of B-rep and distance-field blocks, then prompt-authored cells driving OpenCascade). That code is tagged `v0.8.0-alpha.28-full`. 0.9 dropped authoring; 0.14 brought the cells back, so CADgang also builds models: Claude Code writes cells that drive OpenCascade and the result is a STEP with named solids (see [Live Claude authoring](#live-claude-authoring)). The node graph is still gone.
 
 ## Mac app
 

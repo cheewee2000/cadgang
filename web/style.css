@@ -178,7 +178,7 @@ select.ghost:hover { opacity: 0.55; }
 /* markup, shared by both viewports */
 /* loading bar across the top of the viewport: timed against the file's last load, sliding when unknown */
 /* What the app is waiting on, in the middle of the viewport: a file loading, a drawing, a Claude session's build. */
-.center-msgs { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(320px, calc(100% - 32px)); display: flex; flex-direction: column; gap: var(--sp-2); z-index: 3; pointer-events: none; }
+.center-msgs { position: absolute; right: var(--sp-3); top: calc(var(--sp-3) + 34px); width: min(320px, calc(100% - 32px)); display: flex; flex-direction: column; gap: var(--sp-2); z-index: 3; pointer-events: none; }
 .progress { background: var(--paper); border: var(--bw-hair) solid var(--ink); padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); font-size: var(--fs-12); text-align: center; overflow-wrap: anywhere; }
 .progress[hidden] { display: none; }
 .progress .track { height: 3px; background: var(--rule); overflow: hidden; }
