@@ -10,18 +10,30 @@ import { execFile } from 'node:child_process';
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
 const R = new URL('../..', import.meta.url).pathname;
-const CLASSES = [   // first match wins; the name is lower-cased, cut at '|' and stripped of parentheses first
+export const CLASSES = [   // first match wins; the name is lower-cased, cut at '|' and stripped of parentheses first
   ['screw', /\b(screws?|bolts?|shcs|bhcs|fhcs|torx|thumbscrews?)\b|^m\d+\s*x\s*\d|^#\d+-\d+/],
   ['nut', /\b(nuts?|nyloc)\b/], ['washer', /\bwashers?\b/], ['standoff', /\b(standoffs?|stand-offs?|spacers?)\b/],
   ['bearing', /\bbearings?\b/], ['magnet', /\bmagnets?\b/], ['spring', /\bsprings?\b/], ['oring', /\b(o-rings?|orings?|gaskets?|seals?)\b/],
-  ['pcb', /\b(pcb|sub-board|board|circuit)\b/],
-  ['component', /^[rcjuldqy]\d+\b|\b(connector|resistor|capacitor|inductor|mosfet|diode|led|ic|chip|switch|header|usb|jst|ffc|antenna|sensor|microphone|speaker|module|crystal)\b/],
-  ['battery', /\b(battery|lipo|18650|coin cell)\b/],
+  ['pcb', /\bpcb\b|\bcircuit board\b|^board(?:~|$)/],
+  ['component', /^(?:[rcjuldqy]|led|usb)\d+\b|\b(connector|resistor|capacitor|inductor|mosfet|diode|led|ic|chip|switch|header|usb|jst|ffc|antenna|sensor|microphone|speaker|module|crystal)\b/],
+  ['battery', /\b(lipo|18650|aa battery|coin cell)\b|^battery(?:\s+v?\d+)?$/],
 ];
 const CAP = { other: 4, component: 10 };   // per file: enclosures and passives would swamp the fasteners
 const UNNAMED = /^(body|solid|part|fillet|chamfer|cut-extrude|boss-extrude|extrude|revolve|lpattern|cirpattern|mirror|shell|sweep|loft|component|\d+|[a-z]?\d+[a-z]?)(\s*\d*|\[\d+\])?$/i;
-const clean = (n) => n.toLowerCase().split('|')[0].replace(/\(.*?\)/g, ' ').replace(/_part(\s*\d+)?$/, '').replace(/[\s_-]*\d+$|\[\d+\]$/, '').trim();
-const label = (n) => CLASSES.find(([, rx]) => rx.test(clean(n)))?.[0] ?? 'other';
+export const clean = (n) => n.toLowerCase().split('|')[0].replace(/\(.*?\)/g, ' ').replace(/_part(\s*\d+)?$/, '').replace(/_/g, ' ').replace(/(?:[\s-]+\d+|\[\d+\])$/, '').trim();
+const EXCLUDE = {
+  nut: /\+nut|nut envelope|nut hub/,
+  bearing: /\b(envelope|hub)\b/,
+  magnet: /\b(cover|closure)\b/,
+  spring: /spring steel|wo spring/,
+  oring: /\benvelope\b/,
+  battery: /\bcontact\b/,
+};
+export const label = (name) => {
+  const n = clean(name);
+  const hit = CLASSES.find(([, rx]) => rx.test(n))?.[0];
+  return hit && !EXCLUDE[hit]?.test(n) ? hit : 'other';
+};
 
 async function one(file) {
   const { importCadFile } = await import(`${R}/src/core/step.js`);
@@ -41,6 +53,7 @@ async function one(file) {
   return out;
 }
 
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
 if (arg('--one')) {
   for (const r of await one(arg('--one'))) console.log(JSON.stringify(r));
 } else {
@@ -57,4 +70,5 @@ if (arg('--one')) {
       if (++n % 100 === 0) console.error(`${n}/${rows.length} in ${((Date.now() - t0) / 60000).toFixed(1)} min`);
     }
   }));
+}
 }
