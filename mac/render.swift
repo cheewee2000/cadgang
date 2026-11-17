@@ -82,7 +82,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
     /// verts: [x y z nx ny nz] per vertex, world space. idx: 3 per triangle. tri: material per triangle.
     /// mats: [r g b metalness roughness transmission ior texture glow grain axes + 12] (linear colour; texture: an index into
     /// pngs or -1, glow: how much it lights itself, a screen's picture or a lamp's lens; grain: 0 none, 1 brushed, 2 bead blast,
-    /// 3 wood, 4 3D printed, 5 laser cut sheet, 6 tumbled, 7 Cordura, 8 webbing, 9 velcro; axes: the grain's axis * 4 + the next (the body's longest and middle, a print's build direction first); then the three rows of world -> the body's own millimetres,
+    /// 3 wood, 4 3D printed, 5 laser cut sheet, 6 tumbled, 7 Cordura, 8 webbing, 9 velcro, 10 stranded wire; axes: the grain's axis * 4 + the next (the body's longest and middle, a print's build direction first); then the three rows of world -> the body's own millimetres,
     /// where the grain lives, so it stays on a part that moves). uv: [u v] per vertex (zeros where untextured).
     /// lights: [x y z dx dy dz r g b cosOuter cosInner] per lamp (a glTF's spots and points; a point has cos -2, -1), colour times
     /// intensity in the sun's units at 1 m (scene mm), falling off with the square of the distance.
@@ -561,6 +561,8 @@ final class PathTracer: NSObject, MTKViewDelegate {
     //   6 tumbled (ceramic media): no direction, small scuffs 0.03 to 0.1 mm across, the same on faces and edges
     //   7 Cordura: a plain weave on the pair of the body's axes the face lies in, yarns about 0.7 mm apart going over and under, each a
     //     rounded ridge with its filaments; 8 webbing: ribs across the width, about 1.2 mm apart along A; 9 velcro loop: a fuzz
+    //   10 stranded wire: 11 strands show around the bundle, twisting once in 14 mm along A, each a rounded ridge. Where the hit is around
+    //     the wire is read from its normal (a body has no centreline to measure from), so the twist follows a wire that bends
     static void grain(Mat m, float3 pw, thread float3& n, thread float3& col) {
         int kind = int(m.tex.z + 0.5), code = int(m.tex.w + 0.5);
         float3 p = float3(dot(m.r0.xyz, pw) + m.r0.w, dot(m.r1.xyz, pw) + m.r1.w, dot(m.r2.xyz, pw) + m.r2.w);
@@ -605,6 +607,13 @@ final class PathTracer: NSObject, MTKViewDelegate {
         } else if (kind == 9) {
             d = (float3(vnoise(p * 6.0), vnoise(p * 6.0 + 31.7), vnoise(p * 6.0 + 71.3)) - 0.5) * 1.2;
             col *= 0.7 + 0.6 * vnoise(p * 3.0);
+        } else if (kind == 10) {
+            float3 wb = normalize(cross(A, abs(A.x) > 0.5 ? float3(0, 1, 0) : float3(1, 0, 0))), wc = cross(A, wb);
+            if (abs(dot(no, A)) < 0.7) {   // an end face (the cut across the strands) stays plain
+                float t = fract((atan2(dot(no, wb), dot(no, wc)) / 6.2832 - dot(p, A) / 14.0) * 11.0) - 0.5;   // across one strand
+                d = cross(no, A) * t * 1.1;
+                col *= 0.62 + 0.6 * cos(3.1416 * t);
+            }
         } else {
             float3 q = normalize(B + 0.5 * cross(A, B));   // across the width, leaning through the thickness: lines on the face and the edge
             float3 slow = qa * 0.05 + A * dot(p, A) * 0.012;   // the lines wander a little across the board and hardly at all along it

@@ -23,6 +23,7 @@ export const MATERIALS = {
   nickel: { label: 'Nickel', density: 8.9, color: 0xd3cdc4, metal: 1, rough: 0.14 },
   brass: { label: 'Brass', density: 8.5, color: 0xdcb46a, metal: 1, rough: 0.25 },
   copper: { label: 'Copper', density: 8.96, color: 0xe3a17c, metal: 1, rough: 0.28 },
+  stranded: { label: 'Stranded copper', density: 8.96, color: 0xe3a17c, metal: 1, rough: 0.34, grain: 10 },   // a bare stranded conductor: the twisted strands are drawn by the live view (WEAVE 10) and by the Mac app's RENDER (render.swift grain 10)
   glass: { label: 'Glass', density: 2.5, color: 0xdfe8ee, metal: 0, rough: 0, trans: 1, ior: 1.52 },   // a breath of blue-grey, as the Glass look
   acrylic: { label: 'Acrylic', density: 1.18, color: 0xf7fbff, metal: 0, rough: 0.02, trans: 1, ior: 1.49 },
   rubber: { label: 'Rubber', density: 1.2, color: 0x2a2a2a, metal: 0, rough: 0.95 },
@@ -60,6 +61,7 @@ const GUESS = [
   [/titanium|6al.?4v/i, 'titanium'],
   [/steel|stainless/i, 'steel'],
   [/brass/i, 'brass'],
+  [/strand\w*.{0,20}copper|copper.{0,20}strand/i, 'stranded'],   // "stranded copper", "copper, 16/30 stranded": before plain copper
   [/copper/i, 'copper'],
   [/alu|6061|7075|5052|extrusion|\bal\b/i, 'aluminum'],
   [/ceramic|mlcc|ferrite|thick.?film/i, 'ceramic'],
@@ -114,6 +116,10 @@ const WEAVE = {
   7: 'vec2 q = uv / 0.7, c = floor(q), f = fract(q) - 0.5; float h = 0.62 + 0.6 * (mod(c.x + c.y, 2.0) < 0.5 ? cos(3.1416 * f.y) : cos(3.1416 * f.x));',   // Cordura: a plain weave, yarns about 0.7 mm apart, over and under
   8: 'vec2 q = vec2(dot(vWeaveP, weaveA) / 1.2, 0.0); float h = 0.62 + 0.6 * cos(3.1416 * (fract(q.x) - 0.5));',   // webbing: ribs across the width, about 1.2 mm apart along the length
   9: 'vec2 q = uv / 0.35; float h = 0.7 + 0.6 * fract(sin(dot(floor(q), vec2(127.1, 311.7))) * 43758.5453);',   // velcro loop: a fuzz of 0.35 mm specks
+  // stranded wire: 11 strands show around the bundle, twisting once in 14 mm along its length. Where a fragment is around the wire is read from
+  // its normal (a body has no centreline to measure from), so the twist follows a wire that bends; an end face (normal along the wire) stays plain.
+  // ponytail: strand count and lay are fixed (a 16/30 bundle about 1.2 mm across); per-body values if another gauge needs to look right
+  10: 'vec2 q = uv / 0.38; vec3 wn = normalize(vWeaveN), wb = normalize(cross(weaveA, abs(weaveA.x) > 0.5 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0))), wc = cross(weaveA, wb); float turn = atan(dot(wn, wb), dot(wn, wc)) / 6.2832 - dot(vWeaveP, weaveA) / 14.0; float h = abs(dot(wn, weaveA)) > 0.7 ? 1.0 : 0.62 + 0.6 * cos(3.1416 * (fract(turn * 11.0) - 0.5));',
 };
 // ponytail: the weave is in the geometry's own units, taken as millimetres (a STEP's, a cell's); a glTF in metres wants the world scale, as the RENDER's grain has
 function weave(THREE, mat, kind, m) {
