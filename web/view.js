@@ -160,6 +160,7 @@ function styleMesh(m) {
   for (const x of [].concat(m.material ?? [])) x.dispose();
   m.material = m.userData.groups ? mats : mats[0];
   m.renderOrder = m.userData.ghost ? 2 : 0;   // see-through bodies draw after the solid ones
+  if (m.userData.cap) paintCap(m);   // its cut face follows its colour
 }
 const eachMat = (m, f) => { for (const x of [].concat(m.material)) f(x); };
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x2f5d8a, transparent: true, opacity: 0.85 });
@@ -2340,7 +2341,7 @@ function postBodies() {
 // parity — the stencil version held on a shelled box and failed on a merged
 // STEP in WebKit.
 // The cut is flat dark grey on every body (user call, v0.14.8): far darker than the shaded grey
-// bodies and than any part colour, so cut material reads as cut without borrowing the palette.
+// bodies, so cut material reads as cut. Under COLOR and MATERIALS it is the body's own colour, darker (capColor).
 // The cap draws AFTER the bodies and a hair nearer (polygon offset): where a mating part's face
 // lies on the cut body's inner surface (a lid on a box, a chassis in a shell) the two were
 // z-fighting and the cap lost in patches — "some caps render, others don't" (v0.14.9).
@@ -2350,13 +2351,16 @@ function postBodies() {
 // paints wherever the count is non-zero: that cap sits at the cut itself and nothing kept can be in
 // front of it. Open meshes would break the count, so they keep only the back-face twin; and if the
 // stencil ever draws nothing (it did in WKWebView at v0.8) the twins still cap as before.
-const capColor = () => new THREE.Color(0x3a3a3a);
+// Under COLOR and MATERIALS each body has a colour of its own, and its cut shows that colour, darker
+// (CUT, linear), so the cut still says which part it went through; the tracer does the same.
+const CUT = 0.4;
+const capColor = (m) => { const c = (ui.color || ui.look === 'materials') && m && [].concat(m.material)[0]?.color; return c ? c.clone().multiplyScalar(CUT) : new THREE.Color(0x3a3a3a); };
 const stencilOp = (side, op) => new THREE.MeshBasicMaterial({ side, depthWrite: false, depthTest: false, colorWrite: false,
   stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc, stencilFail: op, stencilZFail: op, stencilZPass: op, clippingPlanes: [section.plane] });
-const capPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ color: capColor(), side: THREE.DoubleSide,
-  stencilWrite: true, stencilRef: 0, stencilFunc: THREE.NotEqualStencilFunc,
-  stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp, stencilZPass: THREE.ReplaceStencilOp }));
-capPlane.renderOrder = 2; capPlane.visible = false; capPlane.raycast = () => {};
+// One quad per closed body, drawn straight after that body's count and clearing it, so each cut has its body's colour.
+const capQuad = new THREE.PlaneGeometry(1, 1);
+const capPlane = new THREE.Group();
+capPlane.visible = false;
 scene.add(capPlane);
 // Closed and consistently wound once its vertices are welded: every edge a→b has exactly one b→a.
 function closedMesh(g) {
@@ -2385,27 +2389,36 @@ let capsLit = false;
 function litCaps(on) {
   if (on === capsLit) return;
   capsLit = on;
-  const c = on ? new THREE.Color(0xff5a1f) : capColor();
-  capPlane.material.color.copy(c);
-  for (const m of model.children) m.userData.cap?.material.color.copy(c);
+  for (const m of model.children) paintCap(m);
+}
+function paintCap(m) {
+  const c = capsLit ? new THREE.Color(0xff5a1f) : capColor(m);
+  m.userData.cap?.material.color.copy(c);
+  m.userData.capQuad?.material.color.copy(c);
 }
 function buildCaps() {
   const on = !!section.axis && !!bbox;
   litCaps(false);
   capPlane.visible = on;
+  for (const q of [...capPlane.children]) { capPlane.remove(q); q.material.dispose(); }   // every quad, a closed file's too
   model.children.forEach((m, i) => {
     if (m.userData.cap) { m.remove(m.userData.cap); m.userData.cap.material.dispose(); m.userData.cap = null; }
     for (const t of m.userData.stencil ?? []) { m.remove(t); t.material.dispose(); }
-    m.userData.stencil = null;
+    m.userData.stencil = m.userData.capQuad = null;
     if (m.isLine) return;
     eachMat(m, (x) => { x.side = on ? THREE.FrontSide : THREE.DoubleSide; });
     if (!on || m.userData.ghost) return;   // a see-through body shows no cut face
     if (closedMesh(m.geometry)) {
       m.userData.stencil = [stencilOp(THREE.BackSide, THREE.IncrementWrapStencilOp), stencilOp(THREE.FrontSide, THREE.DecrementWrapStencilOp)].map((x) => {
-        const t = new THREE.Mesh(m.geometry, x); t.renderOrder = 1; t.raycast = () => {}; m.add(t); return t;
+        const t = new THREE.Mesh(m.geometry, x); t.renderOrder = 2 + 2 * i; t.raycast = () => {}; m.add(t); return t;
       });
+      const q = m.userData.capQuad = new THREE.Mesh(capQuad, new THREE.MeshBasicMaterial({ color: capColor(m), side: THREE.DoubleSide,
+        stencilWrite: true, stencilRef: 0, stencilFunc: THREE.NotEqualStencilFunc,
+        stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp, stencilZPass: THREE.ReplaceStencilOp }));
+      q.renderOrder = 3 + 2 * i; q.raycast = () => {};
+      capPlane.add(q);
     }
-    const cap = new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ color: capColor(i), side: THREE.BackSide, clippingPlanes: [section.plane],
+    const cap = new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ color: capColor(m), side: THREE.BackSide, clippingPlanes: [section.plane],
       polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
     cap.renderOrder = 1;
     m.add(cap);
@@ -3152,7 +3165,7 @@ function nativeScene() {
     for (const mat of ms) { const c = mat.color ?? new THREE.Color(0xb9b8b3); mats.push([c.r, c.g, c.b, mat.metalness ?? 0, mat.roughness ?? 0.5, mat.transmission ?? 0, mat.ior ?? 1.5, mat.map === map ? pic : -1, pic >= 0 || !m.userData.map ? m.userData.glow : 0, mat.userData.grain ?? 0, axes(mat.userData.grain), ...rows]); }
     vo += pos.count; to += n / 3;
   });
-  const cap = capColor(), bg = scene.background ?? new THREE.Color(0xffffff), floor = groundColor(), stops = SKIES[document.documentElement.dataset.bg];   // stops: dusk's or dawn's sky, sRGB as the page draws it
+  const cap = ui.color || ui.look === 'materials' ? new THREE.Color(-1, -1, -1) : capColor(), bg = scene.background ?? new THREE.Color(0xffffff), floor = groundColor(), stops = SKIES[document.documentElement.dataset.bg];   // stops: dusk's or dawn's sky, sRGB as the page draws it
   const lamps = lights.map((l) => [...l.pos.clone().applyQuaternion(rot).toArray(), ...l.dir.clone().applyQuaternion(rot).toArray(), ...l.color.toArray(), ...l.cos]);   // turned with the bodies (Turn bakes into them)
   post({ cmd: 'renderScene', verts: b64(verts), idx: b64(idx), tri: b64(tri), mats, cap: [cap.r, cap.g, cap.b], bg: [bg.r, bg.g, bg.b], floor: ui.ground === 'none' ? null : [floor.r, floor.g, floor.b], sky: stops ? stops.map((h) => srgb(h).toArray()) : null, uv: pics.length ? b64(uv) : '', pngs: pics.map(pngOf), lights: lamps });   // no picture: nothing to send (the shell's are zeros already), a sixth of the message on a large assembly
 }

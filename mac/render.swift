@@ -618,6 +618,7 @@ final class PathTracer: NSObject, MTKViewDelegate {
             if (depth == 0 && isFloor) bgw = smoothstep(diag * 1.5, diag * 10.0, length(p.xy - u.ground.xy));   // the floor melts into the background, by how far it is from the bodies (not from the eye: an ortho view's rays start far behind it, and it was all but gone)
             Mat m = mats[h.cap ? (u.info.w > 0 ? tri[u.info.w] + 1 : 0) : h.mat];
             float3 col = m.color.rgb;
+            if (h.cap && col.r < 0.0) col = mats[tri[h.prim]].color.rgb * 0.4;   // the page asks (a cap colour below zero: COLOR, MATERIALS) for the cut body's own colour, darker
             if (!h.cap && m.tex.x >= 0.0) {   // a picture: its colour at the hit, and a screen lights itself
                 uint i = h.prim;
                 float2 uv = uvs[idx[3 * i]] * (1.0 - h.bc.x - h.bc.y) + uvs[idx[3 * i + 1]] * h.bc.x + uvs[idx[3 * i + 2]] * h.bc.y;
