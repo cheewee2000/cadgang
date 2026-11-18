@@ -74,7 +74,11 @@ Importer::Result Importer::LoadFile (const std::string& filePath, const ImportPa
         return Importer::Result::FileNotFound;
     }
 
-    std::vector<std::uint8_t> fileContent (std::istreambuf_iterator<char> (inputStream), {});
+    // cadgang: sized once and read in one call, not grown a byte at a time through istreambuf_iterator
+    inputStream.seekg (0, std::ios::end);
+    std::vector<std::uint8_t> fileContent ((size_t) inputStream.tellg ());
+    inputStream.seekg (0);
+    inputStream.read ((char*) fileContent.data (), fileContent.size ());
     Importer::Result result = LoadFile (fileContent, params);
     inputStream.close ();
     return result;

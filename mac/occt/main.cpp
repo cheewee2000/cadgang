@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unistd.h>
 #include <vector>
 
 template <typename T> static void put (std::vector<char>& b, T v) { b.insert (b.end (), (char*) &v, (char*) &v + sizeof v); }
@@ -82,5 +83,8 @@ int main (int argc, char** argv)
     put<uint32_t> (b, 0xFFFFFFFF);
     b.insert (b.end (), tree.begin (), tree.end ());
     fwrite (b.data (), 1, b.size (), stdout);
-    return 0;
+    // cadgang: skip tearing down the document and its shapes at exit (the OS frees it all). _exit doesn't flush stdio,
+    // so flush first or the stream comes out short.
+    fflush (stdout);
+    _exit (0);
 }
