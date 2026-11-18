@@ -24,23 +24,34 @@ Evidence date: 2026-11-18. This study covers public/open-source artifacts and pu
 5. **Hybrid exact/facet workflows.** Parasolid's convergent modeling and ACIS Polyhedra publicly describe B-rep/facet coexistence. Manifold is a strong mesh Boolean/repair oracle, but it cannot replace CADgang's exact STEP-preserving B-rep path.
 6. **Modular kernel services.** Truck's small replaceable crates and C3D's distinct modeler/solver/collision/converter modules argue for narrow CADgang interfaces around exact modeling, meshing, constraints and collision rather than one monolith.
 
-## Implemented first improvement
+## Implemented improvements
 
-`brepBoolean` now keeps the existing OCCT result when it is spatially usable. If OCCT throws or returns a solid whose bounds cannot be evaluated, CADgang:
+### Numerically conditioned exact Booleans
+
+`brepBoolean` keeps the existing OCCT result for ordinary placements. If placement magnitude dwarfs operation size, OCCT throws/reports an error, or a result cannot produce finite bounds, CADgang:
 
 1. computes a shared operand frame from pre-operation bounds;
 2. clones and translates all operands near the origin;
 3. repeats the exact OCCT list Boolean;
 4. requires finite bounds and a full OCCT geometry validity check;
-5. translates the exact B-rep result back.
+5. restores world placement as a `TopLoc_Location`, leaving rescued curve/surface geometry in its conditioned local frame.
 
 This is a rescue only, so normal booleans retain their old semantics and benchmark cost. It fixed observed failures at large placements:
 
 - around `1e12`, a union could report valid topology but produce a void bounding box;
 - around `1e14`, OCCT could throw `gp_Dir::SetX() - input vector has zero norm`;
-- the local-frame result is one valid solid with the expected volume and finite bounds.
+- the local-frame result is one valid solid with the expected volume and finite bounds;
+- exact intersection now uses the same rescue and preserves legitimate empty intersections.
 
-Legitimate subtract-all operations still return an empty result so the existing cell warning remains intact.
+A deterministic metamorphic corpus now checks commutative union, inclusion-exclusion, subtraction partitioning, validity and common-translation invariance across ordinary, `1e6`, and `1e12` placements. It found that a Boolean can be valid and bounded yet numerically wrong at extreme placement, which is why risky placements go local before the first Build. Legitimate subtract-all and disjoint-intersection operations remain empty results.
+
+### OCCT diagnostics and cost
+
+The shipped binding exposes explicit Boolean errors/warnings and optional history. CADgang now rejects `HasErrors()`, counts warning-bearing operations in telemetry, and disables unused history collection. `SetNonDestructive(true)` was measured and removed because operands are already clones and the option slowed the normal path.
+
+### Constraint diagnostics
+
+CADgang already computed whole-sketch degrees of freedom, redundancy count and conflicting residuals. The solve report now identifies exact redundant-constraint candidates, and the sketch UI names their indices. This independently implements the diagnostic contract emphasized in public D-Cubed/CDS documentation.
 
 ## Next experiments
 
