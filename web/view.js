@@ -4062,4 +4062,8 @@ if (cellsPref.on && !follow) setCells(true);
   cellsPane.addEventListener('pointerenter', () => { overPane = true; });
   cellsPane.addEventListener('pointerleave', () => { overPane = false; });
   window.cadgangPinch = (m) => { const p = overPane && cellsFrame.contentWindow?.cadgangPinch; p ? p(m) : mine?.(m); };
+  // The 3D mouse the same way; either of its buttons fits the view.
+  const mine3d = window.cadgang3dMouse;
+  window.cadgang3dMouse = (...a) => { const p = overPane && cellsFrame.contentWindow?.cadgang3dMouse; p ? p(...a) : mine3d?.(...a); };
+  window.cadgang3dButton = () => fit();
 }

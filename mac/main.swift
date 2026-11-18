@@ -69,6 +69,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         if #available(macOS 14.0, *) { cfg.preferences.inactiveSchedulingPolicy = .none }
         web = makeWindow(cfg)
         NSApp.activate(ignoringOtherApps: true)
+        start3dMouse()
         startServer()
     }
 
@@ -432,6 +433,40 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         NSApp.windowsMenu = winMenu
         NSApp.mainMenu = main
     }
+}
+
+// A 3D mouse (a 3Dconnexion SpaceMouse) through the driver's own client framework, loaded at run time: a Mac without
+// the driver just has no 3D mouse. Registered under the app's signature and name, the driver sends reports only while
+// cadgang is in front. Each goes to the key window's page: cadgang3dMouse(x, y, z, rx, ry, rz) for the puck and
+// cadgang3dButton(n) for a button going down (web/orbitinput.js, web/view.js).
+var mouse3dButtons: UInt32 = 0
+func start3dMouse() {
+    guard let lib = dlopen("/Library/Frameworks/3DconnexionClient.framework/3DconnexionClient", RTLD_NOW),
+          let set = dlsym(lib, "SetConnexionHandlers"), let reg = dlsym(lib, "RegisterConnexionClient") else { return }
+    typealias Msg = @convention(c) (UInt32, UInt32, UnsafeMutableRawPointer?) -> Void
+    typealias Dev = @convention(c) (UInt32) -> Void
+    typealias SetFn = @convention(c) (Msg, Dev, Dev, Bool) -> Int16
+    typealias RegFn = @convention(c) (UInt32, UnsafePointer<UInt8>?, UInt16, UInt32) -> UInt16
+    // ConnexionDeviceState (ConnexionClient.h, packed to 2 bytes): command at 4, axis[6] at 30, buttons at 44.
+    let onMsg: Msg = { _, type, arg in
+        guard type == 0x33645352, let s = UnsafeRawPointer(arg) else { return }   // kConnexionMsgDeviceState
+        let cmd = s.loadUnaligned(fromByteOffset: 4, as: UInt16.self)
+        if cmd == 3 {   // kConnexionCmdHandleAxis
+            let a = (0..<6).map { String(s.loadUnaligned(fromByteOffset: 30 + 2 * $0, as: Int16.self)) }.joined(separator: ",")
+            DispatchQueue.main.async { if NSApp.isActive { delegate.keyWeb.evaluateJavaScript("window.cadgang3dMouse?.(\(a))") } }
+        } else if cmd == 2 {   // kConnexionCmdHandleButtons
+            let b = s.loadUnaligned(fromByteOffset: 44, as: UInt32.self)
+            DispatchQueue.main.async {
+                let down = b & ~mouse3dButtons; mouse3dButtons = b
+                if down != 0 && NSApp.isActive { delegate.keyWeb.evaluateJavaScript("window.cadgang3dButton?.(\(down.trailingZeroBitCount + 1))") }
+            }
+        }
+    }
+    guard unsafeBitCast(set, to: SetFn.self)(onMsg, { _ in }, { _ in }, true) == 0 else { return }
+    let name: [UInt8] = [7] + Array("cadgang".utf8)   // a Pascal string: the executable's name
+    // 'cdgg' is Info.plist's CFBundleSignature; mode 1 takes the device over (kConnexionClientModeTakeOver), mask: everything.
+    let id = unsafeBitCast(reg, to: RegFn.self)(0x63646767, name, 1, 0x3FFF)
+    NSLog("3D mouse: driver client %d", Int(id))
 }
 
 let app = NSApplication.shared

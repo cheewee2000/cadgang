@@ -9,6 +9,7 @@
   <key>CFBundleShortVersionString</key><string>__VERSION__</string>
   <key>CFBundleExecutable</key><string>cadgang</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleSignature</key><string>cdgg</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIconName</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>

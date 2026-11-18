@@ -70,6 +70,24 @@ export function attachOrbitInput(el, { orbit, camera, getCamera = () => camera, 
     zoomAt(lastAt ?? { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }, Math.exp(-m));
   };
 
+  // A 3D mouse (the Mac app forwards the 3Dconnexion driver's reports, mac/main.swift start3dMouse): the model is in
+  // the hand. Axes as the driver gives them: x right, y toward the user, z down, and a turn about each; a full push is
+  // about 350. Each report moves the view by the time since the last one, so the puck sets a speed. The orbit has no
+  // roll, so ry (tipping the puck sideways) does nothing.
+  // ponytail: speeds are fixed here (the driver's own panel scales and reverses axes per app); a setting when asked for.
+  let last3d = 0;
+  window.cadgang3dMouse = (x, y, z, rx, ry, rz) => {
+    const now = performance.now(), dt = Math.min(now - last3d, 50) / 1000 / 350; last3d = now;
+    const cam = getCamera();
+    const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
+    orbit.target.addScaledVector(right, -x * dt * orbit.dist * 0.8).addScaledVector(up, z * dt * orbit.dist * 0.8);
+    orbit.dist *= Math.exp(-y * dt * 1.5);
+    if (isFlat()) return;
+    orbit.yaw += yawSign * rz * dt * 2.5;
+    orbit.pitch += rx * dt * 2.5;
+  };
+
   el.addEventListener('dblclick', (e) => {
     const p = hitAt(e);
     if (!p) return;
