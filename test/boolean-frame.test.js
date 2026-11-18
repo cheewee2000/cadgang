@@ -33,6 +33,25 @@ test('local-frame rescue recovers an OCCT direction failure at huge coordinates'
   assert.deepEqual(ops.bbox(joined).size, [19, 10, 10]);
 }));
 
+test('local-frame rescue also covers exact intersection', () => scoped(() => {
+  const o = 1e14;
+  const a = ops.translate(ops.box(10, 10, 10), [o, o, o]);
+  const b = ops.translate(ops.box(10, 10, 10), [o + 5, o, o]);
+  const common = ops.intersect(a, b);
+  assert.ok(brepIsValid(common));
+  assert.equal(ops.bodies(common), 1);
+  near(ops.volume(common), 500, 0.02);
+  assert.deepEqual(ops.bbox(common).size, [5, 10, 10]);
+}));
+
+test('a disjoint intersection remains a legitimate empty result', () => scoped(() => {
+  const a = ops.box(10, 10, 10);
+  const b = ops.translate(ops.box(10, 10, 10), [100, 0, 0]);
+  const common = ops.intersect(a, b);
+  assert.equal(ops.bodies(common), 0);
+  near(ops.volume(common), 0);
+}));
+
 test('local-frame rescue changes no ordinary boolean result', () => scoped(() => {
   const a = ops.box(10, 10, 10), b = ops.translate(ops.box(10, 10, 10), [5, 0, 0]);
   const joined = ops.union(a, b), cut = ops.subtract(a, b);

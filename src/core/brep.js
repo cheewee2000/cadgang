@@ -473,7 +473,7 @@ function borrow(shape, slot) {
 export const borrowBrepShape = borrow;
 export const brepAttempt = attempt;
 
-const BOP = { union: 'BRepAlgoAPI_Fuse_1', subtract: 'BRepAlgoAPI_Cut_1' };
+const BOP = { union: 'BRepAlgoAPI_Fuse_1', subtract: 'BRepAlgoAPI_Cut_1', intersect: 'BRepAlgoAPI_Common_1' };
 
 /** One raw OCCT list boolean. Operands are borrowed wrappers and stay usable. */
 function rawBoolean(op, base, tools) {
@@ -531,22 +531,41 @@ function operationFrame(shapes) {
  */
 export function brepBoolean(op, base, tools) {
   let first = null;
-  try {
-    first = rawBoolean(op, base, tools);
-    if (booleanResultIsSound(first, op === 'subtract')) return first;
-  } catch { /* retry below in a local numerical frame */ }
-  try { first?.delete(); } catch { /* incomplete result */ }
+  // A valid and bounded world-frame result can still be numerically wrong when
+  // placement dwarfs operation size, so post-validation is insufficient.
+  // Bounds give both quantities; execute risky cases locally from the outset.
+  const wrapped = [base, ...tools];
+  let frame = operationFrame(wrapped);
+  const magnitude = Math.max(...frame.center.map(Math.abs));
+  if (magnitude <= 1e8 * frame.scale) {
+    try {
+      first = rawBoolean(op, base, tools);
+      if (booleanResultIsSound(first, op !== 'union')) return first;
+    } catch { /* retry below in a local numerical frame */ }
+    try { first?.delete(); } catch { /* incomplete result */ }
+  }
 
-  const frame = operationFrame([base, ...tools]);
   const shift = frame.center.map((x) => -x);
   const localBase = track(base.clone().translate(...shift));
   const localTools = tools.map((tool) => track(tool.clone().translate(...shift)));
   const localResult = rawBoolean(op, localBase, localTools);
-  if (!booleanResultIsSound(localResult, op === 'subtract', true)) {
+  if (!booleanResultIsSound(localResult, op !== 'union', true)) {
     try { localResult.delete(); } catch { /* incomplete result */ }
     throw new GraphError(`${op} failed in both world and local frames (operation scale ${frame.scale})`);
   }
-  return track(localResult.translate(...frame.center));
+  // Keep the rescued geometry in its well-conditioned local coordinates and
+  // restore world placement as a TopLoc_Location. Baking a huge translation
+  // back into every curve/surface can make a valid rescue invalid again.
+  const vec = new OC.gp_Vec_4(...frame.center), trsf = new OC.gp_Trsf_1();
+  trsf.SetTranslation_1(vec);
+  const loc = new OC.TopLoc_Location_2(trsf);
+  try {
+    const moved = localResult.wrapped.Moved(loc, false);
+    return track(kernel().cast(moved));
+  } finally {
+    for (const o of [loc, trsf, vec]) o.delete();
+    try { localResult.delete(); } catch { /* moved wrapper owns its shape */ }
+  }
 }
 
 /** Does the shape hold a solid at all? A boolean that removed everything, or gave up without an error, hands back an empty compound. */
