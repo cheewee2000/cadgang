@@ -10,6 +10,14 @@
 #include <BRepBndLib.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <UnitsMethods.hxx>
+#include <OSD_Parallel.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
+#include <TopLoc_Location.hxx>
+#include <unordered_map>
+#include <vector>
+#include <cstdlib>
+#include <chrono>
+#include <cstdio>
 
 VectorBuffer::VectorBuffer (const std::vector<uint8_t>& v)
 {
@@ -150,9 +158,31 @@ bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params)
     // cadgang: parallel, and a solid at a time, then shells outside solids, then loose faces. BRepMesh
     // keeps its working model of everything it is given until done: one call on a 21k-solid PCB
     // export peaked at 30 GB (even with every solid already meshed, it still built that model).
-    for (TopExp_Explorer ex (shape, TopAbs_SOLID); ex.More (); ex.Next ()) {
-        BRepMesh_IncrementalMesh (ex.Current (), linDeflection, Standard_False, angDeflection, Standard_True);
+    // The solids themselves go across the cores too (ASM's faceter takes a list of bodies, api_facet_entities; one
+    // BRepMesh call is parallel only over one solid's faces, and a PCB's 14k small solids meshed on one core).
+    // Each TShape once: instances share their faces, and two threads must not mesh one TFace. A solid that shares
+    // an edge with another (a compsolid) stays on this thread, since BRepMesh writes its polygons onto the edge.
+    auto t0 = std::chrono::steady_clock::now ();
+    TopTools_IndexedMapOfShape solids;
+    for (TopExp_Explorer ex (shape, TopAbs_SOLID); ex.More (); ex.Next ()) solids.Add (ex.Current ().Located (TopLoc_Location ()));
+    std::unordered_map<const void*, int> edgeOwner;
+    std::vector<char> shared (solids.Extent () + 1, 0);
+    for (int i = 1; i <= solids.Extent (); i++) {
+        for (TopExp_Explorer ex (solids (i), TopAbs_EDGE); ex.More (); ex.Next ()) {
+            auto it = edgeOwner.emplace (ex.Current ().TShape ().get (), i).first;
+            if (it->second != i) shared[i] = shared[it->second] = 1;
+        }
     }
+    std::vector<int> alone;
+    for (int i = 1; i <= solids.Extent (); i++) if (!shared[i]) alone.push_back (i);
+    OSD_Parallel::For (0, (int) alone.size (), [&](int k) {
+        BRepMesh_IncrementalMesh (solids (alone[k]), linDeflection, Standard_False, angDeflection, Standard_True);
+    });
+    for (int i = 1; i <= solids.Extent (); i++) {
+        if (shared[i]) BRepMesh_IncrementalMesh (solids (i), linDeflection, Standard_False, angDeflection, Standard_True);
+    }
+    if (getenv ("CADGANG_OCCT_TIMING")) fprintf (stderr, "mesh %d solids (%d shared): %.2f s\n", solids.Extent (), (int) (solids.Extent () - alone.size ()),
+        std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count ());
     for (TopExp_Explorer ex (shape, TopAbs_SHELL, TopAbs_SOLID); ex.More (); ex.Next ()) {
         BRepMesh_IncrementalMesh (ex.Current (), linDeflection, Standard_False, angDeflection, Standard_True);
     }
