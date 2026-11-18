@@ -5,7 +5,11 @@
 set -euo pipefail
 OUT=$(mkdir -p "${1:-$(dirname "$0")/../../bin}" && cd "${1:-$(dirname "$0")/../../bin}" && pwd)
 cd "$(dirname "$0")"
-OC=$(brew --prefix opencascade)
+# cadgang: OCCT built by build-occt.sh (no OCC_CONVERT_SIGNALS: meshing ~2.3x faster) when it is there, else Homebrew's.
+# CADGANG_OCCT_PREFIX names another build.
+DEF=$HOME/.cache/cadgang-occt-7.9.3
+[ -d "$DEF/lib" ] || DEF=$(brew --prefix opencascade)
+OC=${CADGANG_OCCT_PREFIX:-$DEF}
 LIBS=$(cd "$OC/lib" && ls libTK*.dylib | grep -E '^libTK[A-Za-z]+\.dylib$' | sed -E 's/^lib(.*)\.dylib$/-l\1/')
 clang++ -std=c++17 -O2 -I"$OC/include/opencascade" *.cpp -L"$OC/lib" $LIBS -Wl,-dead_strip_dylibs \
   -Wl,-rpath,@executable_path/lib -o "$OUT/cadgang-occt"
