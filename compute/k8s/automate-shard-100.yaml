@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cadgang-automate-shard-100
+  namespace: cadgang-compute
+  labels:
+    app: cadgang-automate-shard-100
+spec:
+  backoffLimit: 1
+  podReplacementPolicy: Failed
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+      - action: Ignore
+        onExitCodes:
+          operator: In
+          values: [143]
+  template:
+    metadata:
+      labels:
+        app: cadgang-automate-shard-100
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: oracle
+          image: node:22-bookworm
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates
+              rm -rf /var/lib/apt/lists/*
+              cd "$WORK/repo"
+              git fetch origin "$REF"
+              git checkout -f "origin/$REF"
+              npm ci
+              export AUTOMATE="$WORK/automate"
+              mkdir -p "$WORK/results/shard-100" "$AUTOMATE/dump-shard-100"
+              head -n 100 "$AUTOMATE/selected.txt" > "$WORK/results/shard-100/selected.txt"
+              rm -f "$WORK/results/shard-100/base.jsonl" "$WORK/results/shard-100/hints.jsonl"
+              START=$(date +%s)
+              JOBS=4 node compute/automate/explode.automate.mjs --list "$WORK/results/shard-100/selected.txt" --out "$WORK/results/shard-100/base.jsonl" --dump "$AUTOMATE/dump-shard-100"
+              BASE_DONE=$(date +%s)
+              HINTS=1 JOBS=4 node compute/automate/explode.automate.mjs --list "$WORK/results/shard-100/selected.txt" --out "$WORK/results/shard-100/hints.jsonl"
+              END=$(date +%s)
+              python3 compute/automate/report.py --base "$WORK/results/shard-100/base.jsonl" --hints "$WORK/results/shard-100/hints.jsonl" --dump "$AUTOMATE/dump-shard-100" --out "$WORK/results/shard-100/report.md"
+              printf '{"assemblies":100,"base_seconds":%s,"hints_seconds":%s,"total_seconds":%s}\n' "$((BASE_DONE-START))" "$((END-BASE_DONE))" "$((END-START))" > "$WORK/results/shard-100/timing.json"
+          env:
+            - name: WORK
+              value: /mnt/shared/cadgang
+            - name: REF
+              value: main
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 12Gi
+          volumeMounts:
+            - name: shared
+              mountPath: /mnt/shared
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: shared
+          hostPath:
+            path: /mnt/shared
+            type: Directory
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi

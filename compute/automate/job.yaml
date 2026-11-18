@@ -36,10 +36,10 @@ spec:
               DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git curl unzip python3 python3-pip
               rm -rf /var/lib/apt/lists/*
               if [ ! -d "$WORK/repo/.git" ]; then
-                git clone --branch compute/automate-oracle --single-branch https://github.com/cheewee2000/cadgang.git "$WORK/repo"
+                git clone --branch "$REF" --single-branch https://github.com/cheewee2000/cadgang.git "$WORK/repo"
               else
-                git -C "$WORK/repo" fetch origin compute/automate-oracle
-                git -C "$WORK/repo" checkout -f origin/compute/automate-oracle
+                git -C "$WORK/repo" fetch origin "$REF"
+                git -C "$WORK/repo" checkout -f "origin/$REF"
               fi
               cd "$WORK/repo"
               npm ci
@@ -55,17 +55,17 @@ spec:
           env:
             - name: WORK
               value: /mnt/shared/cadgang
+            - name: REF
+              value: main
             - name: JOBS
               value: "64"
           resources:
             requests:
-              cpu: "32"
-              memory: 64Gi
-              amd.com/gpu: "8"
+              cpu: "2"
+              memory: 4Gi
             limits:
-              cpu: "64"
-              memory: 192Gi
-              amd.com/gpu: "8"
+              cpu: "4"
+              memory: 12Gi
           volumeMounts:
             - name: shared
               mountPath: /mnt/shared

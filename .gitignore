@@ -13,3 +13,7 @@ bin/
 .playwright-cli/
 __pycache__/
 stepdraw/.cache/
+# Local training inputs, generated review pages and caches (real results committed selectively).
+compute/results-local/
+compute/results/parts-labelled*.json*
+CLAUDE-TASK.md

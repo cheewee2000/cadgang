@@ -83,6 +83,10 @@ Classes to predict: screw, nut, washer, standoff, pcb, component, other, and wha
 
 **Code:** `compute/parts/` (see its README): `validate.py` checks the labelled JSONL before any training, and `main.py cache | train | eval | export` trains and reports. `main.py pretrain` is the optional unsupervised AutoMate encoder pretraining. The FASTENED weak label is deliberately not implemented. Shared pieces are in `compute/cadnn/`; the tests are `python3 -m unittest discover -s compute/tests -v`.
 
+## Measured results
+
+See [`compute/RESULTS.md`](RESULTS.md) for the November 2026 oracle, joint-model and label-audit results.
+
 ## Reporting back
 
 Commit results and reports under `compute/results/`, code under `compute/`, solver changes on a branch named `explode/automate-*`. Keep the dumps and the dataset on the cluster, not in git. The Mac session merges after re-gating on the Wink enclosures.

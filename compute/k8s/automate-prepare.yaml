@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cadgang-compute
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cadgang-automate-prepare
+  namespace: cadgang-compute
+  labels:
+    app: cadgang-automate-prepare
+spec:
+  backoffLimit: 2
+  podReplacementPolicy: Failed
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+      - action: Ignore
+        onExitCodes:
+          operator: In
+          values: [143]
+  template:
+    metadata:
+      labels:
+        app: cadgang-automate-prepare
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: prepare
+          image: node:22-bookworm
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git curl unzip python3 python3-pip ca-certificates
+              rm -rf /var/lib/apt/lists/*
+              mkdir -p "$WORK"
+              if [ ! -d "$WORK/repo/.git" ]; then
+                git clone --branch "$REF" --single-branch https://github.com/cheewee2000/cadgang.git "$WORK/repo"
+              else
+                git -C "$WORK/repo" fetch origin compute/all-stages
+                git -C "$WORK/repo" checkout -f origin/compute/all-stages
+              fi
+              cd "$WORK/repo"
+              npm ci
+              python3 -m pip install --break-system-packages --no-cache-dir pandas pyarrow
+              bash compute/automate/selftest.sh
+              export AUTOMATE="$WORK/automate"
+              bash compute/automate/fetch.sh
+              python3 compute/automate/pick.py
+              mkdir -p "$WORK/results" "$WORK/automate/dump"
+              printf 'prepared %s\n' "$(date -u +%FT%TZ)" > "$WORK/PREPARED"
+          env:
+            - name: WORK
+              value: /mnt/shared/cadgang
+            - name: REF
+              value: main
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          volumeMounts:
+            - name: shared
+              mountPath: /mnt/shared
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: shared
+          hostPath:
+            path: /mnt/shared
+            type: Directory
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
