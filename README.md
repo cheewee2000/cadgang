@@ -81,6 +81,7 @@ No build step; the page is plain ES modules. `CADGANG_PORT` picks the port, `CAD
 | M | Measure | B P A N ⇧T ⇧I R ⌫ | Bezier, Pencil, Arrow, Note, Text, Image, Erase, Clear markup |
 | E J V | Joint / explode mode, new joint, explode direction | [ ] | Turn 90° |
 | D | Dark / light | ⌘O ⌘Z ⇧⌘Z | Open, Undo, Redo |
+| ⌘P | Send the selected parts to Bambu Studio | | |
 
 These are the defaults. To remap one, right-click, click its key in the menu, then press the new key (⌫ removes it, Esc keeps it). A key another command had swaps over to it. Remaps are yours, kept on your Mac; **Reset hotkeys** at the bottom of the menu restores the defaults.
 

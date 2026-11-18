@@ -3755,6 +3755,7 @@ const CMDS = [
   { key: 'o', meta: true, label: 'Open…', btn: '#openBtn', run: () => $('#fileInput').click() },
   { key: 's', meta: true, label: 'Save project…', btn: '#saveBtn', run: () => saveProject() },
   { key: 's', meta: true, shift: true, label: 'Save project as…', run: () => saveProject(true) },
+  ...(window.cadgangServerless ? [] : [{ key: 'p', meta: true, label: 'Send selected to Bambu Studio', run: () => selected.size ? sendToSlicer([...selected]) : say('select the parts to send to Bambu Studio first', true) }]),
   { key: 'z', meta: true, label: 'Undo', run: undo },
   { key: 'z', meta: true, shift: true, label: 'Redo', run: redo },
 ];
