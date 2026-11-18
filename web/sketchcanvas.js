@@ -484,7 +484,10 @@ export function sketchCanvas({ sketch, canvas, note, tools, ui = {}, solve, save
     if (said) bits.push(said);
     else if (tool !== 'select') bits.push(spec(tool).hint);
     bits.push(`${r.dof ?? '?'} dof`);
-    if (r.redundant) bits.push(`${r.redundant} redundant`);
+    if (r.redundant) {
+      const which = (r.redundantConstraints || []).map((x) => x.constraint).join(', ');
+      bits.push(`${r.redundant} redundant${which ? ` (constraints ${which})` : ''}`);
+    }
     if (result?.pinned === false && dragging) bits.push('held by constraints');
     note.textContent = bits.join(' · ');
     note.className = 'sketch-note';

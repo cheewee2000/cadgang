@@ -79,10 +79,10 @@ Centralize:
 
 ### 5. Constraint diagnostics
 
-Before expanding sketch or assembly constraints, add:
+CADgang already reports whole-sketch DOF, redundancy count and conflicting constraints. This study adds exact redundant-constraint candidates to the solve report and sketch UI. Before expanding sketch or assembly constraints further, add:
 
 - remaining degrees of freedom per entity/body;
-- redundant and conflicting constraint sets;
+- minimal redundant and conflicting constraint sets;
 - preferred-solution/chirality hints;
 - update versus interactive move-under-constraints modes;
 - soft constraints for preferences.
