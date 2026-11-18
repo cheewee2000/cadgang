@@ -1,0 +1,105 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cadgang-joints-train-v2
+  namespace: cadgang-compute
+  labels:
+    app: cadgang-joints-train-v2
+spec:
+  backoffLimit: 0
+  podReplacementPolicy: Failed
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+      - action: Ignore
+        onExitCodes:
+          operator: In
+          values: [143]
+  template:
+    metadata:
+      labels:
+        app: cadgang-joints-train-v2
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: train
+          image: rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0
+          workingDir: /workspace
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              cd "$WORK/repo"
+              git fetch origin "$REF"
+              git checkout -f "origin/$REF"
+              python -m pip install --no-cache-dir scipy onnx onnxruntime
+              INDEX="$WORK/automate/joints-index"
+              DUMP="$WORK/automate/dump"
+              ROOT="$WORK/joints-sweep-v2"
+              mkdir -p "$ROOT" "$WORK/results/joints-v2"
+              pids=""
+              stop_children() { for p in $pids; do kill -TERM "$p" 2>/dev/null || true; done; wait || true; exit 143; }
+              trap stop_children TERM INT
+              run_one() {
+                gpu=$1; aug=$2; seed=$3; tag="$aug-s$seed"; out="$ROOT/$tag"
+                # ROCR_VISIBLE_DEVICES exposes one physical GPU and renumbers it to torch cuda:0.
+                ROCR_VISIBLE_DEVICES="$gpu" python -c 'import torch; assert torch.cuda.device_count()==1, torch.cuda.device_count()'
+                ROCR_VISIBLE_DEVICES="$gpu" \
+                  python compute/joints/main.py train --index "$INDEX" --dump "$DUMP" --out "$out" \
+                    --resume --device rocm --augment "$aug" --seed "$seed" --epochs 20 --batch-size 128 --workers 3 \
+                    --ckpt-every 250 --log-every 100 \
+                  > "$out.log" 2>&1
+                ROCR_VISIBLE_DEVICES="$gpu" \
+                  python compute/joints/main.py eval --index "$INDEX" --dump "$DUMP" --ckpt "$out/best.pt" \
+                    --split test --report "$WORK/results/joints-v2/$tag" --predictions "$ROOT/$tag-test.jsonl" \
+                    --device rocm --batch-size 256 --workers 3 \
+                  >> "$out.log" 2>&1
+                python compute/joints/main.py export --ckpt "$out/best.pt" \
+                  --out "$WORK/results/joints-v2/$tag.onnx" >> "$out.log" 2>&1
+              }
+              run_one 0 none 1 & pids="$pids $!"
+              run_one 1 none 2 & pids="$pids $!"
+              run_one 2 z 0 & pids="$pids $!"
+              run_one 3 z 1 & pids="$pids $!"
+              run_one 4 z 2 & pids="$pids $!"
+              run_one 5 so3 0 & pids="$pids $!"
+              run_one 6 so3 1 & pids="$pids $!"
+              run_one 7 so3 2 & pids="$pids $!"
+              failed=0
+              for p in $pids; do wait "$p" || failed=1; done
+              for log in "$ROOT"/*.log; do echo "--- $log ---"; tail -12 "$log"; done
+              exit "$failed"
+          env:
+            - name: WORK
+              value: /mnt/shared/cadgang
+            - name: REF
+              value: main
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "32"
+              memory: 128Gi
+              amd.com/gpu: "8"
+            limits:
+              cpu: "64"
+              memory: 256Gi
+              amd.com/gpu: "8"
+          volumeMounts:
+            - name: shared
+              mountPath: /mnt/shared
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: shared
+          hostPath:
+            path: /mnt/shared
+            type: Directory
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi

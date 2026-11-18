@@ -1,0 +1,58 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cadgang-joints-index
+  namespace: cadgang-compute
+  labels:
+    app: cadgang-joints-index
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: cadgang-joints-index
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: index
+          image: python:3.12-slim
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates
+              rm -rf /var/lib/apt/lists/*
+              cd "$WORK/repo"
+              git fetch origin "$REF"
+              git checkout -f "origin/$REF"
+              python -m pip install --no-cache-dir numpy
+              rm -rf "$WORK/automate/joints-index.tmp"
+              python compute/joints/main.py index \
+                --dump "$WORK/automate/dump" \
+                --out "$WORK/automate/joints-index.tmp" \
+                --workers 4
+              rm -rf "$WORK/automate/joints-index"
+              mv "$WORK/automate/joints-index.tmp" "$WORK/automate/joints-index"
+              echo '--- INDEX ---'
+              cat "$WORK/automate/joints-index/index.json"
+          env:
+            - name: WORK
+              value: /mnt/shared/cadgang
+            - name: REF
+              value: main
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 12Gi
+          volumeMounts:
+            - name: shared
+              mountPath: /mnt/shared
+      volumes:
+        - name: shared
+          hostPath:
+            path: /mnt/shared
+            type: Directory

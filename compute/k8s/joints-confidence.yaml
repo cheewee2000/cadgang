@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cadgang-joints-confidence
+  namespace: cadgang-compute
+  labels:
+    app: cadgang-joints-confidence
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: cadgang-joints-confidence
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: analyze
+          image: python:3.12-slim
+          command: ["python", "-c"]
+          args:
+            - |
+              import json,collections
+              p='/mnt/shared/cadgang/joints-sweep-v2/none-s1-test.jsonl'
+              rows=[json.loads(x) for x in open(p)]
+              labels=sorted({r['label'] for r in rows})
+              print('rows',len(rows))
+              for t in [0,.5,.6,.7,.8,.9,.95,.98,.99]:
+                keep=[r for r in rows if r['p']>=t]
+                ok=sum(r['label']==r['pred'] for r in keep)
+                print('threshold',t,'coverage',round(len(keep)/len(rows),4),'precision',round(ok/len(keep),4) if keep else None,'n',len(keep))
+              print('\nPER CLASS')
+              for c in labels:
+                truth=[r for r in rows if r['label']==c]
+                print('\n',c,'support',len(truth))
+                for t in [.5,.7,.8,.9,.95,.98]:
+                  pred=[r for r in rows if r['pred']==c and r['p']>=t]
+                  tp=sum(r['label']==c for r in pred)
+                  recalled=sum(r['label']==c and r['pred']==c and r['p']>=t for r in rows)
+                  print(t,'suggestions',len(pred),'precision',round(tp/len(pred),4) if pred else None,'recall',round(recalled/len(truth),4) if truth else None)
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+          volumeMounts:
+            - name: shared
+              mountPath: /mnt/shared
+      volumes:
+        - name: shared
+          hostPath:
+            path: /mnt/shared
+            type: Directory

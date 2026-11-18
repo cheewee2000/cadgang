@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cadgang-automate-full
+  namespace: cadgang-compute
+  labels:
+    app: cadgang-automate-full
+spec:
+  backoffLimit: 2
+  podReplacementPolicy: Failed
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+      - action: Ignore
+        onExitCodes:
+          operator: In
+          values: [143]
+  template:
+    metadata:
+      labels:
+        app: cadgang-automate-full
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: oracle
+          image: node:22-bookworm
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3
+              rm -rf /var/lib/apt/lists/*
+              cd "$WORK/repo"
+              git fetch origin "$REF"
+              git checkout -f "origin/$REF"
+              npm ci
+              export AUTOMATE="$WORK/automate"
+              mkdir -p "$WORK/results/full" "$AUTOMATE/dump"
+              START=$(date +%s)
+              JOBS=4 node compute/automate/explode.automate.mjs --list "$AUTOMATE/selected.txt" --out "$WORK/results/full/automate-base.jsonl" --dump "$AUTOMATE/dump"
+              BASE_DONE=$(date +%s)
+              HINTS=1 JOBS=4 node compute/automate/explode.automate.mjs --list "$AUTOMATE/selected.txt" --out "$WORK/results/full/automate-hints.jsonl"
+              END=$(date +%s)
+              python3 compute/automate/report.py --base "$WORK/results/full/automate-base.jsonl" --hints "$WORK/results/full/automate-hints.jsonl" --dump "$AUTOMATE/dump" --out "$WORK/results/full/automate-report.md"
+              printf '{"assemblies":52095,"base_seconds":%s,"hints_seconds":%s,"total_seconds":%s}\n' "$((BASE_DONE-START))" "$((END-BASE_DONE))" "$((END-START))" > "$WORK/results/full/timing.json"
+          env:
+            - name: WORK
+              value: /mnt/shared/cadgang
+            - name: REF
+              value: main
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 12Gi
+          volumeMounts:
+            - name: shared
+              mountPath: /mnt/shared
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: shared
+          hostPath:
+            path: /mnt/shared
+            type: Directory
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi

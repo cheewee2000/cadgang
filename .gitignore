@@ -16,3 +16,7 @@ stepdraw/.cache/
 
 # Local REA evidence bundles (large, machine-specific; study records digests and conclusions).
 rea-evidence/
+# Local training inputs, generated review pages and caches (real results committed selectively).
+compute/results-local/
+compute/results/parts-labelled*.json*
+CLAUDE-TASK.md
