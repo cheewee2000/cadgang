@@ -203,8 +203,10 @@ function boolean(op, base, tools) {
   return attempt(op, () => {
     const b = borrow(base, 'base'), t = list.map((tool) => borrow(tool, 'tool'));
     if (op !== 'intersect') return brepBoolean(op, b, t);   // every tool in one operation; see brepBoolean
+    // Intersection is pairwise by definition here: base ∩ t1 ∩ t2. Route each
+    // Common through the same validated local-frame rescue as fuse and cut.
     let acc = b;
-    for (const tool of t) acc = track(acc.intersect(tool));
+    for (const tool of t) acc = brepBoolean('intersect', acc, [tool]);
     return acc;
   });
 }

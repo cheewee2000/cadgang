@@ -283,10 +283,11 @@ function toGraphError(op, thrown) {
  * lower-level sweeps and booleans it invokes, which remain visible separately.
  */
 const operationStats = new Map();
-function recordOperation(op, ms, failed) {
-  const s = operationStats.get(op) ?? { count: 0, failures: 0, totalMs: 0, maxMs: 0 };
+function recordOperation(op, ms, failed, warned = false) {
+  const s = operationStats.get(op) ?? { count: 0, failures: 0, warnings: 0, totalMs: 0, maxMs: 0 };
   s.count++;
   if (failed) s.failures++;
+  if (warned) s.warnings++;
   s.totalMs += ms;
   s.maxMs = Math.max(s.maxMs, ms);
   operationStats.set(op, s);
@@ -295,7 +296,7 @@ function recordOperation(op, ms, failed) {
 /** A snapshot safe to expose from /api/health and benchmark tools. */
 export function brepOperationStats() {
   return Object.fromEntries([...operationStats].sort((a, b) => b[1].totalMs - a[1].totalMs).map(([op, s]) => [op, {
-    count: s.count, failures: s.failures,
+    count: s.count, failures: s.failures, warnings: s.warnings ?? 0,
     totalMs: +s.totalMs.toFixed(2), maxMs: +s.maxMs.toFixed(2),
     meanMs: +(s.totalMs / s.count).toFixed(2),
   }]));
@@ -315,7 +316,7 @@ function attempt(op, fn) {
   const started = performance.now();
   try {
     const value = fn();
-    recordOperation(op, performance.now() - started, false);
+    recordOperation(op, performance.now() - started, false, !!value?.__kernelWarning);
     if (progress.fn && !progressing && value?.wrapped && typeof value.mesh === 'function') {
       progressing = true;   // the hook's own tessellation is an op too
       try { progress.fn(op, value); } catch { /* a draft is cosmetic */ } finally { progressing = false; }
@@ -472,27 +473,98 @@ function borrow(shape, slot) {
 export const borrowBrepShape = borrow;
 export const brepAttempt = attempt;
 
-const BOP = { union: 'BRepAlgoAPI_Fuse_1', subtract: 'BRepAlgoAPI_Cut_1' };
+const BOP = { union: 'BRepAlgoAPI_Fuse_1', subtract: 'BRepAlgoAPI_Cut_1', intersect: 'BRepAlgoAPI_Common_1' };
+
+/** One raw OCCT list boolean. Operands are borrowed wrappers and stay usable. */
+function rawBoolean(op, base, tools) {
+  const args = new OC.TopTools_ListOfShape_1(), list = new OC.TopTools_ListOfShape_1();
+  const bop = new OC[BOP[op]](), range = new OC.Message_ProgressRange_1();
+  try {
+    args.Append_1(base.wrapped);
+    for (const tool of tools) list.Append_1(tool.wrapped);
+    // Do not build topology history we currently throw away. Operands are
+    // already private clones, so OCCT's default destructive mode is contained.
+    bop.SetToFillHistory(false);
+    bop.SetArguments(args); bop.SetTools(list); bop.Build(range);
+    if (bop.HasErrors()) throw new GraphError(`${op} failed: OCCT reported a Boolean error`);
+    const out = track(kernel().cast(unified(bop.Shape())));
+    if (bop.HasWarnings()) out.__kernelWarning = true;
+    return out;
+  } finally {
+    for (const o of [bop, range, args, list]) o.delete();
+  }
+}
+
+/** A result is spatially usable; a rescued result additionally gets OCCT's full geometry check. */
+function booleanResultIsSound(shape, allowEmpty = false, full = false) {
+  if (!shape) return false;
+  // A cut may legitimately remove the whole base. Preserve that empty result:
+  // cellapi turns it into the useful "no solid" warning the existing API promises.
+  if (!brepHasSolid(shape)) return allowEmpty;
+  try {
+    const b = looseBounds(shape);
+    return [...b.min, ...b.max].every(Number.isFinite) && (!full || brepIsValid(shape));
+  } catch { return false; }
+}
+
+/** Centre and scale of all operands. Bounds are read before a failed boolean can damage any wrapper. */
+function operationFrame(shapes) {
+  const boxes = shapes.map(looseBounds);
+  const min = [0, 1, 2].map((k) => Math.min(...boxes.map((b) => b.min[k])));
+  const max = [0, 1, 2].map((k) => Math.max(...boxes.map((b) => b.max[k])));
+  return {
+    center: min.map((x, k) => x + (max[k] - x) / 2),
+    scale: Math.max(...max.map((x, k) => x - min[k]), 1),
+  };
+}
 
 /**
  * One boolean with every tool at once. replicad's fuse()/cut() take one tool and
  * simplify the result each time, so N tools cost N operations on an ever-bigger
- * part: a sheet-metal part with 250 nuts spent 16 s fusing them in one by one.
- * OCCT takes the whole list in one go. Fuse and cut mean the same either way;
- * common of several tools would not (base ∩ (t1 ∪ t2), not base ∩ t1 ∩ t2).
+ * part. OCCT takes the whole list in one go.
+ *
+ * If world-coordinate arithmetic fails, retry in an operation-local frame and
+ * translate the exact B-rep back. Robust kernels use the same separation:
+ * topology is evaluated near the origin at a scale derived from the operands,
+ * while placement remains an outer transform. The ordinary result always wins;
+ * this rescue runs only after an exception or an invalid/unbounded result.
  */
 export function brepBoolean(op, base, tools) {
-  const args = new OC.TopTools_ListOfShape_1(), list = new OC.TopTools_ListOfShape_1();
-  const bop = new OC[BOP[op]](), progress = new OC.Message_ProgressRange_1();
+  let first = null;
+  // A valid and bounded world-frame result can still be numerically wrong when
+  // placement dwarfs operation size, so post-validation is insufficient.
+  // Bounds give both quantities; execute risky cases locally from the outset.
+  const wrapped = [base, ...tools];
+  let frame = operationFrame(wrapped);
+  const magnitude = Math.max(...frame.center.map(Math.abs));
+  if (magnitude <= 1e8 * frame.scale) {
+    try {
+      first = rawBoolean(op, base, tools);
+      if (booleanResultIsSound(first, op !== 'union')) return first;
+    } catch { /* retry below in a local numerical frame */ }
+    try { first?.delete(); } catch { /* incomplete result */ }
+  }
+
+  const shift = frame.center.map((x) => -x);
+  const localBase = track(base.clone().translate(...shift));
+  const localTools = tools.map((tool) => track(tool.clone().translate(...shift)));
+  const localResult = rawBoolean(op, localBase, localTools);
+  if (!booleanResultIsSound(localResult, op !== 'union', true)) {
+    try { localResult.delete(); } catch { /* incomplete result */ }
+    throw new GraphError(`${op} failed in both world and local frames (operation scale ${frame.scale})`);
+  }
+  // Keep the rescued geometry in its well-conditioned local coordinates and
+  // restore world placement as a TopLoc_Location. Baking a huge translation
+  // back into every curve/surface can make a valid rescue invalid again.
+  const vec = new OC.gp_Vec_4(...frame.center), trsf = new OC.gp_Trsf_1();
+  trsf.SetTranslation_1(vec);
+  const loc = new OC.TopLoc_Location_2(trsf);
   try {
-    args.Append_1(base.wrapped);
-    for (const t of tools) list.Append_1(t.wrapped);
-    bop.SetArguments(args);
-    bop.SetTools(list);
-    bop.Build(progress);
-    return track(kernel().cast(unified(bop.Shape())));
+    const moved = localResult.wrapped.Moved(loc, false);
+    return track(kernel().cast(moved));
   } finally {
-    for (const o of [bop, progress, args, list]) o.delete();
+    for (const o of [loc, trsf, vec]) o.delete();
+    try { localResult.delete(); } catch { /* moved wrapper owns its shape */ }
   }
 }
 

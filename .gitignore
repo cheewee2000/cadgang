@@ -13,3 +13,6 @@ bin/
 .playwright-cli/
 __pycache__/
 stepdraw/.cache/
+
+# Local REA evidence bundles (large, machine-specific; study records digests and conclusions).
+rea-evidence/

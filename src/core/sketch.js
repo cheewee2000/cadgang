@@ -318,6 +318,7 @@ function buildSystem(sk, params) {
   const g0 = read(initial);
   constraints.forEach((c, i) => {
     const block = residualBlock(sk, c, i, params, g0, sides);
+    block.constraint = i;
     blocks.push(block);
   });
 
@@ -583,7 +584,23 @@ export function solveSketch(sk, { params = {}, maxIterations = 200 } = {}) {
   const rank = matrixRank(J, initial.length);
   const dof = initial.length - rank;
   const userRows = J.filter((_, i) => !implicitRow(blocks, i));
-  const redundant = userRows.length - matrixRank(userRows, initial.length);
+  const userRank = matrixRank(userRows, initial.length);
+  const redundant = userRows.length - userRank;
+  // Per-constraint status, not just a count: a constraint is redundant when
+  // removing every residual row it owns leaves the user-constraint rank
+  // unchanged. Several equivalent constraints may all be candidates; that is
+  // honest—the caller can choose which one expresses intent best.
+  const redundantConstraints = [];
+  if (converged && redundant > 0) {
+    for (const block of blocks) {
+      if (block.implicit || block.constraint == null) continue;
+      const without = userRows.filter((_, row) => userConstraintAt(blocks, row) !== block.constraint);
+      if (matrixRank(without, initial.length) === userRank) redundantConstraints.push({
+        constraint: block.constraint,
+        label: block.label,
+      });
+    }
+  }
 
   const offenders = blocks
     .map((b, i) => ({ block: b, residual: blockResidual(blocks, r, i) }))
@@ -594,6 +611,7 @@ export function solveSketch(sk, { params = {}, maxIterations = 200 } = {}) {
     converged,
     dof,
     redundant: converged && redundant > 0 ? redundant : 0,
+    redundantConstraints,
     iterations: solved.iterations,
     residual: worst,
     conflicts: offenders.map((o) => ({ constraint: o.block.label, off: o.residual })),
@@ -621,6 +639,17 @@ function implicitRow(blocks, i) {
     at += b.size;
   }
   return false;
+}
+
+/** Constraint index owning user residual row `i` (implicit rows excluded). */
+function userConstraintAt(blocks, i) {
+  let at = 0;
+  for (const b of blocks) {
+    if (b.implicit) continue;
+    if (i < at + b.size) return b.constraint;
+    at += b.size;
+  }
+  return null;
 }
 
 /** Sum of one block's residuals, for blaming a constraint. */
