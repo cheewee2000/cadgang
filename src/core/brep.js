@@ -283,10 +283,11 @@ function toGraphError(op, thrown) {
  * lower-level sweeps and booleans it invokes, which remain visible separately.
  */
 const operationStats = new Map();
-function recordOperation(op, ms, failed) {
-  const s = operationStats.get(op) ?? { count: 0, failures: 0, totalMs: 0, maxMs: 0 };
+function recordOperation(op, ms, failed, warned = false) {
+  const s = operationStats.get(op) ?? { count: 0, failures: 0, warnings: 0, totalMs: 0, maxMs: 0 };
   s.count++;
   if (failed) s.failures++;
+  if (warned) s.warnings++;
   s.totalMs += ms;
   s.maxMs = Math.max(s.maxMs, ms);
   operationStats.set(op, s);
@@ -295,7 +296,7 @@ function recordOperation(op, ms, failed) {
 /** A snapshot safe to expose from /api/health and benchmark tools. */
 export function brepOperationStats() {
   return Object.fromEntries([...operationStats].sort((a, b) => b[1].totalMs - a[1].totalMs).map(([op, s]) => [op, {
-    count: s.count, failures: s.failures,
+    count: s.count, failures: s.failures, warnings: s.warnings ?? 0,
     totalMs: +s.totalMs.toFixed(2), maxMs: +s.maxMs.toFixed(2),
     meanMs: +(s.totalMs / s.count).toFixed(2),
   }]));
@@ -315,7 +316,7 @@ function attempt(op, fn) {
   const started = performance.now();
   try {
     const value = fn();
-    recordOperation(op, performance.now() - started, false);
+    recordOperation(op, performance.now() - started, false, !!value?.__kernelWarning);
     if (progress.fn && !progressing && value?.wrapped && typeof value.mesh === 'function') {
       progressing = true;   // the hook's own tessellation is an op too
       try { progress.fn(op, value); } catch { /* a draft is cosmetic */ } finally { progressing = false; }
@@ -481,8 +482,14 @@ function rawBoolean(op, base, tools) {
   try {
     args.Append_1(base.wrapped);
     for (const tool of tools) list.Append_1(tool.wrapped);
+    // Do not build topology history we currently throw away. Operands are
+    // already private clones, so OCCT's default destructive mode is contained.
+    bop.SetToFillHistory(false);
     bop.SetArguments(args); bop.SetTools(list); bop.Build(range);
-    return track(kernel().cast(unified(bop.Shape())));
+    if (bop.HasErrors()) throw new GraphError(`${op} failed: OCCT reported a Boolean error`);
+    const out = track(kernel().cast(unified(bop.Shape())));
+    if (bop.HasWarnings()) out.__kernelWarning = true;
+    return out;
   } finally {
     for (const o of [bop, range, args, list]) o.delete();
   }

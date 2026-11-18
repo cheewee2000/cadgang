@@ -18,6 +18,7 @@ test('exact-kernel calls expose bounded aggregate timings and failures', () => {
     assert.equal(stats.box.count, 2); // invalid dimensions are rejected before entering OCCT
     assert.equal(stats.box.failures, 0);
     assert.equal(stats.union.count, 1);
+    assert.equal(stats.union.warnings, 0);
     assert.ok(stats.union.totalMs >= 0);
     assert.ok(stats.union.maxMs >= stats.union.meanMs);
   } finally { scope.dispose(); }
