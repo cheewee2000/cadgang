@@ -175,8 +175,12 @@ bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params)
     }
     std::vector<int> alone;
     for (int i = 1; i <= solids.Extent (); i++) if (!shared[i]) alone.push_back (i);
+    // Each of these meshes on its own thread only: BRepMesh's own parallel pass inside a solid kept a working model
+    // per face in flight and took RT v3.14 PCB1's peak from 6.6 GB to 20 GB, for no gain in time. Fewer solids than
+    // cores (one big part) keep it, or that part would mesh on one core.
+    const Standard_Boolean inner = (int) alone.size () < OSD_Parallel::NbLogicalProcessors ();
     OSD_Parallel::For (0, (int) alone.size (), [&](int k) {
-        BRepMesh_IncrementalMesh (solids (alone[k]), linDeflection, Standard_False, angDeflection, Standard_True);
+        BRepMesh_IncrementalMesh (solids (alone[k]), linDeflection, Standard_False, angDeflection, inner);
     });
     for (int i = 1; i <= solids.Extent (); i++) {
         if (shared[i]) BRepMesh_IncrementalMesh (solids (i), linDeflection, Standard_False, angDeflection, Standard_True);
