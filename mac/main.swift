@@ -70,8 +70,10 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         web = makeWindow(cfg)
         NSApp.activate(ignoringOtherApps: true)
         start3dMouse()
-        startServer()
+        ensureServer { self.load() }
     }
+    /// Back in front: if the server went away meanwhile, it comes back before the next click needs it.
+    func applicationDidBecomeActive(_ n: Notification) { if ready { ensureServer {} } }
 
     /// A window around a page. The page sets its own title; files dropped on it open in it.
     /// A tab is narrow: it shows the file's name alone, without the page's "CADgang · " or " · CADgang".
@@ -146,9 +148,16 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
 
     // MARK: server
 
-    func startServer() {
+    /// The server is up before `done` runs. Usually it already is; it is not when another copy of the app
+    /// (a dev build next to the installed one) owned it and quit, which left this one's pages talking to nothing.
+    var serverWaiters: [() -> Void] = []
+    func ensureServer(_ then: @escaping () -> Void) {
+        serverWaiters.append(then)
+        if serverWaiters.count > 1 { return }   // one check at a time: two at once would each start a server
+        let done = { let w = self.serverWaiters; self.serverWaiters = []; w.forEach { $0() } }
         health { up in
-            if up { self.load(); return }
+            if up { done(); return }
+            if self.node?.isRunning == true { self.waitForServer(tries: 100, done); return }   // ours, restarting under its supervisor
             let res = Bundle.main.resourceURL!
             let p = Process()
             p.executableURL = res.appendingPathComponent("node")
@@ -180,15 +189,15 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
                 self.fail("Could not start the bundled server: \(error.localizedDescription)"); return
             }
             self.node = p
-            self.waitForServer(tries: 100)
+            self.waitForServer(tries: 100, done)
         }
     }
 
-    func waitForServer(tries: Int) {
+    func waitForServer(tries: Int, _ done: @escaping () -> Void) {
         health { up in
-            if up { self.load() }
+            if up { done() }
             else if tries == 0 { self.fail("The server did not answer on port \(PORT).") }
-            else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.waitForServer(tries: tries - 1) } }
+            else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.waitForServer(tries: tries - 1, done) } }
         }
     }
 
@@ -230,7 +239,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
 
     func open(_ paths: [String], in w: WKWebView) {
         let json = String(data: try! JSONSerialization.data(withJSONObject: paths), encoding: .utf8)!
-        w.evaluateJavaScript("window.cadgangOpen ? cadgangOpen(\(json)) : (location.href = '/view?open=' + encodeURIComponent(\(json).join('|')))")
+        ensureServer { [weak w] in w?.evaluateJavaScript("window.cadgangOpen ? cadgangOpen(\(json)) : (location.href = '/view?open=' + encodeURIComponent(\(json).join('|')))") }
     }
 
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
