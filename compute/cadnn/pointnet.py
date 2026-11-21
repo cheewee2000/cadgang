@@ -54,3 +54,35 @@ def load_encoder(enc, path):
                          f'in_ch={enc.in_ch} widths={list(enc.widths)} (pass the same --widths)')
     enc.load_state_dict(ck['state'])
     return {k: v for k, v in ck.items() if k != 'state'} | {'path': str(path)}
+
+
+def load_encoder_xyz(enc, path):
+    """Transfer a 3-channel geometry encoder into an encoder with extra per-point channels.
+
+    The XYZ columns of the first convolution are copied; newly introduced channels keep their random
+    initialization. BatchNorm and every later layer are copied exactly. This lets the joint model retain its
+    contact/inside features while starting its geometric representation from parts pretraining.
+    """
+    from .runtime import load_ckpt
+    ck = load_ckpt(path)
+    if not isinstance(ck, dict) or ck.get('kind') != ENCODER_KIND:
+        raise SystemExit(f'{path}: not an encoder file written by `compute/parts/main.py pretrain`')
+    if int(ck.get('in_ch', -1)) != 3 or tuple(ck.get('widths', ())) != enc.widths or enc.in_ch < 3:
+        raise SystemExit(f'{path}: encoder has in_ch={ck.get("in_ch")} widths={ck.get("widths")}, the model wants '
+                         f'XYZ transfer into in_ch={enc.in_ch} widths={list(enc.widths)} (pass the same --widths)')
+    dst, src = enc.state_dict(), ck['state']
+    first = 'net.0.weight'
+    if first not in src or first not in dst or src[first].shape[1] != 3 or dst[first].shape[1] != enc.in_ch:
+        raise SystemExit(f'{path}: unsupported encoder layout for XYZ transfer')
+    for k, v in src.items():
+        if k == first:
+            if v.shape[0] != dst[k].shape[0] or v.shape[2:] != dst[k].shape[2:]:
+                raise SystemExit(f'{path}: first encoder layer shape does not match')
+            dst[k][:, :3].copy_(v)
+        elif k not in dst or dst[k].shape != v.shape:
+            raise SystemExit(f'{path}: encoder tensor {k} has shape {tuple(v.shape)}, expected '
+                             f'{tuple(dst[k].shape) if k in dst else "missing"}')
+        else:
+            dst[k].copy_(v)
+    enc.load_state_dict(dst)
+    return {k: v for k, v in ck.items() if k != 'state'} | {'path': str(path), 'transfer': 'xyz'}
