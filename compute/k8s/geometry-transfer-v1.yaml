@@ -55,7 +55,7 @@ spec:
             - name: REF
               value: compute/geometry-transfer
             - name: COMMIT
-              value: REPLACE_WITH_COMMIT
+              value: e15e84a1873c4121ab12f9224f06a11da2fac9fa
             - name: PYTHONUNBUFFERED
               value: "1"
           resources:
