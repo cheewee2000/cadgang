@@ -41,7 +41,7 @@ spec:
               fi
               cd "$WORK/repo"
               git fetch origin "$REF"
-              git checkout -f "origin/$REF"
+              git checkout -f "$COMMIT"
               test "$(git rev-parse HEAD)" = "$COMMIT"
               python -m pip install --no-cache-dir scipy onnx onnxruntime
               exec bash compute/research/run-geometry-transfer.sh
