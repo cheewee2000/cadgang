@@ -58,6 +58,7 @@ def build_parser():
     p.add_argument('--widths', type=parse_ints, default=(64, 128, 256), help='encoder widths (default 64,128,256)')
     p.add_argument('--head', type=parse_ints, default=(256, 128), help='pair MLP widths (default 256,128)')
     p.add_argument('--dropout', type=float, default=0.2)
+    p.add_argument('--init-encoder', help='encoder.pt from parts pretraining; transfers XYZ weights while retaining contact channels')
     p.add_argument('--workers', type=int, default=4, help='DataLoader processes (default 4)')
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--val-limit', type=int, default=20000, help='validation pairs per epoch, 0 for all (default 20000)')

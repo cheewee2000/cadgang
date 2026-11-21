@@ -143,7 +143,12 @@ def train(args, on_step=None):
     torch.manual_seed(args.seed)
     arch = arch_of(args)
     model = build(arch)
-    config = dict(stage='joints', arch=arch, labels=list(LABELS),
+    pretrain = None
+    if args.init_encoder:
+        from cadnn.pointnet import load_encoder_xyz
+        pretrain = load_encoder_xyz(model.enc, args.init_encoder)
+        log_err(f'initialized XYZ encoder weights from {args.init_encoder}')
+    config = dict(stage='joints', arch=arch, labels=list(LABELS), pretrain=pretrain,
                   data=dict(n_points=args.points, contact_mm=args.contact_mm, gap_mm=meta['gap_mm'], index=str(args.index),
                             seed=args.seed, n_ch=N_CH, n_extra=N_EXTRA),
                   args={k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items() if k != 'func'})

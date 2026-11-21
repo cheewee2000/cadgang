@@ -186,6 +186,26 @@ class JointTraining(unittest.TestCase):
                                           '--epochs', '2', '--batch-size', '8', '--points', '48', '--widths', '8,16',
                                           '--head', '16', '--workers', '0', '--log-every', '0', '--augment', 'so3', *extra])
 
+    def test_xyz_pretrain_transfer_preserves_joint_channels(self):
+        from cadnn.pointnet import encoder_payload
+        from cadnn.runtime import save_ckpt, load_ckpt
+        from parts.model import PointAE
+        from joints import train as T
+        src = PointAE(widths=(8, 16), n_out=16, hidden=(16,))
+        with torch.no_grad():
+            for p in src.enc.parameters():
+                p.fill_(0.25)
+        enc = f'{self.t}/xyz-encoder.pt'
+        save_ckpt(enc, encoder_payload(src.enc, labels_used='none'))
+        out = f'{self.t}/xyz-joint'
+        T.train(self._args(out, '--epochs', '1', '--init-encoder', enc))
+        ck = load_ckpt(f'{out}/last.pt')
+        self.assertEqual(ck['config']['pretrain']['transfer'], 'xyz')
+        self.assertEqual(ck['config']['pretrain']['labels_used'], 'none')
+        self.assertEqual(tuple(ck['model']['enc.net.0.weight'].shape), (8, 5, 1))
+        with self.assertRaises(SystemExit):
+            T.train(self._args(f'{self.t}/xyz-bad', '--epochs', '1', '--widths', '8,32', '--init-encoder', enc))
+
     def test_train_resume_after_sigterm_matches_uninterrupted(self):
         from cadnn.runtime import load_ckpt
         from joints import train as T
