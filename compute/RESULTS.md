@@ -81,3 +81,20 @@ Corrected counts:
 | bearing | 2 |
 
 A 12-class production model is not justified yet: five classes have fewer than 20 examples and some are absent from validation/test splits. Review and expand rare classes before GPU training. `compute/labels/relabel.mjs` and `compute/labels/review.py` are the repeatable audit workflow.
+
+## Stage 4 — supervised joint architecture sweep
+
+Eight GPU lanes compared the PointNet control with dynamic EdgeConv and lightweight attention-set encoders, with cross-entropy and focal-loss variants. Every lane trained to 60 epochs, evaluated at staged checkpoints, fit its confidence temperature on the validation split, and exported its best checkpoint. One market node left during the run; SIGTERM checkpoints on the shared volume let every lane resume on its replacement. The completed sweep produced 40 evaluated configurations under `/mnt/shared/cadgang/joint-architecture-v1/`.
+
+Product-facing comparison against the prior PointNet baseline:
+
+| model | test accuracy | median axis error | precision at p≥0.90 | coverage at p≥0.90 |
+|---|---:|---:|---:|---:|
+| prior baseline | 64.6% | 3.24° | 97.72% | 9.26% |
+| EdgeConv k=8, CE, 60 epochs | **65.16%** | **0.75°** | 95.73% | 18.92% |
+| attention 128/8 tokens, CE | 63.28% | 1.78° | 96.25% | **20.43%** |
+| attention 192/16 tokens, CE, 60 epochs | 62.73% | 1.55° | 96.76% | 19.69% |
+
+EdgeConv is the best balanced candidate: slightly higher type accuracy, about 77% lower median axis error, and roughly twice the high-confidence coverage. Attention gives the best macro balance and CYLINDRICAL recall (34.0%) but lower aggregate accuracy. No model beats the exact shape solver's zero-median axis on REVOLUTE or CYLINDRICAL; every leading model still beats it on SLIDER. Recommended product use remains a calibrated, confidence-gated joint suggestion for human confirmation, never a silent automatic-explode hint.
+
+Artifacts include checkpoints, calibrated test reports, predictions, ONNX exports and `summary.{md,json,csv}` under `/mnt/shared/cadgang/joint-architecture-v1/`.
