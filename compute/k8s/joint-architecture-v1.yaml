@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cadgang-joint-architecture-v1
+  namespace: cadgang-compute
+  labels:
+    app: cadgang-joint-architecture-v1
+spec:
+  activeDeadlineSeconds: 162000
+  backoffLimit: 0
+  podReplacementPolicy: Failed
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+      - action: Ignore
+        onExitCodes:
+          operator: In
+          values: [143]
+  template:
+    metadata:
+      labels:
+        app: cadgang-joint-architecture-v1
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: train
+          image: rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0
+          workingDir: /workspace
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              cd "$WORK/repo"
+              git fetch origin "$REF"
+              git checkout -f "$COMMIT"
+              test "$(git rev-parse HEAD)" = "$COMMIT"
+              python -m pip install --no-cache-dir scipy onnx onnxruntime
+              exec bash compute/research/run-joint-architecture-sweep.sh
+          env:
+            - name: WORK
+              value: /mnt/shared/cadgang
+            - name: ROOT
+              value: /mnt/shared/cadgang/joint-architecture-v1
+            - name: REF
+              value: compute/joint-architecture
+            - name: COMMIT
+              value: REPLACE_WITH_COMMIT
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "32"
+              memory: 128Gi
+              amd.com/gpu: "8"
+            limits:
+              cpu: "64"
+              memory: 256Gi
+              amd.com/gpu: "8"
+          volumeMounts:
+            - name: shared
+              mountPath: /mnt/shared
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: shared
+          hostPath:
+            path: /mnt/shared
+            type: Directory
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi

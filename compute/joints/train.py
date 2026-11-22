@@ -48,6 +48,26 @@ def predict(model, ds, rows, device, batch_size=128, workers=0):
     return {k: np.concatenate(v) for k, v in out.items()}
 
 
+def calibrate_temperature(val, target):
+    """Fit one temperature on validation probabilities and apply it to target probabilities."""
+    if not len(val['label']):
+        return 1.0
+    logp = np.log(np.clip(val['prob'], 1e-9, 1.0))
+    temps = np.linspace(0.5, 3.0, 101)
+    losses = []
+    for t in temps:
+        z = logp / t
+        z -= z.max(1, keepdims=True)
+        p = np.exp(z); p /= p.sum(1, keepdims=True)
+        losses.append(-np.log(np.clip(p[np.arange(len(p)), val['label']], 1e-9, 1.0)).mean())
+    temperature = float(temps[int(np.argmin(losses))])
+    z = np.log(np.clip(target['prob'], 1e-9, 1.0)) / temperature
+    z -= z.max(1, keepdims=True)
+    target['prob'] = np.exp(z); target['prob'] /= target['prob'].sum(1, keepdims=True)
+    target['pred'] = target['prob'].argmax(1)
+    return temperature
+
+
 def summarize(P):
     """Type metrics and, per axial type, the model's axis error next to the rule solver's (solve[].dir of the
     smaller part) on the same pairs."""
@@ -72,6 +92,23 @@ def summarize(P):
     all_err = np.concatenate(all_err) if all_err else np.zeros(0)
     m['axis'] = axis
     m['axis_all'] = angle_stats(all_err)
+    if len(P['label']):
+        conf = P['prob'].max(1)
+        right = P['pred'] == P['label']
+        m['confidence'] = {}
+        for threshold in (0.8, 0.9, 0.95, 0.99):
+            keep = conf >= threshold
+            m['confidence'][str(threshold)] = dict(
+                n=int(keep.sum()), coverage=float(keep.mean()),
+                precision=float(right[keep].mean()) if keep.any() else None)
+        # 15-bin expected calibration error.
+        ece = 0.0
+        for lo in np.linspace(0, 1, 16)[:-1]:
+            keep = (conf >= lo) & (conf < lo + 1 / 15)
+            if keep.any(): ece += float(keep.mean()) * abs(float(right[keep].mean()) - float(conf[keep].mean()))
+        m['calibration_ece'] = ece
+    else:
+        m['confidence'], m['calibration_ece'] = {}, None
     macro = m['macro_recall'] or 0.0
     m['score'] = 0.5 * macro + 0.5 * (1 - all_err.mean() / 90.0) if len(all_err) else macro
     return m
@@ -155,7 +192,8 @@ def train(args, on_step=None):
 
     def step(model, b):
         logits, axis = model(b['pa'], b['pb'], b['extra'])
-        loss, ce, ax = joint_loss(logits, axis, b['label'], b['axis'], b['axis_mask'], weight, args.axis_weight)
+        loss, ce, ax = joint_loss(logits, axis, b['label'], b['axis'], b['axis_mask'], weight, args.axis_weight,
+                                       args.focal_gamma)
         return loss, dict(type=ce.detach(), axis=ax.detach())
 
     def evaluate_val(model):
@@ -195,7 +233,14 @@ def evaluate(args):
         raise SystemExit(f'no pairs in split {args.split}')
     log_err(f'evaluating {len(rows)} {args.split} pairs on {describe_device(device)}')
     P = predict(model, ds, rows, device, args.batch_size, args.workers)
+    temperature = 1.0
+    if args.split == 'test':
+        val_rows = rows_in(index, 'val')
+        if len(val_rows):
+            V = predict(model, ds, val_rows, device, args.batch_size, args.workers)
+            temperature = calibrate_temperature(V, P)
     m = summarize(P)
+    m['temperature'] = temperature
     exp = None
     if args.export_report and Path(args.export_report).exists():
         exp = json.loads(Path(args.export_report).read_text(encoding='utf-8'))

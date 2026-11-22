@@ -139,6 +139,22 @@ class JointData(unittest.TestCase):
 
 @needs_torch
 class JointModel(unittest.TestCase):
+    def test_all_encoder_shapes_and_focal_loss(self):
+        from joints.data import LABEL_ID
+        from joints.model import JointNet, joint_loss
+        pa, pb, ex = torch.randn(3, 24, 5), torch.randn(3, 24, 5), torch.randn(3, 4)
+        for kind in ('pointnet', 'edgeconv', 'attention'):
+            m = JointNet(widths=(8, 16), head=(16,), encoder=kind, edge_k=4,
+                         attn_width=16, attn_heads=4, attn_tokens=4, attn_layers=1)
+            logits, axis = m(pa, pb, ex)
+            self.assertEqual(tuple(logits.shape), (3, 7), kind)
+            torch.testing.assert_close(axis.norm(dim=1), torch.ones(3), msg=kind)
+        labels = torch.tensor([LABEL_ID['NONE'], LABEL_ID['REVOLUTE'], LABEL_ID['SLIDER']])
+        gt = torch.tensor([[0., 0, 1.]] * 3)
+        base = joint_loss(logits, axis, labels, gt, torch.ones(3), focal_gamma=0)[1]
+        focal = joint_loss(logits, axis, labels, gt, torch.ones(3), focal_gamma=2)[1]
+        self.assertLess(float(focal), float(base))
+
     def test_forward_shapes_and_axis_loss_only_for_axial(self):
         from joints.data import LABEL_ID
         from joints.model import JointNet, joint_loss
