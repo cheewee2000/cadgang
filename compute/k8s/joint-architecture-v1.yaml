@@ -48,7 +48,7 @@ spec:
             - name: REF
               value: compute/joint-architecture
             - name: COMMIT
-              value: REPLACE_WITH_COMMIT
+              value: 2349728f722d611e0d2c940ad1d82f5fb3e86b98
             - name: PYTHONUNBUFFERED
               value: "1"
           resources:
