@@ -26,18 +26,79 @@ export function segmentLength(pattern, segment) {
 function bounds(pattern) { const x = pattern.points.map((p) => p.x), y = pattern.points.map((p) => p.y); return { min: [Math.min(...x), Math.min(...y)], max: [Math.max(...x), Math.max(...y)] }; }
 const line = (a, b, layer) => `0\nLINE\n8\n${layer}\n10\n${a[0]}\n20\n${a[1]}\n30\n0\n11\n${b[0]}\n21\n${b[1]}\n31\n0`;
 const text = (at, value, height = 5, rotation = 0) => `0\nTEXT\n8\nTEXT\n10\n${at[0]}\n20\n${at[1]}\n30\n0\n40\n${height}\n50\n${rotation}\n1\n${value}`;
+const cross2 = (a, b) => a[0] * b[1] - a[1] * b[0];
+const sub2 = (a, b) => [a[0] - b[0], a[1] - b[1]];
+const add2 = (a, b) => [a[0] + b[0], a[1] + b[1]];
+const mul2 = (a, k) => [a[0] * k, a[1] * k];
+const close2 = (a, b, eps = 1e-7) => Math.hypot(a[0] - b[0], a[1] - b[1]) <= eps;
 
-/** R12 DXF: STITCH is exact; CUT is currently the manufacturing boundary metadata plus a visible allowance tick schedule. */
+function loopPolyline(pattern, loop, curveStep = 2) {
+  const edges = [];
+  for (const id of loop) {
+    const segment = pattern.segments.find((s) => s.id === id);
+    if (!segment) throw new GraphError(`Pattern '${pattern.id}' contour refers to missing segment '${id}'`);
+    const rough = sampleSegment(pattern, segment, 64), length = rough.slice(1).reduce((n, q, i) => n + Math.hypot(q[0] - rough[i][0], q[1] - rough[i][1]), 0);
+    const q = sampleSegment(pattern, segment, Math.max(1, Math.ceil(length / curveStep)));
+    for (let i = 1; i < q.length; i++) if (!close2(q[i - 1], q[i])) edges.push({ a: q[i - 1], b: q[i], segment: id, allowance: Number(pattern.allowances?.[id] ?? 0) });
+  }
+  if (edges.length < 3 || !close2(edges[0].a, edges.at(-1).b)) throw new GraphError(`Pattern '${pattern.id}' contour is not closed`);
+  return edges;
+}
+function signedArea(edges) { return edges.reduce((n, e) => n + cross2(e.a, e.b), 0) / 2; }
+function pointInEdges(edges, p) {
+  let inside = false;
+  for (const e of edges) if ((e.a[1] > p[1]) !== (e.b[1] > p[1]) && p[0] < (e.b[0] - e.a[0]) * (p[1] - e.a[1]) / (e.b[1] - e.a[1]) + e.a[0]) inside = !inside;
+  return inside;
+}
+function intersection(p, r, q, s) { const d = cross2(r, s); if (Math.abs(d) < 1e-10) return null; return add2(p, mul2(r, cross2(sub2(q, p), s) / d)); }
+function orient(a, b, c) { return cross2(sub2(b, a), sub2(c, a)); }
+function properCross(a, b, c, d) {
+  if (Math.max(a[0], b[0]) < Math.min(c[0], d[0]) - 1e-7 || Math.max(c[0], d[0]) < Math.min(a[0], b[0]) - 1e-7 || Math.max(a[1], b[1]) < Math.min(c[1], d[1]) - 1e-7 || Math.max(c[1], d[1]) < Math.min(a[1], b[1]) - 1e-7) return false;
+  const x = orient(a, b, c), y = orient(a, b, d), z = orient(c, d, a), w = orient(c, d, b);
+  return x * y < -1e-12 && z * w < -1e-12;
+}
+function assertSimple(points, patternId) {
+  for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) {
+    if (j === i || j === (i + 1) % points.length || i === (j + 1) % points.length) continue;
+    if (properCross(points[i], points[(i + 1) % points.length], points[j], points[(j + 1) % points.length])) throw new GraphError(`Pattern '${patternId}' seam allowance self-intersects; reduce an allowance or simplify the corner`);
+  }
+}
+
+/** Closed manufacturing cutting contours. Contour 0 offsets away from material; contained contours offset into holes. */
+export function cutContours(pattern, { curveStep = 2, miterLimit = 4 } = {}) {
+  const loops = pattern.contours.map((loop) => loopPolyline(pattern, loop, curveStep));
+  return loops.map((edges, loopIndex) => {
+    const probe = edges[0].a, depth = loops.filter((other, i) => i !== loopIndex && Math.abs(signedArea(other)) > Math.abs(signedArea(edges)) && pointInEdges(other, probe)).length;
+    const materialSide = depth % 2 ? -1 : 1, winding = signedArea(edges) >= 0 ? 1 : -1, side = materialSide * winding;
+    const shifted = edges.map((e) => { const d = sub2(e.b, e.a), l = Math.hypot(...d), n = [side * d[1] / l, -side * d[0] / l], o = mul2(n, e.allowance); return { ...e, p: add2(e.a, o), q: add2(e.b, o), d }; });
+    const points = [];
+    for (let i = 0; i < shifted.length; i++) {
+      const prev = shifted[(i + shifted.length - 1) % shifted.length], cur = shifted[i], hit = intersection(prev.p, prev.d, cur.p, cur.d), corner = edges[i].a, limit = miterLimit * Math.max(1, prev.allowance, cur.allowance);
+      if (hit && Math.hypot(hit[0] - corner[0], hit[1] - corner[1]) <= limit) points.push(hit);
+      else { if (!points.length || !close2(points.at(-1), prev.q)) points.push(prev.q); if (!close2(points.at(-1), cur.p)) points.push(cur.p); }
+    }
+    const clean = points.filter((q, i) => !i || !close2(q, points[i - 1])); if (clean.length > 1 && close2(clean[0], clean.at(-1))) clean.pop();
+    if (clean.length < 3 || Math.abs(clean.reduce((n, q, i) => n + cross2(q, clean[(i + 1) % clean.length]), 0)) < 1e-6) throw new GraphError(`Pattern '${pattern.id}' seam allowance collapsed`);
+    assertSimple(clean, pattern.id); return clean;
+  });
+}
+
+function stitchAt(pattern, segment, at) { const q = sampleSegment(pattern, segment, 128), f = Math.max(0, Math.min(1, Number(at ?? .5))) * (q.length - 1), i = Math.min(q.length - 2, Math.floor(f)), t = f - i; return { p: [q[i][0] + (q[i + 1][0] - q[i][0]) * t, q[i][1] + (q[i + 1][1] - q[i][1]) * t], d: sub2(q[i + 1], q[i]) }; }
+
+/** R12 DXF with exact STITCH geometry and a closed manufacturing CUT contour. */
 export function patternDXF(pattern) {
   const entities = [];
   for (const loop of pattern.contours) for (const id of loop) { const q = sampleSegment(pattern, pattern.segments.find((s) => s.id === id)); for (let i = 1; i < q.length; i++) entities.push(line(q[i - 1], q[i], 'STITCH')); }
-  // Per-edge allowances are represented as dimension ticks until robust curved offset joins land.
-  // Never pretend these ticks are a closed cutting contour: the tech pack calls the limitation out.
+  for (const q of cutContours(pattern)) for (let i = 0; i < q.length; i++) entities.push(line(q[i], q[(i + 1) % q.length], 'CUT'));
   for (const s of pattern.segments) {
-    const q = sampleSegment(pattern, s), a = q[Math.floor(q.length / 2)], z = q[Math.min(q.length - 1, Math.floor(q.length / 2) + 1)], dx = z[0] - a[0], dy = z[1] - a[1], n = Math.hypot(dx, dy) || 1, mm = Number(pattern.allowances?.[s.id] ?? 0);
-    if (mm) entities.push(line(a, [a[0] + dy / n * mm, a[1] - dx / n * mm], 'ALLOWANCE'));
+    const { p: a, d } = stitchAt(pattern, s, .5), l = Math.hypot(...d) || 1, mm = Number(pattern.allowances?.[s.id] ?? 0), loop = pattern.contours.find((x) => x.includes(s.id)), outer = signedArea(loopPolyline(pattern, loop)) >= 0 ? [d[1] / l, -d[0] / l] : [-d[1] / l, d[0] / l];
+    if (mm) entities.push(line(a, add2(a, mul2(outer, mm)), 'ALLOWANCE'));
   }
-  for (const n of pattern.notches || []) { const s = pattern.segments.find((x) => x.id === n.segment); if (!s) continue; const q = sampleSegment(pattern, s), i = Math.max(0, Math.min(q.length - 1, Math.round((n.at ?? 0.5) * (q.length - 1)))); entities.push(line(q[i], [q[i][0], q[i][1] + Number(n.depth ?? 4)], 'NOTCH')); }
+  for (const n of pattern.notches || []) {
+    const s = pattern.segments.find((x) => x.id === n.segment); if (!s) continue;
+    const { p, d } = stitchAt(pattern, s, n.at), l = Math.hypot(...d) || 1, loop = pattern.contours.find((x) => x.includes(s.id)), outward = signedArea(loopPolyline(pattern, loop)) >= 0 ? [d[1] / l, -d[0] / l] : [-d[1] / l, d[0] / l], allowance = Number(pattern.allowances?.[s.id] ?? 0), cut = add2(p, mul2(outward, allowance));
+    entities.push(line(cut, add2(cut, mul2(outward, -Number(n.depth ?? 4))), 'NOTCH'));
+  }
   const b = bounds(pattern), c = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2], ang = Number(pattern.grain?.angle ?? 90) * Math.PI / 180, span = Math.max(20, Math.min(b.max[0] - b.min[0], b.max[1] - b.min[1]) * 0.35), d = [Math.cos(ang) * span, Math.sin(ang) * span];
   entities.push(line([c[0] - d[0], c[1] - d[1]], [c[0] + d[0], c[1] + d[1]], 'GRAIN'));
   entities.push(text([c[0], c[1]], `${pattern.name || pattern.id}  CUT ${pattern.cut || 1}  ${pattern.material || ''}`, Math.max(3, span / 12)));
@@ -48,7 +109,7 @@ export function patternDXF(pattern) {
 export function techPack(document, name = 'softgoods') {
   const patterns = document.patterns.map((p) => ({ id: p.id, name: p.name || p.id, material: p.material || '', cut: p.cut || 1, grain: p.grain || null, allowances: p.allowances || {}, notches: p.notches || [], segments: p.segments.map((s) => ({ id: s.id, type: s.type, lengthMm: +segmentLength(p, s).toFixed(2) })) }));
   const seams = document.seams.map((s) => { const pa = document.patterns.find((p) => p.id === s.a.pattern), pb = document.patterns.find((p) => p.id === s.b.pattern), a = pa?.segments.find((q) => q.id === s.a.segment), b = pb?.segments.find((q) => q.id === s.b.segment); return { ...s, lengthAmm: a ? +segmentLength(pa, a).toFixed(2) : null, lengthBmm: b ? +segmentLength(pb, b).toFixed(2) : null }; });
-  return { schema: 'cadgang.softgoods-tech-pack.v1', name, generatedAt: new Date().toISOString(), revision: document.revision, materials: document.materials || {}, patterns, seams, notes: ['All dimensions mm.', 'DXF STITCH geometry is authoritative.', 'CUT contour offset joins are not generated yet; ALLOWANCE layer ticks and this schedule specify per-edge allowances.'] };
+  return { schema: 'cadgang.softgoods-tech-pack.v1', name, generatedAt: new Date().toISOString(), revision: document.revision, materials: document.materials || {}, patterns, seams, notes: ['All dimensions mm.', 'DXF STITCH geometry is authoritative.', 'DXF CUT geometry is the closed seam-allowance cutting boundary; ALLOWANCE records the per-edge schedule.'] };
 }
 
 export function techPackHTML(pack) {
