@@ -31,7 +31,13 @@ test('curved pattern boundaries are sampled before triangulation', () => {
   assert.ok(m.triangles.length > 6);
 });
 
-test('simulation mesher refuses holes until constrained triangulation supports them', () => {
-  const d = new SoftgoodsDocument(null); d.addRectangle({ id: 'panel' }); const p = d.toJSON().patterns[0]; p.contours.push([...p.contours[0]]);
-  assert.throws(() => meshPattern(p), /one outer contour and no holes/);
+test('simulation mesh preserves an opening and its stable segment chains', () => {
+  const d = new SoftgoodsDocument(null); d.addRectangle({ id: 'panel', width: 200, height: 150 }); const p = d.toJSON().patterns[0];
+  const ids = ['h0', 'h1', 'h2', 'h3'], seg = ['hole_bottom', 'hole_right', 'hole_top', 'hole_left'];
+  p.points.push({ id: ids[0], x: 60, y: 50 }, { id: ids[1], x: 140, y: 50 }, { id: ids[2], x: 140, y: 100 }, { id: ids[3], x: 60, y: 100 });
+  p.segments.push(...seg.map((id, i) => ({ id, type: 'line', a: ids[i], b: ids[(i + 1) % 4] }))); p.contours.push(seg);
+  const m = meshPattern(p, { target: 30 });
+  assert.equal(m.holes, 1); assert.ok(Math.abs(area(m) - (200 * 150 - 80 * 50)) < 1e-6, `area ${area(m)}`);
+  for (const id of seg) assert.ok(m.segmentVertices[id].length >= 2, id);
+  for (let i = 0; i < m.triangles.length; i += 3) { const q = m.triangles.slice(i, i + 3).map((n) => [m.uv[n * 2], m.uv[n * 2 + 1]]), c = q.reduce((a, p) => [a[0] + p[0] / 3, a[1] + p[1] / 3], [0, 0]); assert.ok(!(c[0] > 60 && c[0] < 140 && c[1] > 50 && c[1] < 100), `triangle in hole ${c}`); }
 });
