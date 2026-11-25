@@ -5,7 +5,7 @@ metadata:
   namespace: cadgang-compute
   labels: {app: cadgang-joint-recall-v1}
 spec:
-  activeDeadlineSeconds: 140400
+  activeDeadlineSeconds: 133200
   backoffLimit: 0
   podReplacementPolicy: Failed
   podFailurePolicy:
