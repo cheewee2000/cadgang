@@ -1,0 +1,83 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cadgang-geometry-transfer-v1
+  namespace: cadgang-compute
+  labels:
+    app: cadgang-geometry-transfer-v1
+spec:
+  # The pod itself exits after 50 hours; no retry can silently buy another hold.
+  activeDeadlineSeconds: 180000
+  backoffLimit: 0
+  podReplacementPolicy: Failed
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+      - action: Ignore
+        onExitCodes:
+          operator: In
+          values: [143]
+  template:
+    metadata:
+      labels:
+        app: cadgang-geometry-transfer-v1
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: research
+          image: rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0
+          workingDir: /workspace
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              mkdir -p "$WORK/repo"
+              if [ ! -d "$WORK/repo/.git" ]; then
+                git clone "$REPO" "$WORK/repo"
+              fi
+              cd "$WORK/repo"
+              git fetch origin "$REF"
+              git checkout -f "$COMMIT"
+              test "$(git rev-parse HEAD)" = "$COMMIT"
+              python -m pip install --no-cache-dir scipy onnx onnxruntime
+              exec bash compute/research/run-geometry-transfer.sh
+          env:
+            - name: WORK
+              value: /mnt/shared/cadgang
+            - name: ROOT
+              value: /mnt/shared/cadgang/geometry-transfer-v1
+            - name: REPO
+              value: https://github.com/cheewee2000/cadgang.git
+            - name: REF
+              value: compute/geometry-transfer
+            - name: COMMIT
+              value: 25cd72197c35e64a5e7d598a2f1197ec81678978
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "32"
+              memory: 128Gi
+              amd.com/gpu: "8"
+            limits:
+              cpu: "64"
+              memory: 256Gi
+              amd.com/gpu: "8"
+          volumeMounts:
+            - name: shared
+              mountPath: /mnt/shared
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: shared
+          hostPath:
+            path: /mnt/shared
+            type: Directory
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi
