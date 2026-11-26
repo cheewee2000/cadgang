@@ -51,7 +51,7 @@ spec:
             - {name: REF, value: compute/joint-inputs}
             - {name: COMMIT, value: c4265460b577ca224737fa882a83201ca69a98c4}
           resources:
-            requests: {cpu: "14", memory: 24Gi}
+            requests: {cpu: "8", memory: 24Gi}
             limits: {cpu: "16", memory: 56Gi}
           volumeMounts:
             - {name: shared, mountPath: /mnt/shared}
