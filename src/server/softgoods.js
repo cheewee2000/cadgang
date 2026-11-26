@@ -15,6 +15,40 @@ import { validateSoftgoodsDocument } from '../core/softgoods-document.js';
 import { closures, listTrims, trimsInput } from '../core/softgoods-trims.js';
 import { editSoftgoods, editChanges } from '../core/softgoods-edit.js';
 import { conformLines, physicsInput } from '../core/softgoods-physics.js';
+import { flattenMesh, describeFaces, mergeFlattened } from '../core/softgoods-flatten.js';
+import { importCadFile } from '../core/step.js';
+import { CAD_EXT, mayReadLocal } from './view.js';
+
+/** The viewer's packed mesh (view.js pack) back as {positions, normals, indices, faces, bodies}. */
+function unpackMesh(buf) {
+  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), [np, ni, nf, nb, nn, nr] = new Uint32Array(ab, 0, 6);
+  let o = 24; const take = (Type, n) => { const a = new Type(ab, o, n); o += n * 4; return a; };
+  const positions = take(Float32Array, np), normals = take(Float32Array, nr), indices = take(Uint32Array, ni), f = take(Uint32Array, nf * 2), b = take(Uint32Array, nb * 2), names = JSON.parse(Buffer.from(ab, o, nn).toString('utf8'));
+  return { positions, normals, indices, faces: Array.from({ length: nf }, (_, i) => ({ first: f[2 * i], count: f[2 * i + 1] })), bodies: Array.from({ length: nb }, (_, i) => ({ first: b[2 * i], count: b[2 * i + 1], name: names[i]?.name ?? names[i] })) };
+}
+
+/**
+ * The model a flattening reads: a CAD file by path, a cell's result, or with neither the CAD file on screen in the
+ * viewer and, when there is none, the cell document's output. Both arrive as the mesh the viewer shows (bodies with
+ * names, B-rep face ranges), tessellated finer than the viewer needs: a pattern edge is as long as its facets, and
+ * these settings keep a round edge within a thousandth of its true length.
+ */
+async function sourceMesh(req) {
+  const { path: given, cell, deflection } = req.body || {}, self = `http://127.0.0.1:${req.socket.localPort}/api`;
+  const headers = req.get('x-cadgang-project') ? { 'x-cadgang-project': req.get('x-cadgang-project') } : {};
+  let file = given;
+  if (!file && !cell) file = String((await fetch(`${self}/view/joints`, { headers }).then((r) => r.json()).catch(() => null))?.subject || '').split('|').find((f) => CAD_EXT.test(f));
+  if (file) {
+    if (!mayReadLocal(req)) throw new GraphError('Reading a file by path is only available in the desktop app, or from this computer');
+    if (!path.isAbsolute(file) || !CAD_EXT.test(file)) throw new GraphError('path must be the absolute path of a STEP, IGES or BREP file');
+    const buffer = await fs.promises.readFile(file).catch(() => { throw new GraphError(`Cannot read '${file}'`); });
+    return { source: { file }, mesh: await importCadFile(buffer, { name: path.basename(file), linearDeflection: Number(deflection) > 0 ? Number(deflection) : 0.0003, angularDeflection: 0.15 }) };
+  }
+  const query = new URLSearchParams({ tolerance: String(Number(deflection) > 0 ? Number(deflection) : 0.02) }); if (cell) query.set('cell', cell);
+  const r = await fetch(`${self}/cells/live?${query}`, { headers }).catch(() => null);
+  if (!r?.ok) throw new GraphError((await r?.json().catch(() => null))?.error || 'There is no model to flatten: pass path (a STEP file) or build one in the cell document');
+  return { source: { cell: cell || 'output' }, mesh: unpackMesh(Buffer.from(await r.arrayBuffer())) };
+}
 
 // Where every piece starts in 3D. A piece with placement stands at its region of the avatar; one without keeps the row it was given,
 // or is laid flat beside the others. A design set again keeps the avatar it had, so re-prompting a pattern does not lose the body.
@@ -50,6 +84,20 @@ export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcas
   r.patch('/trims/:id', (req, res) => { try { res.json(trims({ updated: doc.updateTrim(req.params.id, req.body || {}).id })); } catch (e) { fail(res, e); } });
   r.delete('/trims/:id', (req, res) => { try { res.json(trims({ removed: doc.removeTrim(req.params.id).id })); } catch (e) { fail(res, e); } });
   r.post('/arrange/avatar', (req, res) => { try { const d = arranged(doc.toJSON(), req.body || {}), result = { avatar: d.simulation.avatar, arrangement: d.arrangement.filter((a) => a.source === 'avatar') }; d.simulation = { ...(d.simulation || {}), avatar: result.avatar, status: 'not_run' }; res.json({ ...result, document: doc.replace(d) }); } catch (e) { fail(res, e); } });
+  // Faces of a hard part as pattern pieces with their seams (core/softgoods-flatten.js). mode: append | replace write
+  // the document; preview returns the same result and writes nothing; list names the bodies and faces to choose from.
+  // ponytail: flattens on the server's own thread (a second for 10k triangles of dome); a worker if big bodies make the window wait
+  r.post('/flatten', async (req, res) => {
+    try {
+      const { path: _p, cell: _c, deflection: _d, mode = 'append', ...options } = req.body || {};
+      if (!['append', 'replace', 'preview', 'list'].includes(mode)) throw new GraphError("mode must be 'append', 'replace', 'preview' or 'list'");
+      const { mesh, source } = await sourceMesh(req);
+      if (mode === 'list') return res.json({ source, ...describeFaces(mesh, options) });
+      const current = doc.toJSON(), flat = flattenMesh(mesh, { ...options, source, avoid: mode === 'append' ? [...current.patterns.map((p) => p.id), ...current.seams.map((s) => s.id)] : [] });
+      const written = mode === 'preview' ? null : doc.replace(arranged(mergeFlattened(current, flat, mode), current.simulation?.avatar));
+      res.json({ mode, source: { ...source, body: flat.body }, revision: (written || current).revision, ...flat.report, ...(mode === 'preview' && { patterns: flat.patterns }) });
+    } catch (e) { fail(res, e); }
+  });
   // One export. The patterns and tech pack always; formats adds the production outputs ('marker', 'bom', 'print', 'svg', and dxf: 'astm-style')
   // and the draped garment ('glb', 'obj' with its .mtl, 'fit': a fit report, also in the tech pack), any of them in one request.
   // The drape runs first, on a thread of its own, so a design that cannot be draped or laid on its roll writes nothing.
