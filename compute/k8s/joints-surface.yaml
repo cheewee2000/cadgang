@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cadgang-joints-surface
+  namespace: cadgang-compute
+  labels: {app: cadgang-joints-surface, kueue.x-k8s.io/queue-name: default}
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels: {app: cadgang-joints-surface}
+    spec:
+      restartPolicy: Never
+      # The free CPU worker only: no GPUs, no market node.
+      nodeSelector: {node-role.kubernetes.io/cpu: ""}
+      containers:
+        - name: surface
+          image: python:3.12-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends git ca-certificates libgl1 libegl1 libgomp1 libx11-6 libxext6 libsm6 >/dev/null
+              git config --global --add safe.directory '*'
+              git -C "$WORK/repo" fetch -q origin "$REF"
+              rm -rf /tmp/repo && git clone -q --shared "$WORK/repo" /tmp/repo && cd /tmp/repo && git checkout -q "$COMMIT" 2>/dev/null
+              pip install -q --no-cache-dir --root-user-action=ignore numpy scipy open3d-cpu 2>&1 | grep -v notice || true
+              A="$WORK/automate"
+              # The triangles Job writes one line per assembly; wait until it has tried them all.
+              until [ "$(wc -l < "$WORK/results/full/automate-tris.jsonl")" -ge "$(grep -c . "$A/selected.txt")" ]; do sleep 60; done
+              echo "triangles: $(grep -c '"tris"' "$WORK/results/full/automate-tris.jsonl") assemblies"
+              python compute/joints/main.py surface --index "$A/joints-index" --dump "$A/dump" --tris "$A/tris" --out "$A/joints-surface.tmp" --workers 14
+              rm -rf "$A/joints-surface" && mv "$A/joints-surface.tmp" "$A/joints-surface"
+              du -sh "$A/joints-surface"; cat "$A/joints-surface/surface.json"
+          env:
+            - {name: WORK, value: /mnt/shared/cadgang}
+            - {name: REF, value: compute/joint-inputs}
+            - {name: COMMIT, value: 3af2d295e3077b281b3ef8e4c2d03eb7e85e90a2}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "1", memory: 8Gi}
+            limits: {cpu: "16", memory: 48Gi}
+          volumeMounts:
+            - {name: shared, mountPath: /mnt/shared}
+      volumes:
+        - name: shared
+          hostPath: {path: /mnt/shared, type: Directory}
