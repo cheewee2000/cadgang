@@ -13,6 +13,7 @@
 
 import { GraphError } from './errors.js';
 import { sampleSegment, segmentLength } from './softgoods-export.js';
+import { startPoint } from './softgoods-bodies.js';
 
 const DEG = 180 / Math.PI;
 const r4 = (v) => Math.round(v * 1e4) / 1e4 + 0;   // + 0: never -0
@@ -537,13 +538,69 @@ function settle(piece) {
   const det = quu * qvv - quv * quv || 1, unit = (v) => { const l = Math.hypot(...v) || 1; return v.map((x) => x / l); };
   const e1 = unit([0, 1, 2].map((k) => (C[2 * k] * qvv - C[2 * k + 1] * quv) / det)), raw = [0, 1, 2].map((k) => (C[2 * k + 1] * quu - C[2 * k] * quv) / det), dot = raw[0] * e1[0] + raw[1] * e1[1] + raw[2] * e1[2];
   const e2 = unit(raw.map((x, k) => x - dot * e1[k])), e3 = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
-  // R = Rz·Ry·Rx (degrees about x, then y, then z: what the arrangement and the cloth preview use), columns e1 e2 e3.
-  const level = Math.hypot(e1[0], e1[1]) > 1e-9;
-  const rotation = level ? [Math.atan2(e2[2], e3[2]), Math.asin(Math.max(-1, Math.min(1, -e1[2]))), Math.atan2(e1[1], e1[0])] : [Math.atan2(-e3[1], e2[1]), Math.asin(Math.max(-1, Math.min(1, -e1[2]))), 0];
   let mid = 0, near = Infinity; for (let i = 0; i < n; i++) { const d = Math.hypot(uv[2 * i] - mean[0], uv[2 * i + 1] - mean[1]); if (d < near) { near = d; mid = i; } }
   piece.position = [0, 1, 2].map((k) => r4(P[3 * mid + k] - e1[k] * uv[2 * mid] - e2[k] * uv[2 * mid + 1]));
-  piece.rotation = rotation.map((a) => r4(a * DEG));
+  piece.rotation = euler(e1, e2, e3);
   piece.normal = e3;
+  // A piece off a curved patch laid tangent sticks out from the part, and the seams snap it round fast enough to pull the
+  // cover through it. Where a wrap starts it back on its patch it starts wrapped.
+  const wrapped = wrapOn(piece);
+  if (wrapped) Object.assign(piece, wrapped);
+}
+
+/** R = Rz·Ry·Rx (degrees about x, then y, then z: what the arrangement and the cloth preview use), columns e1 e2 e3. */
+function euler(e1, e2, e3) {
+  const level = Math.hypot(e1[0], e1[1]) > 1e-9;
+  const rotation = level ? [Math.atan2(e2[2], e3[2]), Math.asin(Math.max(-1, Math.min(1, -e1[2]))), Math.atan2(e1[1], e1[0])] : [Math.atan2(-e3[1], e2[1]), Math.asin(Math.max(-1, Math.min(1, -e1[2]))), 0];
+  return rotation.map((a) => r4(a * DEG));
+}
+
+// How far (mm) a wrapped start may leave a vertex off its patch and still be taken.
+const WRAP_FIT = 0.5;
+/**
+ * The arrangement row that wraps a piece back onto its patch ({ position, rotation, wrap }), or null where a wrap cannot.
+ * A wrap bends the flat piece round a line parallel to its v axis, toward the back of its face (softgoods-worker.js
+ * transform, startPoint in softgoods-bodies.js), so it fits a patch that is part of a round cylinder whose rulings are the
+ * piece's v axis and whose outside is the piece's face: the side of a can or a sleeve. The axis is the patch's ∂xyz/∂v, the
+ * circle a least-squares fit to the vertices seen along it, and the row is taken only if it puts every vertex within
+ * WRAP_FIT of where it came from. Anything else keeps the tangent row: a cone frustum (its rulings fan out, so no line
+ * parallel to v is its axis; a wrap at its mean radius starts its rims r1 - r0 / 2 off), a doubly curved piece, a piece
+ * whose face is the inside of a tube (a wrap bends one way only), a flat piece.
+ */
+function wrapOn(piece) {
+  const { patch, flat } = piece, uv = flat.uv, P = patch.P, n = patch.gv.length, tri = patch.tri;
+  const off = (row) => { let worst = 0; for (let i = 0; i < n; i++) { const p = startPoint([uv[2 * i], uv[2 * i + 1]], row); worst = Math.max(worst, Math.hypot(p[0] - P[3 * i], p[1] - P[3 * i + 1], p[2] - P[3 * i + 2])); } return worst; };
+  if (off(piece) <= WRAP_FIT) return null;   // it lies on its patch already
+  const a = [0, 0, 0]; let area = 0;
+  for (let t = 0; t < tri.length; t += 3) {
+    const i = tri[t], j = tri[t + 1], k = tri[t + 2], u1 = uv[2 * j] - uv[2 * i], v1 = uv[2 * j + 1] - uv[2 * i + 1], u2 = uv[2 * k] - uv[2 * i], v2 = uv[2 * k + 1] - uv[2 * i + 1], det = u1 * v2 - u2 * v1;
+    if (!(Math.abs(det) > 1e-12)) continue;
+    for (let c = 0; c < 3; c++) a[c] += (u1 * (P[3 * k + c] - P[3 * i + c]) - u2 * (P[3 * j + c] - P[3 * i + c])) / det * Math.abs(det) / 2;   // ∂P/∂v, area weighted
+    area += Math.abs(det) / 2;
+  }
+  const len = Math.hypot(...a); if (!(len > 0.5 * area)) return null;
+  const ax = a.map((x) => x / len), b1 = unitOf(Math.abs(ax[0]) < 0.9 ? cross(ax, [1, 0, 0]) : cross(ax, [0, 1, 0])), b2 = cross(ax, b1);
+  // The vertices seen along the axis, about their mean: a circle fit (x² + y² + Dx + Ey + F = 0, least squares).
+  const q = [], m = [0, 0]; for (let i = 0; i < n; i++) { const p = [P[3 * i], P[3 * i + 1], P[3 * i + 2]]; q.push([dot(p, b1), dot(p, b2)]); m[0] += q[i][0] / n; m[1] += q[i][1] / n; }
+  const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], B = [0, 0, 0];
+  for (const [x0, y0] of q) { const x = x0 - m[0], y = y0 - m[1], r = [x, y, 1], z = x * x + y * y; for (let r1 = 0; r1 < 3; r1++) { B[r1] -= r[r1] * z; for (let c = 0; c < 3; c++) A[r1][c] += r[r1] * r[c]; } }
+  const s = solve3(A, B); if (!s) return null;
+  const cx = -s[0] / 2, cy = -s[1] / 2, R = Math.sqrt(cx * cx + cy * cy - s[2]); if (!(R > 0 && R < 1e6)) return null;
+  // Going up u the face turns about the axis one way: the right way round only when the face is the outside.
+  let sc = 0, ss = 0; for (let i = 0; i < n; i++) { const f = Math.atan2(q[i][1] - m[1] - cy, q[i][0] - m[0] - cx) - uv[2 * i] / R; sc += Math.cos(f); ss += Math.sin(f); }
+  const centre = piece.size[0] / 2, th = Math.atan2(ss, sc) + centre / R;
+  const out = [0, 1, 2].map((k) => b1[k] * Math.cos(th) + b2[k] * Math.sin(th)), e1 = [0, 1, 2].map((k) => -b1[k] * Math.sin(th) + b2[k] * Math.cos(th)), e3 = cross(e1, ax);
+  let s0 = 0; for (let i = 0; i < n; i++) s0 += (P[3 * i] * ax[0] + P[3 * i + 1] * ax[1] + P[3 * i + 2] * ax[2] - uv[2 * i + 1]) / n;
+  const row = { position: [0, 1, 2].map((k) => r4(b1[k] * (m[0] + cx) + b2[k] * (m[1] + cy) + R * out[k] + ax[k] * s0 - e1[k] * centre)), rotation: euler(e1, ax, e3), wrap: { radius: r4(R), centre: r4(centre) } };
+  return off(row) <= WRAP_FIT ? row : null;
+}
+const dot = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2], cross = (p, q) => [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]];
+const unitOf = (v) => { const l = Math.hypot(...v) || 1; return v.map((x) => x / l); };
+/** A 3 × 3 system by Cramer's rule, or null when it is singular. */
+function solve3(A, b) {
+  const d3 = (M) => M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1]) - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
+  const d = d3(A); if (!(Math.abs(d) > 1e-12 * Math.abs(A[0][0] * A[1][1] * A[2][2] || 1))) return null;
+  return [0, 1, 2].map((c) => d3(A.map((r, i) => r.map((x, j) => (j === c ? b[i] : x)))) / d);
 }
 
 /**
@@ -748,7 +805,7 @@ export function flattenMesh(mesh, options = {}) {
       pattern.notches.push({ segment: run.id, at: r4(Math.max(0, Math.min(1, place))), kind: 'match' });
     }
   }
-  const arrangement = pieces.map((p) => ({ pattern: p.id, position: p.position, rotation: p.rotation, layer: 0, source: 'flatten' }));
+  const arrangement = pieces.map((p) => ({ pattern: p.id, position: p.position, rotation: p.rotation, ...(p.wrap && { wrap: p.wrap }), layer: 0, source: 'flatten' }));
   const meshes = pieces.map((p) => ({ id: p.id, uv: p.flat.uv, xyz: p.patch.P, triangles: p.patch.tri, stretch: p.flat.stretch }));
   // Every cut names the seams that close it again: a cut up a tube is where a zipper goes (a trim along that seam's two sides).
   const closing = (keys) => { const on = new Set(keys); return chains.filter((c) => c.seam && c.edges.some((e) => on.has(e.key))).map((c) => c.seam); };

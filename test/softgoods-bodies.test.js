@@ -268,9 +268,10 @@ test('a cover flattened off a can drapes on that can: it starts on the part, sta
   const can = solid('can', [side(30, 30, 80), disc(30, 80, 1), disc(30, 0, -1)]);
   // Patterned 2 mm out from the can (fabric and ease), sewn back together, then hung on the can itself: the flattened rows are where each piece starts.
   const flat = mergeFlattened(new SoftgoodsDocument(null).toJSON(), flattenMesh(can, { material: 'canvas', offset: 2 })), sideRow = flat.arrangement.find((a) => a.pattern === 'can_wrap'), width = Math.max(...flat.patterns.find((p) => p.id === 'can_wrap').points.map((q) => q.x));
-  // Flattening lays the side as a flat sheet tangent to the can; started that way the seams snap it round hard enough to pull the whole cover through the
-  // can (the cloth crosses the field faster than it can push back). The arrangement row's wrap starts it round the can instead, 32 mm about its middle.
-  sideRow.wrap = { radius: 32, centre: width / 2 };
+  // Laid flat and tangent the seams would snap the side round hard enough to pull the whole cover through the can, so the flattener starts it
+  // wrapped: 32 mm (the can and the 2 mm offset) about its middle.
+  assert.ok(Math.abs(sideRow.wrap.radius - 32) < 0.01 && Math.abs(sideRow.wrap.centre - width / 2) < 0.01, JSON.stringify(sideRow.wrap));
+  assert.ok(flat.arrangement.filter((a) => a.wrap).length === 1, 'the flat ends stay flat rows');
   const d = validateSoftgoodsDocument({ ...flat,
     materials: { canvas: { arealDensity: 340, thickness: 0.6 } }, bodies: [{ id: 'can', source: { mesh: { positions: [...can.positions], indices: [...can.indices] } } }], simulation: { floor: false } });
   assert.ok(d.arrangement.every((a) => a.source === 'flatten'), 'every piece keeps the row it was flattened from');
@@ -284,4 +285,23 @@ test('a cover flattened off a can drapes on that can: it starts on the part, sta
   assert.ok(drape.settled, `settled after ${drape.steps} steps (residual ${drape.residual})`);
   const worst = out({ positions });
   assert.ok(worst > -0.5, `the cover stays outside the can (deepest point ${worst.toFixed(2)} mm)`);
+});
+
+test('a cover flattened off a cone frustum: its side starts tangent (a wrap is a cylinder), and it drapes without passing through', async () => {
+  const { flattenMesh, mergeFlattened } = await import('../src/core/softgoods-flatten.js');
+  const { body: solid, side, disc } = await import('./fixtures/flatten-meshes.mjs');
+  const cone = solid('cone', [side(50, 30, 60), disc(30, 60, 1), disc(50, 0, -1)]);
+  // Signed distance to the frustum (radius 50 at z = 0, 30 at z = 60): in the (radius, z) half-plane, the nearest of its bottom, side and top.
+  const coneDistance = ([x, y, z]) => { const r = Math.hypot(x, y), seg = (a, b) => { const d = [b[0] - a[0], b[1] - a[1]], t = Math.max(0, Math.min(1, ((r - a[0]) * d[0] + (z - a[1]) * d[1]) / (d[0] ** 2 + d[1] ** 2))); return Math.hypot(r - a[0] - t * d[0], z - a[1] - t * d[1]); };
+    const near = Math.min(seg([0, 0], [50, 0]), seg([50, 0], [30, 60]), seg([30, 60], [0, 60])); return z > 0 && z < 60 && r < 50 - z / 3 ? -near : near; };
+  const flat = mergeFlattened(new SoftgoodsDocument(null).toJSON(), flattenMesh(cone, { material: 'canvas', offset: 2 }));
+  assert.ok(flat.arrangement.every((a) => !a.wrap), 'no row is wrapped: a wrap bends round a line parallel to v and the cone\'s rulings fan out');
+  const d = validateSoftgoodsDocument({ ...flat, materials: { canvas: { arealDensity: 340, thickness: 0.6 } }, bodies: [{ id: 'cone', source: { mesh: { positions: [...cone.positions], indices: [...cone.indices] } } }], simulation: { floor: false } });
+  const input = simulationInput(d, 15), start = simulate(input, 0), off = new Map(); let v = 0;
+  for (const [k, m] of input.meshes.entries()) { let worst = 0; for (let i = 0; i < m.uv.length / 2; i++, v++) worst = Math.max(worst, Math.abs(coneDistance([start.positions[3 * v], start.positions[3 * v + 1], start.positions[3 * v + 2]]) - 2)); off.set(d.arrangement[k].pattern, worst); }
+  // The ends start on it (their rims 2 mm out and 2 mm off the edge); the side starts as a flat sheet tangent to the cone, about 104 mm off at its far corners.
+  assert.ok(off.get('cone_top') < 2 && off.get('cone_bottom') < 2 && off.get('cone_wrap') > 50 && off.get('cone_wrap') < 150, JSON.stringify([...off]));
+  const drape = drapeDocument(d, { target: 15, steps: 600 }); let worst = Infinity;
+  for (const p of drape.pieces) for (let i = 0; i < p.positions.length; i += 3) worst = Math.min(worst, coneDistance([p.positions[i], p.positions[i + 1], p.positions[i + 2]]));
+  assert.ok(worst > -0.5, `the cover stays outside the cone (deepest point ${worst.toFixed(2)} mm)`);
 });
