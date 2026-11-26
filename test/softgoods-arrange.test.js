@@ -15,3 +15,12 @@ test('avatar arrangement rejects ambiguous slots and unknown regions', () => {
   assert.throws(() => arrangePatternsAroundAvatar([{ id: 'a', placement: { region: 'front' } }, { id: 'b', placement: { region: 'front' } }]), /occupy avatar placement/);
   assert.throws(() => arrangePatternsAroundAvatar([{ id: 'a', placement: { region: 'sleeve' } }]), /front, back, left or right/);
 });
+
+test('avatar placement persists measurements for collision and pressure maps', async () => {
+  const fs = await import('node:fs');
+  const server = fs.readFileSync(new URL('../src/server/softgoods.js', import.meta.url), 'utf8');
+  const worker = fs.readFileSync(new URL('../web/softgoods-worker.js', import.meta.url), 'utf8');
+  assert.match(server, /simulation.*avatar: result\.avatar/);
+  assert.match(server, /collisionBody: d\.simulation\?\.avatar/);
+  assert.match(worker, /seam-pair/); assert.match(worker, /collideAvatar/); assert.match(worker, /pressure: new Float32Array/);
+});
