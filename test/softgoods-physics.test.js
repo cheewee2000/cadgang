@@ -128,9 +128,11 @@ test('the server drape waits for a fold to close before it calls the cloth settl
     const base = { version: 1, materials: { canvas: { ...canvas, rigidity: 20 } }, patterns: [strip], seams: [], arrangement: [{ pattern: 'strip', position: [-100, -20, 300], rotation: [0, 0, 0] }], annotations: [{ id: 'crease', type: 'fold_line', pattern: 'strip', lines: [['fold_a', 'fold_b']], angle }] };
     const m = simulationInput(validateSoftgoodsDocument(base), 20).meshes[0], clamps = []; for (let i = 0; i < m.uv.length / 2; i++) if (m.uv[i * 2] <= 100 + 1e-6) clamps.push({ id: `clamp_${i}`, pattern: 'strip', at: [m.uv[i * 2], m.uv[i * 2 + 1]], to: [m.uv[i * 2] - 100, m.uv[i * 2 + 1] - 20, 300] });
     const d = validateSoftgoodsDocument({ ...base, attachments: clamps }), tip = (drape) => { const pos = drape.pieces[0].positions; let z = 0, n = 0; for (let i = 0; i < m.uv.length / 2; i++) if (m.uv[i * 2] > 200 - 1e-6) { z += pos[i * 3 + 2] - 300; n++; } return z / n; };
-    return { d, tip }; };
+    // The angle the free half makes with the clamped one, from where its far edge is: the fold lies along x = 0 at z = 300.
+    const turn = (drape) => { const pos = drape.pieces[0].positions; let x = 0, z = 0; for (let i = 0; i < m.uv.length / 2; i++) if (m.uv[i * 2] > 200 - 1e-6) { x += pos[i * 3]; z += pos[i * 3 + 2] - 300; } return Math.atan2(z, x) * 180 / Math.PI; };
+    return { d, tip, turn }; };
   const square = folded(90), up = drapeDocument(square.d, { target: 20 });
-  assert.ok(up.settled && up.steps >= 60, `settled after ${up.steps} steps`); assert.ok(Math.abs(square.tip(up) - 100) < 3, `the free half stands ${square.tip(up).toFixed(1)} mm up from the fold`);
+  assert.ok(up.settled && up.steps >= 60, `settled after ${up.steps} steps`); assert.ok(Math.abs(square.turn(up) - 90) < 8 && Math.abs(square.tip(up) - 100) < 3, `the free half stands at ${square.turn(up).toFixed(1)}°, its far edge ${square.tip(up).toFixed(1)} mm up from the fold`);
   // A fold of 1° moves the cloth less than the settle tolerance while it closes: stopped at the first quiet moment it would be two thirds folded.
   const slight = folded(1), rest = drapeDocument(slight.d, { target: 20 }), long = drapeDocument(slight.d, { target: 20, steps: 240, tolerance: 1e-6 });
   assert.ok(rest.settled && rest.steps >= 60, `a slight fold is given its 60 steps to close: ${rest.steps}`); assert.ok(Math.abs(slight.tip(rest) - slight.tip(long)) < 0.2, `its tip is at ${slight.tip(rest).toFixed(2)} mm, and at ${slight.tip(long).toFixed(2)} mm after 240 steps`);
