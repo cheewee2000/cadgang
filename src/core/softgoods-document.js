@@ -10,6 +10,7 @@ import { resolveMaterial } from './softgoods-fabrics.js';
 import { sampleSegment } from './softgoods-export.js';
 import { insideLoop, segmentDistance } from './softgoods-mesh.js';
 import { seamSide } from './softgoods-seams.js';
+import { validatePhysics, validateTack } from './softgoods-physics.js';
 
 const ID = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
 const TYPES = new Set(['line', 'arc', 'bezier']);
@@ -109,7 +110,7 @@ export function validateSoftgoodsDocument(value) {
     const id = identifier(a.id, 'attachment'); if (attachmentIds.has(id)) throw new GraphError(`Two attachments are named '${id}'`); attachmentIds.add(id);
     if (!patterns.has(a.pattern)) throw new GraphError(`Attachment '${id}' refers to missing pattern '${a.pattern}'`);
     if (!Array.isArray(a.at) || a.at.length !== 2 || !a.at.every(finite)) throw new GraphError(`Attachment '${id}' at must be two finite pattern coordinates`);
-    vec3(a.to, `Attachment '${id}' target`);
+    if (!validateTack(a, patterns)) vec3(a.to, `Attachment '${id}' target`);
   }
   const arranged = new Set();
   for (const a of d.arrangement) {
@@ -157,6 +158,7 @@ export function validateSoftgoodsDocument(value) {
       if (moved.has(`${rule.pattern}.${rule.point}`)) throw new GraphError(`Grade '${g.size}' moves '${rule.pattern}.${rule.point}' twice`); moved.add(`${rule.pattern}.${rule.point}`);
     }
   }
+  validatePhysics(d, patterns);
   return d;
 }
 

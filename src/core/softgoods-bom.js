@@ -5,6 +5,7 @@
 import { makeMarkers, markerSummary, sizeSet } from './softgoods-marker.js';
 import { resolveMaterial } from './softgoods-fabrics.js';
 import { seamLengths } from './softgoods-operations.js';
+import { checkPhysics } from './softgoods-physics.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const round = (v, digits = 2) => (v == null || !Number.isFinite(v) ? null : +v.toFixed(digits));
@@ -37,13 +38,16 @@ export function billOfMaterials(document, { threadMultiplier = DEFAULT_THREAD_MU
   for (const s of set) for (const seam of seamLengths(s.document)) { const k = kinds.get(seam.kind) || { kind: seam.kind, count: 0, lengthMm: 0 }; k.count += s.units; k.lengthMm += s.units * Math.min(seam.lengthA, seam.lengthB); kinds.set(seam.kind, k); }
   const multiplier = (kind) => (typeof threadMultiplier === 'object' && threadMultiplier ? Number(threadMultiplier[kind] ?? threadMultiplier.default ?? DEFAULT_THREAD_MULTIPLIER) : Number(threadMultiplier));
   const byKind = [...kinds.values()].map((k) => ({ kind: k.kind, count: k.count, lengthMm: round(k.lengthMm), threadMultiplier: multiplier(k.kind), threadMm: round(k.lengthMm * multiplier(k.kind)) }));
+  // Elastic is bought by length: each one's relaxed length (its ratio × the cloth it is sewn to), over every unit of every size.
+  const elastics = new Map();
+  for (const s of set) for (const e of checkPhysics(s.document)) if (e.kind === 'elastic') { const row = elastics.get(e.id) || { kind: 'elastic', id: e.id, count: 0, lengthMm: 0 }; row.count += s.units; row.lengthMm += s.units * e.relaxed; elastics.set(e.id, row); }
   const priced = materials.filter((m) => m.cost != null);
   return {
     units, sizes: set.map((s) => ({ size: s.size, units: s.units })), materials,
     seams: { byKind, totalMm: round(byKind.reduce((sum, k) => sum + k.lengthMm, 0)) },
     thread: { lengthMm: round(byKind.reduce((sum, k) => sum + k.threadMm, 0)), multiplier: threadMultiplier, basis: 'Seam length × multiplier. 2.5 is the rule of thumb for a 301 lockstitch; an estimate, with no allowance for waste, bar tacks or topstitching.' },
-    // Zips, buckles, webbing by length, labels: not modelled yet. This section is here so they have a place in the bill.
-    trims: [],
+    // Elastics, each by its cut length. Zips, buckles, webbing by length, labels: not modelled yet, and this is their place in the bill.
+    trims: [...elastics.values()].map((e) => ({ ...e, lengthMm: round(e.lengthMm) })),
     cost: { total: priced.length ? round(priced.reduce((sum, m) => sum + m.cost, 0)) : null, complete: priced.length === materials.length, basis: 'Cloth only, in the currency its prices were given in: the marker length × the price per running metre, or the roll area it takes × the price per m².' },
     notes: ['Net area is the cut pieces; consumed area is the marker length × the roll width, which is what is bought.', 'A roll width of 1500 mm is assumed where neither the material (rollWidth) nor the export gives one.', 'The marker is a heuristic lay: a professional nester will usually do a little better, so these lengths are on the safe side.'],
   };

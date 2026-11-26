@@ -4,6 +4,8 @@
 // drops collinear points) and a triangular lattice of interior points are then
 // inserted, and edge flips make the result Delaunay without ever crossing a
 // boundary. The cloth solver gets near-equilateral triangles at the target size.
+// Lines drawn inside a pattern that the cloth must bend or gather along (a creased
+// fold, an elastic) are given as `lines`: the mesh then has an unbroken run of edges on each.
 
 import earcut from 'earcut';
 import { GraphError } from './errors.js';
@@ -44,7 +46,7 @@ export const insideLoop = (loop, p) => { let c = false; for (let i = 0, j = loop
 export const segmentDistance = (p, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1))); return Math.hypot(a[0] + dx * t - p[0], a[1] + dy * t - p[1]); };
 
 /** Interior points on a triangular lattice of pitch h, inside the material and clear of every boundary. */
-function lattice(loops, h) {
+function lattice(loops, h, lines = []) {
   const xs = loops[0].map((p) => p[0]), ys = loops[0].map((p) => p[1]), minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys), out = [];
   // Centred on the bounding box, so a symmetric pattern gets a symmetric mesh.
   const rows = Math.max(1, Math.round((maxY - minY) / (h * 0.866))), dy = (maxY - minY) / rows, cols = Math.max(1, Math.round((maxX - minX) / h)), dx = (maxX - minX) / cols;
@@ -52,6 +54,7 @@ function lattice(loops, h) {
     const p = [minX + (i + (j % 2 ? 0.5 : 0)) * dx, minY + j * dy];
     if (!insideLoop(loops[0], p) || loops.slice(1).some((l) => insideLoop(l, p))) continue;
     if (loops.some((l) => l.some((a, k) => segmentDistance(p, a, l[(k + 1) % l.length]) < 0.5 * Math.min(dx, dy)))) continue;
+    if (lines.some(([a, b]) => segmentDistance(p, a, b) < 0.5 * Math.min(dx, dy))) continue;
     out.push(p);
   }
   return out;
@@ -135,16 +138,32 @@ function chainsOf(vertices, segmentVertices) {
   return out;
 }
 
-export function meshPattern(pattern, { target = 25, curveStep = target } = {}) {
+/** Until every line is an unbroken run of edges, halve the stretches of it that are not and restore Delaunay (a conforming Delaunay mesh). */
+function conform(vertices, triangles, ends) {
+  if (!ends.length) return { triangles, chains: [] };
+  for (let pass = 0; pass < 16; pass++) {
+    const edges = new Set(), chains = Object.values(chainsOf(vertices, ends)), missing = [];
+    for (let t = 0; t < triangles.length; t += 3) for (let k = 0; k < 3; k++) edges.add(`${triangles[t + k]}/${triangles[t + (k + 1) % 3]}`);
+    for (const c of chains) for (let k = 1; k < c.length; k++) if (!edges.has(`${c[k - 1]}/${c[k]}`) && !edges.has(`${c[k]}/${c[k - 1]}`)) missing.push([(vertices[c[k - 1]][0] + vertices[c[k]][0]) / 2, (vertices[c[k - 1]][1] + vertices[c[k]][1]) / 2]);
+    if (!missing.length) return { triangles, chains };
+    for (const m of missing) insertVertex(vertices, triangles, vertices.push(m) - 1);
+    triangles = flipToDelaunay(vertices, triangles);
+  }
+  throw new GraphError('A simulation mesh could not follow a fold or elastic line');
+}
+
+export function meshPattern(pattern, { target = 25, curveStep = target, lines = [] } = {}) {
   if (!(target > 0 && curveStep > 0)) throw new GraphError('Simulation mesh spacing must be positive');
   const { vertices, segmentVertices: coarse, holes, loops } = boundariesOf(pattern, curveStep);
   const boundary = vertices.length, initial = earcut(vertices.flat(), holes, 2);
   if (!initial.length) throw new GraphError(`Pattern '${pattern.id}' contour could not be triangulated (it may cross itself or contain a hole outside its outer contour)`);
   const used = new Set(initial);
   for (let i = 0; i < boundary; i++) if (!used.has(i)) insertVertex(vertices, initial, i);
-  for (const p of lattice(loops, target * 0.9)) insertVertex(vertices, initial, vertices.push(p) - 1);
-  const triangles = flipToDelaunay(vertices, refine(vertices, flipToDelaunay(vertices, initial), target)), segmentVertices = chainsOf(vertices, coarse), boundaryCount = new Set(Object.values(segmentVertices).flat()).size;
+  // Each line is sampled at the target size; a sample that falls on a vertex already there (a corner, a boundary sample) is that vertex.
+  const ends = lines.map(([a, b]) => { const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / target)), ids = []; for (let i = 0; i <= n; i++) { const q = [a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n]; let v = vertices.findIndex((w) => Math.hypot(w[0] - q[0], w[1] - q[1]) < 1e-6); if (v < 0) { v = vertices.push(q) - 1; try { insertVertex(vertices, initial, v); } catch { throw new GraphError(`Pattern '${pattern.id}' has a fold or elastic line that leaves its outline`); } } ids.push(v); } return [ids[0], ids.at(-1)]; });
+  for (const p of lattice(loops, target * 0.9, lines)) insertVertex(vertices, initial, vertices.push(p) - 1);
+  const conformed = conform(vertices, flipToDelaunay(vertices, refine(vertices, flipToDelaunay(vertices, initial), target)), ends), triangles = conformed.triangles, segmentVertices = chainsOf(vertices, coarse), boundaryCount = new Set(Object.values(segmentVertices).flat()).size;
   const edges = new Map();
   for (let i = 0; i < triangles.length; i += 3) for (const [a, b] of [[triangles[i], triangles[i + 1]], [triangles[i + 1], triangles[i + 2]], [triangles[i + 2], triangles[i]]]) { const k = a < b ? `${a}/${b}` : `${b}/${a}`; edges.set(k, [a, b]); }
-  return { id: pattern.id, uv: vertices.flat(), triangles, edges: [...edges.values()].flat(), boundaryCount, segmentVertices, holes: holes.length };
+  return { id: pattern.id, uv: vertices.flat(), triangles, edges: [...edges.values()].flat(), boundaryCount, segmentVertices, holes: holes.length, ...(lines.length ? { lineVertices: conformed.chains } : {}) };
 }

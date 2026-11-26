@@ -10,14 +10,15 @@ import { meshPattern } from './softgoods-mesh.js';
 import { resolveSeamCorrespondence } from './softgoods-seams.js';
 import { avatarBody } from './softgoods-arrange.js';
 import { resolveMaterials } from './softgoods-fabrics.js';
-import { simulate, advance } from '../../web/softgoods-worker.js';
+import { conformLines, physicsInput } from './softgoods-physics.js';
+import { simulate, advance, FOLDING } from '../../web/softgoods-worker.js';
 
 /** What the solver starts from: the meshed patterns, their resolved seams, where each piece stands and the body.
  *  The page gets the same from GET /api/softgoods/simulation-input (src/server/softgoods.js); test/softgoods-drape.test.js holds the two equal. */
 export function simulationInput(d, target = 25) {
   target = Math.max(5, Math.min(100, Number(target) || 25));
-  const meshes = d.patterns.map((p) => meshPattern(p, { target })), seams = resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 });
-  return { revision: d.revision, meshes, seams, attachments: d.attachments || [], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain })), collisionBody: d.simulation?.avatar ? { ...d.simulation.avatar, ...avatarBody(d.simulation.avatar) } : null };
+  const meshes = d.patterns.map((p) => meshPattern(p, { target, lines: conformLines(d, p) })), seams = resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 });
+  return { revision: d.revision, meshes, seams, attachments: d.attachments || [], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain, shrink: p.shrink, freeze: p.freeze, strengthen: p.strengthen })), ...physicsInput(d, meshes), collisionBody: d.simulation?.avatar ? { ...d.simulation.avatar, ...avatarBody(d.simulation.avatar) } : null };
 }
 
 // The cloth is stepped CHUNK steps at a time and has settled when its vertices moved, root mean square, less than
@@ -32,8 +33,10 @@ function run(document, options) {
   if (!document.patterns?.length) throw new GraphError('No softgoods patterns to drape');
   const input = simulationInput(document, options.target), names = new Set(document.patterns.map((p) => p.material)), materials = { ...input.materials };
   for (const name of names) materials[name] = { ...materials[name], damping: Math.max(options.damping, Number(materials[name]?.damping ?? 0)) };
+  // A creased fold closes over the solver's first FOLDING steps, and a slight one moves the cloth less than the tolerance while it does: the cloth is not at rest before then.
+  const closing = input.folds?.length ? FOLDING : 0;
   let frame = simulate({ ...input, materials }, 0), before = frame.positions, steps = 0, residual = Infinity;
-  while (steps < options.steps && !(residual < options.tolerance)) {
+  while (steps < options.steps && !(residual < options.tolerance && steps >= closing)) {
     const n = Math.min(CHUNK, options.steps - steps); frame = advance(n); steps += n;
     let sum = 0; for (let i = 0; i < before.length; i++) sum += (frame.positions[i] - before[i]) ** 2;
     residual = Math.sqrt(sum / (before.length / 3)) / n; before = frame.positions;

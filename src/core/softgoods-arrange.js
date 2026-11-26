@@ -16,6 +16,8 @@ export function avatarBody(avatar) {
   ] };
 }
 
+// Each layer starts this far (mm) outside the one under it, so a shell stands clear of its lining before the first step.
+const LAYER_GAP = 10;
 const finitePositive = (v, name) => { if (!(Number.isFinite(Number(v)) && Number(v) > 0)) throw new GraphError(`Avatar ${name} must be greater than zero`); return Number(v); };
 
 /** Return arrangement rows for patterns carrying `placement.region`. Each piece is centred on its region, standing upright;
@@ -28,10 +30,10 @@ export function arrangePatternsAroundAvatar(patterns, avatar = {}) {
   const measured = { height, chest, depth, centreZ, ease, ...(avatar.shoulders != null ? { shoulders: Number(avatar.shoulders) } : {}) }, body = avatarBody(measured);
   const radiusX = chest / (2 * Math.PI) + ease, radiusY = depth / 2 + ease, seen = new Set(), rows = [];
   const poses = {
-    front: { position: [0, -radiusY, centreZ], rotation: [90, 0, 0] },
-    back: { position: [0, radiusY, centreZ], rotation: [90, 0, 180] },
-    left: { position: [-radiusX, 0, centreZ], rotation: [90, 0, -90] },
-    right: { position: [radiusX, 0, centreZ], rotation: [90, 0, 90] },
+    front: { position: [0, -radiusY, centreZ], rotation: [90, 0, 0], out: [0, -1, 0] },
+    back: { position: [0, radiusY, centreZ], rotation: [90, 0, 180], out: [0, 1, 0] },
+    left: { position: [-radiusX, 0, centreZ], rotation: [90, 0, -90], out: [-1, 0, 0] },
+    right: { position: [radiusX, 0, centreZ], rotation: [90, 0, 90], out: [1, 0, 0] },
   };
   for (const p of patterns) {
     const spec = p.placement; if (!spec) continue;
@@ -42,7 +44,7 @@ export function arrangePatternsAroundAvatar(patterns, avatar = {}) {
     if (spec.anchor != null && !['centre', 'shoulder'].includes(spec.anchor)) throw new GraphError(`Pattern '${p.id}' placement anchor '${spec.anchor}' must be centre or shoulder`);
     const xs = (p.points || []).map((q) => q.x), ys = (p.points || []).map((q) => q.y), mid = xs.length ? [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2] : [0, 0], centre = rotate(pose.rotation, mid);
     const lift = spec.anchor === 'shoulder' ? body.levels.shoulder + 30 - (Math.max(...ys) - mid[1]) - centreZ : 0;
-    rows.push({ pattern: p.id, position: pose.position.map((v, i) => +(v + offset[i] - centre[i] + (i === 2 ? lift : 0)).toFixed(6)), rotation: [...pose.rotation], layer: Number(spec.layer || 0), source: 'avatar' });
+    rows.push({ pattern: p.id, position: pose.position.map((v, i) => +(v + offset[i] - centre[i] + (i === 2 ? lift : 0) + pose.out[i] * Number(spec.layer || 0) * LAYER_GAP).toFixed(6)), rotation: [...pose.rotation], layer: Number(spec.layer || 0), source: 'avatar' });
   }
   return { avatar: measured, arrangement: rows };
 }

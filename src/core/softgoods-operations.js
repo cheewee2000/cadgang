@@ -2,6 +2,7 @@
 import { GraphError } from './errors.js';
 import { segmentLength } from './softgoods-export.js';
 import { seamSide, spanLength } from './softgoods-seams.js';
+import { checkPhysics } from './softgoods-physics.js';
 
 const finite = (v) => Number.isFinite(Number(v));
 
@@ -68,5 +69,7 @@ export function seamLengths(document) {
 export function checkDesign(document) {
   const one = (d) => { const constraints = evaluateMeasurementConstraints(d), seams = seamLengths(d); return { ok: constraints.every((c) => c.withinTolerance) && seams.every((s) => s.ok), constraints, seams }; };
   const base = one(document), sizes = (document.grades || []).map((g) => ({ size: g.size, ...one(gradeDocument(document, g)) }));
-  return { ...base, ok: base.ok && sizes.every((s) => s.ok), sizes };
+  // Elastic, stuffing, tacks and shrinkage are checked once, at the base size; a design with none of them reports no physics.
+  const physics = checkPhysics(document);
+  return { ...base, ok: base.ok && sizes.every((s) => s.ok) && physics.every((p) => p.ok), sizes, ...(physics.length ? { physics } : {}) };
 }
