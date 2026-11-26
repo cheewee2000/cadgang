@@ -6,9 +6,9 @@ import express from 'express';
 import { z } from 'zod';
 import { SoftgoodsDocument, validateSoftgoodsDocument, patternLoops } from '../src/core/softgoods-document.js';
 import { editSoftgoods, editChanges, SOFTGOODS_EDITS, mirror, unfold, split, dart, pleat, slashSpread, internalLine, autoNotch } from '../src/core/softgoods-edit.js';
-import { sampleSegment, segmentLength, patternDXF, cutContours, capDarts } from '../src/core/softgoods-export.js';
+import { sampleSegment, segmentLength, patternDXF, cutContours, capDarts, techPack, techPackHTML } from '../src/core/softgoods-export.js';
 import { meshPattern } from '../src/core/softgoods-mesh.js';
-import { resolveSeamCorrespondence, seamFraction } from '../src/core/softgoods-seams.js';
+import { resolveSeamCorrespondence, seamFraction, seamSide } from '../src/core/softgoods-seams.js';
 import { checkDesign } from '../src/core/softgoods-operations.js';
 import { softgoodsRouter } from '../src/server/softgoods.js';
 import { registerSoftgoodsTools } from '../src/mcp/softgoods.js';
@@ -280,6 +280,59 @@ test('auto notches are matched across every seam, through its flip, ease and cor
   const curved = yoke(); curved.patterns.push({ ...panels().patterns[1], id: 'collar', points: panels().patterns[1].points.map((q) => ({ ...q })) }); curved.seams.push({ id: 'neck', a: { pattern: 'collar', segment: 'back_top' }, b: { pattern: 'yoke', segment: 'yoke_neck' }, flip: true, kind: 'gather' });
   const y = pattern(autoNotch(curved, { ends: false }), 'yoke'), n = y.notches.at(-1), s = segment(y, 'yoke_neck'), whole = sampleSegment(y, s, 400), upTo = whole.slice(0, Math.round(n.at * 400) + 1), run = (q) => q.slice(1).reduce((sum, c, i) => sum + Math.hypot(c[0] - q[i][0], c[1] - q[i][1]), 0);
   near(run(upTo) / run(whole), 0.5, 0.005, 'half the neckline lies before its notch');
+});
+
+// A front panel, a yoke whose hem is two edges, and a pocket: the front's top is sewn to both hem edges, and the pocket's top to the middle third of the front's hem.
+function spans() {
+  const doc = new SoftgoodsDocument(null); doc.addRectangle({ id: 'front', width: 300, height: 400 }); doc.addRectangle({ id: 'pocket', width: 100, height: 120 });
+  const d = doc.toJSON(), pts = [[0, 0], [150, 0], [300, 0], [300, 100], [0, 100]], names = ['hem_a', 'hem_b', 'right', 'top', 'left'];
+  d.patterns.push({ id: 'yoke', material: 'canvas', points: pts.map(([x, y], i) => ({ id: `yoke_p${i}`, x, y })), segments: names.map((n, i) => ({ id: `yoke_${n}`, type: 'line', a: `yoke_p${i}`, b: `yoke_p${(i + 1) % 5}` })), contours: [names.map((n) => `yoke_${n}`)], allowances: Object.fromEntries(names.map((n) => [`yoke_${n}`, 10])), notches: [] });
+  d.seams.push({ id: 'waist', a: { pattern: 'front', segment: 'front_top' }, b: { pattern: 'yoke', segments: ['yoke_hem_a', 'yoke_hem_b'] }, flip: true }, { id: 'pocket_top', a: { pattern: 'pocket', segment: 'pocket_top' }, b: { pattern: 'front', segment: 'front_bottom', from: 1 / 3, to: 2 / 3 }, flip: true });
+  return validateSoftgoodsDocument({ ...d, arrangement: [] });
+}
+
+test('a seam side may be part of an edge, or several edges in a row: the check measures those spans and the solver sews exactly them', () => {
+  const d = spans(), check = checkDesign(d);
+  assert.deepEqual(check.seams.map((s) => [s.id, s.lengthA, s.lengthB, s.ok]), [['waist', 300, 300, true], ['pocket_top', 100, 100, true]]);
+  const meshes = d.patterns.map((p) => meshPattern(p, { target: 25 })), byId = Object.fromEntries(meshes.map((m) => [m.id, m])), resolved = resolveSeamCorrespondence(d.seams, meshes, { spacing: 12.5 });
+  const at = (side, m) => side.vertices.reduce((q, v, k) => [q[0] + m.uv[v * 2] * side.weights[k], q[1] + m.uv[v * 2 + 1] * side.weights[k]], [0, 0]);
+  const [waist, pocket] = resolved; near(waist.lengthB, 300); near(pocket.lengthB, 100); assert.ok(pocket.pairs.length >= 9);
+  // The pocket is sewn to the front's hem from 200 mm back to 100 mm and nowhere else; the waist runs over both hem edges of the yoke without a break.
+  pocket.pairs.forEach((pair, i) => { const [x, y] = at(pair.b, byId.front); near(x, 200 - 100 * i / (pocket.pairs.length - 1), 1e-6); near(y, 0); near(at(pair.a, byId.pocket)[0], 100 - 100 * i / (pocket.pairs.length - 1), 1e-6); });
+  waist.pairs.forEach((pair, i) => { const f = i / (waist.pairs.length - 1); near(at(pair.b, byId.yoke)[0], 300 - 300 * f, 1e-6); near(at(pair.a, byId.front)[0], 300 - 300 * f, 1e-6); });
+  // Laid 20 mm apart over a dome, both seams close.
+  const { start, end } = drape(d, { target: 25, steps: 200, place: (p) => ({ front: [0, 0, 505], pocket: [100, -140, 505], yoke: [0, 420, 505] })[p.id] });
+  near(start.waist, 20, 1e-6); near(start.pocket_top, 20, 1e-6); for (const id of ['waist', 'pocket_top']) assert.ok(end[id] < 2, `seam ${id} is ${end[id].toFixed(2)} mm open after the drape`);
+  // The tech pack names the spans and their lengths, and the prompt tool's schema carries them.
+  const pack = techPack(d, 'apron'); assert.deepEqual(pack.seams.map((s) => [s.lengthAmm, s.lengthBmm]), [[300, 300], [100, 100]]); const html = techPackHTML(pack); assert.match(html, /<td>yoke\.yoke_hem_a\+yoke_hem_b<\/td>/); assert.match(html, /<td>front\.front_bottom 0\.333-0\.667<\/td>/);
+  const tools = {}; registerSoftgoodsTools({ registerTool: (name, spec) => { tools[name] = spec; } }, { call: async () => ({}), ok: (v) => v, fail: (e) => { throw e; } });
+  assert.deepEqual(z.object(tools.cadgang_softgoods_set.inputSchema).parse({ patterns: d.patterns, seams: d.seams }).seams.map((s) => s.b), d.seams.map((s) => s.b));
+  const bad = (side, message) => assert.throws(() => validateSoftgoodsDocument({ ...d, seams: [{ ...d.seams[0], b: side }] }), message);
+  bad({ pattern: 'yoke', segments: ['yoke_hem_a', 'yoke_right'] }, /do not follow one another/); bad({ pattern: 'yoke', segments: ['yoke_hem_a', 'gone'] }, /missing segment 'yoke\.gone'/); bad({ pattern: 'yoke', segments: [] }, /missing segment/);
+  bad({ pattern: 'yoke', segment: 'yoke_hem_a', segments: ['yoke_hem_a'] }, /segment or segments, not both/); bad({ pattern: 'yoke', segment: 'yoke_hem_a', from: 0.6, to: 0.4 }, /from before to/); bad({ pattern: 'yoke', segment: 'yoke_hem_a', to: 1.2 }, /fractions 0\.\.1/);
+});
+
+test('edits keep a span seam whole where they can, and refuse to open the outline in the middle of one', () => {
+  const d = spans();
+  // A slash beyond the pocket leaves the pocket sewn to the same 100 mm, now named as a part of the shorter first piece of the hem.
+  const flared = slashSpread(d, { pattern: 'front', from: { segment: 'front_bottom', at: 0.8 }, pivot: 'front_tl', angle: 8 }), side = seamSide(seam(flared, 'pocket_top').b);
+  assert.deepEqual(side.segments, ['front_bottom']); near(side.from, 1 / 3 / 0.8, 1e-9); near(side.to, 2 / 3 / 0.8, 1e-9); assert.ok(checkDesign(flared).ok); assert.equal(flared.seams.length, 2);
+  // Cutting one of the yoke's hem edges: the waist stays one seam over three edges, and the front it is sewn to is not cut.
+  const cutYoke = pleat(d, { pattern: 'yoke', segment: 'yoke_right', at: 0.5, intake: 20, to: { segment: 'yoke_left', at: 0.5 } }); assert.deepEqual(seam(cutYoke, 'waist').b, d.seams[0].b, 'an edit elsewhere on the piece leaves the span alone');
+  const before = split(d, { pattern: 'yoke', from: { segment: 'yoke_top', at: 0.5 }, to: 'yoke_p2' }); assert.deepEqual(seam(before, 'waist').b, { pattern: 'yoke_a', segments: ['yoke_hem_a', 'yoke_hem_b'] }, 'a cut that ends where the span ends moves the whole span to its piece');
+  assert.throws(() => split(d, { pattern: 'yoke', from: 'yoke_p1', to: { segment: 'yoke_top', at: 0.5 } }), /Seam 'waist' sews a span of edges through 'yoke_p1'; a cut there would tear it/);
+  assert.throws(() => slashSpread(d, { pattern: 'front', from: { segment: 'front_bottom', at: 0.5 }, pivot: 'front_tl', angle: 8 }), /Seam 'pocket_top' sews a span of edges through .* a slash there would tear it/);
+  assert.throws(() => dart(d, { pattern: 'front', segment: 'front_bottom', at: 0.9, width: 20, length: 60 }), /Seam 'pocket_top' sews a span of edges over 'front_bottom'; a dart there would tear it/);
+  // A whole-edge seam whose other side is a span stays one seam too: a pivot on the front's top makes that side a span of two, and the yoke is not cut.
+  const cutFront = slashSpread(d, { pattern: 'front', from: { segment: 'front_bottom', at: 0.9 }, pivot: { segment: 'front_top', at: 0.25 }, angle: 5 });
+  assert.deepEqual(seam(cutFront, 'waist').a, { pattern: 'front', segments: ['front_top', 'front_top_2'] }); assert.equal(cutFront.seams.length, 2); assert.equal(pattern(cutFront, 'yoke').points.length, 5); assert.ok(checkDesign(cutFront).ok);
+  assert.throws(() => slashSpread(d, { pattern: 'front', from: { segment: 'front_top', at: 0.25 }, pivot: 'front_bl', angle: 5 }), /Seam 'waist' sews a span of edges through/);
+  // Notches on a span land on the edge the place is on. A quarter of the way along the front's top is three quarters along the yoke's hem: the middle of hem_b.
+  const y = pattern(autoNotch(d, { seams: ['waist'], fractions: [0.25], ends: false }), 'yoke'); assert.deepEqual(y.notches.map((n) => [n.segment, n.at]), [['yoke_hem_b', 0.5]]);
+  const f = pattern(autoNotch(d, { seams: ['pocket_top'], ends: true, fractions: [] }), 'front'); assert.deepEqual(f.notches.map((n) => [n.segment, +n.at.toFixed(4)]), [['front_bottom', 0.6667], ['front_bottom', 0.3333]]);
+  // A mirrored copy's own span seams read from the other end.
+  const tube = panels(); tube.patterns = [tube.patterns[0]]; tube.arrangement = []; tube.seams = [{ id: 'tube', a: { pattern: 'front', segment: 'front_left', from: 0.1, to: 0.6 }, b: { pattern: 'front', segments: ['front_right', 'front_top'], to: 0.25 }, flip: true, kind: 'gather' }];
+  const copy = seam(mirror(tube, { pattern: 'front' }), 'front_mirror_tube'); assert.deepEqual(copy.b.segments, ['front_mirror_top', 'front_mirror_right']); near(copy.b.from, 0.75); near(copy.a.from, 0.4); near(copy.a.to, 0.9);
 });
 
 test('edits compose, name what they changed, and an unknown one is refused', () => {

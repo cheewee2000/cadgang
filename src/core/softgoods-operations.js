@@ -1,6 +1,7 @@
 // Deterministic measurement and grading operations for authoritative 2D patterns.
 import { GraphError } from './errors.js';
 import { segmentLength } from './softgoods-export.js';
+import { seamSide, spanLength } from './softgoods-seams.js';
 
 const finite = (v) => Number.isFinite(Number(v));
 
@@ -59,7 +60,7 @@ export function gradeDocument(document, grade) {
 
 /** Lengths of the two sides of every seam. A plain seam sews only if they agree within its ease; a gather or elastic seam may differ on purpose. */
 export function seamLengths(document) {
-  const patterns = new Map(document.patterns.map((p) => [p.id, p])), length = (ref) => { const p = patterns.get(ref.pattern); return segmentLength(p, p.segments.find((s) => s.id === ref.segment)); };
+  const patterns = new Map(document.patterns.map((p) => [p.id, p])), length = (ref) => { const p = patterns.get(ref.pattern), side = seamSide(ref); return spanLength(side, side.segments.map((id) => segmentLength(p, p.segments.find((s) => s.id === id)))); };
   return document.seams.map((s) => { const a = length(s.a), b = length(s.b), mismatch = Math.abs(a - b) / Math.max(a, b, 1e-9); return { id: s.id, kind: s.kind || 'plain', lengthA: +a.toFixed(2), lengthB: +b.toFixed(2), mismatch: +mismatch.toFixed(5), ok: ['gather', 'elastic'].includes(s.kind) || mismatch <= Number(s.ease || 0) + 1e-9 }; });
 }
 

@@ -7,7 +7,7 @@ import { GraphError } from './errors.js';
 import { validateSoftgoodsDocument, patternLoops, inMaterial, internalSegment } from './softgoods-document.js';
 import { sampleSegment, segmentLength } from './softgoods-export.js';
 import { insideLoop } from './softgoods-mesh.js';
-import { seamFraction } from './softgoods-seams.js';
+import { seamFraction, seamSide, spanLength } from './softgoods-seams.js';
 
 const EPS = 1e-6, KEYS = ['a', 'b', 'c', 'c1', 'c2'];
 const clone = (v) => structuredClone(v);
@@ -25,6 +25,23 @@ const polyline = (p, ids) => ids.flatMap((id, k) => { const s = seg(p, id); retu
 const inside = (p, q) => inMaterial(patternLoops(p), q, 0);
 const refsOf = (list) => new Set(list.flatMap((s) => KEYS.map((k) => s[k])).filter((id) => id != null));
 const usualAllowance = (p) => { const n = new Map(); for (const mm of Object.values(p.allowances || {})) n.set(mm, (n.get(mm) || 0) + 1); return [...n].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 0; };
+
+// A seam side is one segment, or a span: part of a segment, or several in a row (see seamSide).
+const isSpan = (ref) => ref.segments != null || ref.from != null || ref.to != null;
+const sideHas = (ref, pid, sid) => ref.pattern === pid && seamSide(ref).segments.includes(sid);
+/** A side written the shortest way: one whole segment is {pattern, segment}. */
+const sideOf = (pattern, segments, from = 0, to = 1) => ({ pattern, ...(segments.length === 1 ? { segment: segments[0] } : { segments }), ...(from > EPS ? { from } : {}), ...(to < 1 - EPS ? { to } : {}) });
+/** A span that ran over a segment now cut at f runs over its parts; where it started or stopped part-way along, that place is on one of them. */
+function respan(ref, sid, f, second) {
+  const side = seamSide(ref), i = side.segments.indexOf(sid); let { from, to } = side, parts = [sid, second];
+  if (i === 0) { if (from >= f - EPS) { parts = [second]; from = Math.max(0, (from - f) / (1 - f)); } else from /= f; }
+  if (i === side.segments.length - 1) { if (to <= f + EPS) { parts = [sid]; to = Math.min(1, to / f); } else to = (to - f) / (1 - f); }
+  return sideOf(side.pattern, [...side.segments.slice(0, i), ...parts, ...side.segments.slice(i + 1)], from, to);
+}
+/** Opening or cutting the outline at a vertex would tear a seam whose span runs through it. */
+function needUnsewnAt(d, p, vertex, what) {
+  for (const s of d.seams) for (const ref of [s.a, s.b]) { if (ref.pattern !== p.id) continue; const ids = seamSide(ref).segments; for (let i = 1; i < ids.length; i++) need(seg(p, ids[i]).a !== vertex, `Seam '${s.id}' sews a span of edges through '${vertex}'; ${what} there would tear it, so re-sew it first`); }
+}
 
 // Seams measure along an edge by length; a Bezier's own parameter does not run evenly along it. Lines and arcs agree.
 function lengthTable(p, s) { const q = sampleSegment(p, s, 256), c = [0]; for (let i = 1; i < q.length; i++) c.push(c[i - 1] + Math.hypot(q[i][0] - q[i - 1][0], q[i][1] - q[i - 1][1])); return c; }
@@ -97,8 +114,10 @@ const context = () => ({ log: [], stack: [], handled: new Set() });
 function reseam(d, pid, sid, f, first, second, ctx) {
   const ids = idsOf(d.seams);
   for (const seam of [...d.seams]) {
-    const onA = seam.a.pattern === pid && seam.a.segment === sid, onB = seam.b.pattern === pid && seam.b.segment === sid;
+    const onA = sideHas(seam.a, pid, sid), onB = sideHas(seam.b, pid, sid);
     if (ctx.handled.has(seam.id) || (!onA && !onB)) continue;
+    // A seam that already sews spans stays one seam: the cut side's span now runs over both parts, and the other side is left alone.
+    if (isSpan(seam.a) || isSpan(seam.b)) { ctx.handled.add(seam.id); if (onA) seam.a = respan(seam.a, sid, f, second); if (onB) seam.b = respan(seam.b, sid, f, second); continue; }
     need(!(onA && onB), `Seam '${seam.id}' sews '${sid}' to itself and cannot be split`);
     // fa: the cut as a fraction of side a. m: of side b before the flip, which is how the correspondence stops are written.
     const fa = onA ? f : seamFraction(seam, f, true), fb = onA ? seamFraction(seam, f) : f, m = seam.flip ? 1 - fb : fb, other = onA ? seam.b : seam.a;
@@ -166,6 +185,7 @@ function spread(d, p, x, y, move, twinIds) {
     for (const g of d.grades) for (const r of g.rules.filter((q2) => q2.pattern === p.id && q2.point === id)) g.rules.push({ ...r, point: twin[id] });
   }
   for (const q of before) if (q.id !== x && q.id !== y && !still.has(q.id) && (moving.has(q.id) || insideLoop(poly, [q.x, q.y]))) [q.x, q.y] = move(q.x, q.y);
+  for (const id of Object.keys(twin)) needUnsewnAt(d, p, id, 'a slash');
   for (const id of forward) { const s = seg(p, id); for (const k of KEYS) if (twin[s[k]]) s[k] = twin[s[k]]; }
   return { li, forward, back, x2: twin[x] || x, y2: twin[y] || y };
 }
@@ -198,6 +218,7 @@ function reflected(p, o, u, rp, rs) {
 }
 const reflectedDelta = (r, u) => { const k = 2 * (r.dx * u[0] + r.dy * u[1]); return { dx: k * u[0] - r.dx + 0, dy: k * u[1] - r.dy + 0 }; };
 /** A seam between two reversed edges pairs the same places, read from the other end. */
+const mirroredSide = (ref, pattern, rs) => { const s = seamSide(ref); return sideOf(pattern, s.segments.map(rs).reverse(), 1 - s.to, 1 - s.from); };
 const mirroredSeam = (s, id, a, b) => ({ ...clone(s), id, a, b, correspondence: (s.correspondence || []).map((q) => ({ a: 1 - q.a, b: 1 - q.b })).reverse() });
 
 const OPS = {
@@ -226,13 +247,13 @@ const OPS = {
     for (const a of d.annotations.filter((q) => q.pattern === pid)) d.annotations.push({ ...clone(a), id: fresh(annotationIds, named(a.id)), pattern: newId, lines: a.lines.map((pair) => pair.map(rp)) });
     for (const g of d.grades) for (const r of g.rules.filter((q) => q.pattern === pid)) g.rules.push({ pattern: newId, point: rp(r.point), ...reflectedDelta(r, u) });
     // Seams within the piece (its darts and pleats) belong to it and are copied; seams to other pieces are not, the copy sews to different edges.
-    for (const s of d.seams.filter((q) => q.a.pattern === pid && q.b.pattern === pid)) d.seams.push(mirroredSeam(s, fresh(seamIds, named(s.id)), { pattern: newId, segment: rs(s.a.segment) }, { pattern: newId, segment: rs(s.b.segment) }));
+    for (const s of d.seams.filter((q) => q.a.pattern === pid && q.b.pattern === pid)) d.seams.push(mirroredSeam(s, fresh(seamIds, named(s.id)), mirroredSide(s.a, newId, rs), mirroredSide(s.b, newId, rs)));
     if (seam) { need(segment != null, 'seam: true sews the copy to the original along the mirror segment, so give segment'); d.seams.push({ id: fresh(seamIds, typeof seam === 'string' ? seam : `${segment}_seam`), a: { pattern: pid, segment }, b: { pattern: newId, segment: rs(segment) }, flip: true, ease: 0, kind: 'plain', correspondence: [] }); }
   },
 
   /** A half pattern drawn to be cut on the fold becomes the whole symmetric piece: the fold segment goes, and the outline carries on as its own mirror image. */
   unfold(d, { pattern: pid, segment: sid }) {
-    const p = pat(d, pid), fold = seg(p, sid), li = p.contours.findIndex((loop) => loop.includes(sid)), sewn = d.seams.find((s) => [s.a, s.b].some((r) => r.pattern === pid && r.segment === sid));
+    const p = pat(d, pid), fold = seg(p, sid), li = p.contours.findIndex((loop) => loop.includes(sid)), sewn = d.seams.find((s) => sideHas(s.a, pid, sid) || sideHas(s.b, pid, sid));
     need(fold.type === 'line' && li >= 0, `A fold is a straight segment of the outline; '${sid}' is not`); need(!sewn, `Segment '${sid}' is sewn by seam '${sewn?.id}', so it is not a fold`);
     const a = pt(p, fold.a), b = pt(p, fold.b), o = [a.x, a.y], u = unit([b.x - a.x, b.y - a.y]), onAxis = (q) => Math.abs((q.x - o[0]) * u[1] - (q.y - o[1]) * u[0]) < 1e-6;
     // A measurement of the fold itself is still the distance between its two ends.
@@ -251,8 +272,8 @@ const OPS = {
     for (const g of d.grades) for (const r of g.rules.filter((q) => q.pattern === pid && rp(q.point) !== q.point)) g.rules.push({ pattern: pid, point: rp(r.point), ...reflectedDelta(r, u) });
     // The new half is sewn as the old one is, wherever the other edge has a mirrored twin too: its own darts at once, and a seam to
     // another piece as soon as that piece has been unfolded as well (its twin of side_seam is side_seam_m).
-    const twin = (ref) => { const id = ref.pattern === pid ? segmentName.get(ref.segment) : `${ref.segment}_m`; return d.patterns.find((q) => q.id === ref.pattern)?.segments.some((q) => q.id === id) ? { pattern: ref.pattern, segment: id } : null; };
-    const same = (x, y) => x.pattern === y.pattern && x.segment === y.segment, sewn2 = (ref) => ref.pattern !== pid && d.seams.some((q) => same(q.a, ref) || same(q.b, ref));
+    const twin = (ref) => { const side = mirroredSide(ref, ref.pattern, (id) => (ref.pattern === pid ? segmentName.get(id) : `${id}_m`)), q = d.patterns.find((x) => x.id === ref.pattern); return (side.segments || [side.segment]).every((id) => q?.segments.some((x) => x.id === id)) ? side : null; };
+    const sewn2 = (ref) => ref.pattern !== pid && d.seams.some((q) => [q.a, q.b].some((r) => seamSide(ref).segments.some((id) => sideHas(r, ref.pattern, id))));
     for (const s of [...d.seams]) { if (s.a.pattern !== pid && s.b.pattern !== pid) continue; const ta = twin(s.a), tb = twin(s.b); if (ta && tb && !sewn2(ta) && !sewn2(tb)) d.seams.push(mirroredSeam(s, fresh(seamIds, `${s.id}_m`), ta, tb)); }
   },
 
@@ -260,7 +281,7 @@ const OPS = {
    *  every seam, measurement, graded size and mark follows the piece its edge ended up in. Points and segments keep their ids. */
   split(d, { pattern: pid, from, to, ids, names, allowance }) {
     const p = pat(d, pid), ctx = context(), x = vertexAt(d, p, from, ctx, { point: `${pid}_cut_a` }), y = vertexAt(d, p, to, ctx, { point: `${pid}_cut_b` });
-    const { li, forward, back } = chains(p, x, y); needInside(p, li, x, y, 'The cut');
+    const { li, forward, back } = chains(p, x, y); needInside(p, li, x, y, 'The cut'); needUnsewnAt(d, p, x, 'a cut'); needUnsewnAt(d, p, y, 'a cut');
     const [idA, idB] = ids || [`${pid}_a`, `${pid}_b`]; need(idA !== idB && [idA, idB].every((id) => id === pid || !d.patterns.some((q) => q.id === id)), `The two pieces need two ids that are not in use: '${idA}', '${idB}'`);
     const polyA = polyline(p, forward), inA = (q) => insideLoop(polyA, q), P = new Map(p.points.map((q) => [q.id, q])), xy = (id) => [P.get(id).x, P.get(id).y];
     need(Math.abs(signedArea(polyA)) > 1e-3 && Math.abs(signedArea(polyline(p, back))) > 1e-3, `The cut from '${x}' to '${y}' runs along the edge and cuts nothing off`);
@@ -277,7 +298,7 @@ const OPS = {
     const refs = pieces.map((piece) => new Set([...refsOf([...piece.segments, ...piece.internalLines.map(internalSegment)]), ...d.annotations.filter((a) => a.pattern === piece.id).flatMap((a) => a.lines.flat())]));
     pieces.forEach((piece, k) => { piece.points = p.points.filter((q) => refs[k].has(q.id) || (!refs[1 - k].has(q.id) && inA([q.x, q.y]) === !k)); });
     const has = (k, kind, id) => pieces[k][kind].some((q) => q.id === id), home = (kind, id) => pieces[has(0, kind, id) ? 0 : 1].id;
-    for (const s of d.seams) for (const side of [s.a, s.b]) if (side.pattern === pid) side.pattern = home('segments', side.segment);
+    for (const s of d.seams) for (const side of [s.a, s.b]) if (side.pattern === pid) side.pattern = home('segments', seamSide(side).segments[0]);
     for (const c of d.constraints) {
       if (c.type === 'distance') { for (const side of [c.a, c.b]) if (side.pattern === pid) side.pattern = home('points', side.point); continue; }
       if (c.pattern !== pid) continue;
@@ -298,6 +319,7 @@ const OPS = {
   dart(d, { pattern: pid, segment: sid, at = 0.5, width, length, apex, id }) {
     const p = pat(d, pid), s = seg(p, sid), edge = segmentLength(p, s), f1 = at - width / 2 / edge, f2 = at + width / 2 / edge;
     need(positive(width) && (apex != null || positive(length)), 'A dart needs a width, and a length or an apex [x, y]');
+    const spanned = d.seams.find((q) => (sideHas(q.a, pid, sid) || sideHas(q.b, pid, sid)) && (isSpan(q.a) || isSpan(q.b))); need(!spanned, `Seam '${spanned?.id}' sews a span of edges over '${sid}'; a dart there would tear it, so re-sew it first`);
     need(f1 * edge > 1e-3 && (1 - f2) * edge > 1e-3, `A ${width} mm dart at ${at} does not fit on '${sid}', which is ${edge.toFixed(1)} mm long`);
     const name = fresh(idsOf(d.annotations, d.seams), id || `${sid}_dart`), mm = p.allowances?.[sid], { normal } = inward(p, s, at), ctx = context();
     const taken = idsOf(p.points), segmentIds = idsOf(p.segments), [pa, pb, tip] = ['a', 'b', 'apex'].map((k) => fresh(taken, `${name}_${k}`)), after = fresh(segmentIds, `${sid}_2`), mouth = fresh(segmentIds, `${name}_mouth`), legs = ['a', 'b'].map((k) => fresh(segmentIds, `${name}_leg_${k}`));
@@ -389,9 +411,11 @@ const OPS = {
     for (const s of d.seams) {
       // ponytail: a dart is not notched unless asked for by name; its notches belong on the mouth, which the outline no longer has.
       if (seams ? !seams.includes(s.id) : s.kind === 'dart') continue;
-      const A = pat(d, s.a.pattern), B = pat(d, s.b.pattern), sa = seg(A, s.a.segment), sb = seg(B, s.b.segment), length = segmentLength(A, sa);
+      const sides = [s.a, s.b].map((ref) => { const p = pat(d, ref.pattern), side = seamSide(ref); return { p, side, each: side.segments.map((id) => segmentLength(p, seg(p, id))) }; }), length = spanLength(sides[0].side, sides[0].each);
+      // A place along a side's span is on one of its segments, some way along that one.
+      const place = ({ p, side, each }, f) => { let want = side.from * each[0] + f * spanLength(side, each), k = 0; while (k < each.length - 1 && want > each[k] + 1e-9) want -= each[k++]; notch(p, seg(p, side.segments[k]), Math.min(1, Math.max(0, want / each[k]))); };
       const along = every ? Array.from({ length: Math.max(0, Math.ceil(length / every - 1e-9) - 1) }, (_, k) => (k + 1) * every / length) : fractions;
-      for (const f of [...(ends ? [0, 1] : []), ...along]) { notch(A, sa, f); notch(B, sb, seamFraction(s, f)); }
+      for (const f of [...(ends ? [0, 1] : []), ...along]) { place(sides[0], f); place(sides[1], seamFraction(s, f)); }
     }
   },
 };

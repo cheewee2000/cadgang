@@ -9,6 +9,7 @@ import { GraphError } from './errors.js';
 import { resolveMaterial } from './softgoods-fabrics.js';
 import { sampleSegment } from './softgoods-export.js';
 import { insideLoop, segmentDistance } from './softgoods-mesh.js';
+import { seamSide } from './softgoods-seams.js';
 
 const ID = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
 const TYPES = new Set(['line', 'arc', 'bezier']);
@@ -94,8 +95,12 @@ export function validateSoftgoodsDocument(value) {
     const id = identifier(s.id, 'seam');
     if (seamIds.has(id)) throw new GraphError(`Two seams are named '${id}'`); seamIds.add(id);
     for (const side of ['a', 'b']) {
-      const ref = s[side], p = patterns.get(ref?.pattern);
-      if (!p || !p.segments.has(ref.segment)) throw new GraphError(`Seam '${id}' ${side} refers to missing segment '${ref?.pattern}.${ref?.segment}'`);
+      // A side is one segment, part of one (from, to as fractions of its length), or several that follow one another along the outline.
+      const ref = s[side], p = patterns.get(ref?.pattern), span = seamSide(ref), gone = span.segments.find((sid) => !p?.segments.has(sid));
+      if (!p || !span.segments.length || gone != null) throw new GraphError(`Seam '${id}' ${side} refers to missing segment '${ref?.pattern}.${gone ?? ref?.segment}'`);
+      if (ref.segment != null && ref.segments != null) throw new GraphError(`Seam '${id}' ${side} names segment or segments, not both`);
+      for (let i = 1; i < span.segments.length; i++) if (p.segments.get(span.segments[i - 1]).b !== p.segments.get(span.segments[i]).a) throw new GraphError(`Seam '${id}' ${side} segments '${span.segments[i - 1]}' and '${span.segments[i]}' do not follow one another along the outline`);
+      if (!(span.from >= 0 && span.from < 1 && span.to > 0 && span.to <= 1) || (span.segments.length === 1 && span.from >= span.to)) throw new GraphError(`Seam '${id}' ${side} from and to must be fractions 0..1 of its first and last segment, from before to`);
     }
     if (s.ease != null && (!finite(s.ease) || Number(s.ease) < 0)) throw new GraphError(`Seam '${id}' ease must be non-negative`);
   }

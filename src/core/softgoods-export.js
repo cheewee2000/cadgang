@@ -4,8 +4,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { GraphError } from './errors.js';
-import { checkDesign, gradePattern } from './softgoods-operations.js';
+import { checkDesign, gradePattern, seamLengths } from './softgoods-operations.js';
 import { billOfMaterials, bomHTML } from './softgoods-bom.js';
+import { seamSideLabel } from './softgoods-seams.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const pointMap = (p) => new Map(p.points.map((q) => [q.id, q]));
@@ -137,7 +138,7 @@ export function patternDXF(pattern, annotations = []) {
 
 export function techPack(document, name = 'softgoods', { fit = null } = {}) {
   const patterns = document.patterns.map((p) => ({ id: p.id, name: p.name || p.id, material: p.material || '', cut: p.cut || 1, grain: p.grain || null, allowances: p.allowances || {}, notches: p.notches || [], annotations: (document.annotations || []).filter((a) => a.pattern === p.id), segments: p.segments.map((s) => ({ id: s.id, type: s.type, lengthMm: +segmentLength(p, s).toFixed(2) })) }));
-  const seams = document.seams.map((s) => { const pa = document.patterns.find((p) => p.id === s.a.pattern), pb = document.patterns.find((p) => p.id === s.b.pattern), a = pa?.segments.find((q) => q.id === s.a.segment), b = pb?.segments.find((q) => q.id === s.b.segment); return { ...s, lengthAmm: a ? +segmentLength(pa, a).toFixed(2) : null, lengthBmm: b ? +segmentLength(pb, b).toFixed(2) : null }; });
+  const measured = new Map(seamLengths(document).map((q) => [q.id, q])), seams = document.seams.map((s) => ({ ...s, lengthAmm: measured.get(s.id).lengthA, lengthBmm: measured.get(s.id).lengthB }));
   return { schema: 'cadgang.softgoods-tech-pack.v1', name, generatedAt: new Date().toISOString(), revision: document.revision, materials: document.materials || {}, patterns, seams, constraints: document.constraints || [], annotations: document.annotations || [], sizes: (document.grades || []).map((g) => g.size), check: checkDesign(document), bom: billOfMaterials(document), notes: ['All dimensions mm.', 'DXF STITCH geometry is authoritative.', 'DXF CUT geometry is the closed seam-allowance cutting boundary; ALLOWANCE records the per-edge schedule.'], ...(fit ? { fit } : {}) };
 }
 
@@ -150,7 +151,7 @@ function fitHTML(fit) {
 
 export function techPackHTML(pack) {
   const rows = pack.patterns.map((p) => `<tr><td>${esc(p.name)}</td><td>${esc(p.material)}</td><td>${p.cut}</td><td>${esc(Object.entries(p.allowances).map(([k, v]) => `${k}: ${v} mm`).join('; '))}</td><td>${esc(p.notches.length)}</td><td>${esc(p.annotations.map((a) => `${a.type}: ${a.label || a.id}`).join('; '))}</td></tr>`).join('');
-  const seams = pack.seams.map((s) => `<tr><td>${esc(s.id)}</td><td>${esc(`${s.a.pattern}.${s.a.segment}`)}</td><td>${esc(`${s.b.pattern}.${s.b.segment}`)}</td><td>${s.lengthAmm ?? ''}</td><td>${s.lengthBmm ?? ''}</td><td>${esc(s.kind || 'plain')}</td><td>${flag(pack.check?.seams.find((q) => q.id === s.id))}</td></tr>`).join('');
+  const seams = pack.seams.map((s) => `<tr><td>${esc(s.id)}</td><td>${esc(seamSideLabel(s.a))}</td><td>${esc(seamSideLabel(s.b))}</td><td>${s.lengthAmm ?? ''}</td><td>${s.lengthBmm ?? ''}</td><td>${esc(s.kind || 'plain')}</td><td>${flag(pack.check?.seams.find((q) => q.id === s.id))}</td></tr>`).join('');
   const measured = (list) => list.map((c) => `<li>${esc(c.name || c.id)} · ${esc(c.type)} · target ${c.target} mm · measured ${c.measured} mm · ${c.withinTolerance ? 'OK' : `OUT BY ${c.delta} mm`}</li>`).join('');
   const sizes = (pack.check?.sizes || []).map((z) => `<tr><td>${esc(z.size)}</td><td>${z.ok ? 'OK' : 'CHECK'}</td><td>${esc(z.seams.filter((q) => !q.ok).map((q) => `${q.id}: ${q.lengthA} / ${q.lengthB} mm`).join('; '))}</td><td>${esc(z.constraints.filter((c) => !c.withinTolerance).map((c) => `${c.name || c.id}: ${c.measured} mm`).join('; '))}</td></tr>`).join('');
   return `<!doctype html><meta charset="utf-8"><title>${esc(pack.name)} tech pack</title><style>body{font:13px monospace;margin:32px;color:#111}h1{font-size:22px}h2{margin-top:32px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:6px;text-align:left}small{color:#666}@media print{body{margin:12mm}}</style><h1>${esc(pack.name)} · TECH PACK</h1><small>Revision ${pack.revision} · ${esc(pack.generatedAt)}</small><h2>PATTERN SCHEDULE</h2><table><tr><th>Pattern</th><th>Material</th><th>Cut</th><th>Allowances</th><th>Notches</th><th>Annotations</th></tr>${rows}</table><h2>SEAM SCHEDULE</h2><table><tr><th>Seam</th><th>A</th><th>B</th><th>A mm</th><th>B mm</th><th>Type</th><th>Lengths</th></tr>${seams}</table><h2>MEASUREMENT CONSTRAINTS</h2><ul>${measured(pack.check?.constraints || [])}</ul>${sizes ? `<h2>GRADED SIZES</h2><table><tr><th>Size</th><th>Check</th><th>Seams that no longer match</th><th>Measurements out of tolerance</th></tr>${sizes}</table>` : ''}${pack.bom ? bomHTML(pack.bom) : ''}${pack.fit ? fitHTML(pack.fit) : ''}<h2>NOTES</h2><ol>${pack.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ol>`;
