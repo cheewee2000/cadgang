@@ -40,6 +40,14 @@ export function cutLine(q, f0, f1) {
   const a = f0 * cum.at(-1), b = f1 * cum.at(-1); return q.length < 2 ? [] : [at(a), ...q.filter((_, i) => cum[i] > a && cum[i] < b), at(b)];
 }
 
+/** Where a pattern point (u, v mm) starts in 3D from its arrangement row: the solver's own transform (web/softgoods-worker.js), wrap included,
+ *  so what the page places by itself lies where the first frame will put it. test/softgoods-view.test.js holds the two together. */
+export function placeOnRow(u, v, a = {}) {
+  const [rx, ry, rz] = (a.rotation || [0, 0, 0]).map((x) => x * Math.PI / 180), p = a.position || [0, 0, 0]; let x = u, y = v * Math.cos(rx), z = v * Math.sin(rx);
+  if (a.wrap) { const t = (u - a.wrap.centre) / a.wrap.radius, w = a.wrap.radius * (Math.cos(t) - 1); x = a.wrap.centre + a.wrap.radius * Math.sin(t); y -= w * Math.sin(rx); z += w * Math.cos(rx); }
+  [x, z] = [x * Math.cos(ry) + z * Math.sin(ry), -x * Math.sin(ry) + z * Math.cos(ry)]; [x, y] = [x * Math.cos(rz) - y * Math.sin(rz), x * Math.sin(rz) + y * Math.cos(rz)]; return [p[0] + x, p[1] + y, p[2] + z];
+}
+
 // ---- bodies and trims, as the simulation input gives them
 
 /** A mesh body that carries an id is a CAD part of the design (softgoods-bodies.js); the avatar's torso has none. */

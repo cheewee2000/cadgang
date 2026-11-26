@@ -6,7 +6,8 @@ import fs from 'node:fs';
 import express from 'express';
 import { SoftgoodsDocument } from '../src/core/softgoods-document.js';
 import { softgoodsRouter } from '../src/server/softgoods.js';
-import { strainRGB, pressureRGB, css, materialHue, materialCss, seamCss, seamSide, sideLabel, cutLine, isCadBody, floorOf, nearestVertex, trimShapes } from '../web/softgoods-view.js';
+import { strainRGB, pressureRGB, css, materialHue, materialCss, seamCss, seamSide, sideLabel, cutLine, isCadBody, floorOf, nearestVertex, trimShapes, placeOnRow } from '../web/softgoods-view.js';
+import { simulate } from '../web/softgoods-worker.js';
 
 const read = (name) => fs.readFileSync(new URL(`../web/${name}`, import.meta.url), 'utf8');
 const near = (a, b) => a.every((v, k) => Math.abs(v - b[k]) < 1e-6);
@@ -129,4 +130,13 @@ test('the page gets each pattern\'s trim marks, one entry per trim, and a flatte
   } finally { server.close(); }
   const page = read('softgoods.js');
   assert.match(page, /flattened from \$\{esc\(q\.body\|\|'a body'\)\}/); assert.match(page, /'lies flat':`does not lie flat: strain \$\{\(\(q\.distortion\?\.maxStrain\|\|0\)\*100\)\.toFixed\(1\)\}%`/);
+});
+
+test('the page places a piece from its arrangement row where the solver starts it, wrap included, so a wrapped piece never shows flat', () => {
+  const uv = [0, 0, 40, 0, 40, 30, 0, 30, 20, 15], row = { pattern: 'p', position: [10, -20, 300], rotation: [90, 15, 30], wrap: { radius: 25, centre: 20 } };
+  const input = { meshes: [{ id: 'p', uv, triangles: [0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4], edges: [], boundaryCount: 4, segmentVertices: {} }], seams: [], attachments: [], arrangement: [row], materials: {}, patterns: [{ id: 'p' }] };
+  const start = simulate(input, 0).positions;
+  for (let i = 0; i < uv.length / 2; i++) assert.ok(placeOnRow(uv[2 * i], uv[2 * i + 1], row).every((v, k) => Math.abs(v - start[3 * i + k]) < 1e-3), `vertex ${i} starts where the page puts it`);   // float32 positions
+  assert.ok(Math.abs(placeOnRow(0, 0, row)[2] - placeOnRow(0, 0, { ...row, wrap: undefined })[2]) > 1 || Math.abs(placeOnRow(0, 0, row)[1] - placeOnRow(0, 0, { ...row, wrap: undefined })[1]) > 1, 'and the wrap moves it');
+  assert.match(read('softgoods.js'), /fill\(sample\(p,s\)\)\.map\(q=>placeOnRow\(q\.x,q\.y,a\)\)/, 'the painter\'s outlines use it');
 });
