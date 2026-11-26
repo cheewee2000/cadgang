@@ -20,7 +20,7 @@ spec:
           args:
             - |
               set -euo pipefail
-              apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends git ca-certificates libgl1 libegl1 libgomp1 libx11-6 libxext6 libsm6 >/dev/null
+              apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends git ca-certificates libgl1 libegl1 libgomp1 libx11-6 libxext6 libsm6 libusb-1.0-0 libudev1 libglib2.0-0 libxrender1 libxfixes3 libxi6 libxrandr2 libxcursor1 libxinerama1 >/dev/null
               git config --global --add safe.directory '*'
               git -C "$WORK/repo" fetch -q origin "$REF"
               rm -rf /tmp/repo && git clone -q --shared "$WORK/repo" /tmp/repo && cd /tmp/repo && git checkout -q "$COMMIT" 2>/dev/null
