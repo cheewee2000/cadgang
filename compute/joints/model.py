@@ -21,10 +21,13 @@ class EdgeConvBlock(nn.Module):
         n = x.shape[1]
         k = min(self.k, max(1, n - 1))
         with torch.no_grad():
-            d = torch.cdist(x[:, :, :3], x[:, :, :3])
+            # Squared distances rank as distances do. They and the gather below export to ONNX; cdist and x[b, idx] did not.
+            p = x[:, :, :3]
+            sq = (p * p).sum(-1)
+            d = sq[:, :, None] + sq[:, None, :] - 2 * p @ p.transpose(1, 2)
             idx = d.topk(k + 1, largest=False).indices[:, :, 1:]
-        b = torch.arange(x.shape[0], device=x.device)[:, None, None]
-        nbr = x[b, idx]
+        c = x.shape[2]
+        nbr = x.gather(1, idx.flatten(1)[:, :, None].expand(-1, -1, c)).reshape(x.shape[0], n, k, c)
         ctr = x[:, :, None, :].expand_as(nbr)
         edge = torch.cat([ctr, nbr - ctr], dim=-1).permute(0, 3, 1, 2)
         return self.net(edge).max(dim=3).values.transpose(1, 2)

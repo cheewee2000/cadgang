@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from cadnn.runtime import describe_device, export_onnx, fit, load_ckpt, log_err, pick_device
@@ -190,10 +191,18 @@ def train(args, on_step=None):
                             seed=args.seed, n_ch=N_CH, n_extra=N_EXTRA),
                   args={k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items() if k != 'func'})
 
+    teachers = [load_model(p, device)[0] for p in getattr(args, 'teachers', None) or []]
+
     def step(model, b):
         logits, axis = model(b['pa'], b['pb'], b['extra'])
         loss, ce, ax = joint_loss(logits, axis, b['label'], b['axis'], b['axis_mask'], weight, args.axis_weight,
                                        args.focal_gamma)
+        if teachers:   # distil the teachers' averaged, softened type probabilities; the axis still learns from ground truth
+            t = args.distill_t
+            with torch.no_grad():
+                soft = torch.stack([m(b['pa'], b['pb'], b['extra'])[0].float().div(t).softmax(1) for m in teachers]).mean(0)
+            kd = F.kl_div(logits.float().div(t).log_softmax(1), soft, reduction='batchmean') * t * t
+            loss = loss + args.distill_alpha * (kd - ce)
         return loss, dict(type=ce.detach(), axis=ax.detach())
 
     def evaluate_val(model):
@@ -258,6 +267,41 @@ def evaluate(args):
                                         axis=[round(float(x), 4) for x in P['axis_pred'][i]])) + '\n')
     log_err(f'accuracy {fmt(m["accuracy"], 1, True)}, axis median {fmt(m["axis_all"].get("median"))}°; '
             f'report {Path(args.report).with_suffix(".md")}')
+    return m
+
+
+def ensemble(args):
+    """Average several checkpoints on the test split: mean probability, sign-aligned mean axis, one temperature
+    fitted on the validation split. Each model samples its own points, as it does in eval."""
+    device = pick_device(args.device)
+    index, meta = load_index(args.index)
+    test, val = rows_in(index, 'test'), rows_in(index, 'val')
+    P = V = d = None
+    for path in args.ckpts:
+        model, ck = load_model(path, device)
+        d = ck['config']['data']
+        ds = PairDataset(index, args.dump or meta['dump_dir'], d['n_points'], d['contact_mm'], d['seed'], train=False)
+        p, v = (predict(model, ds, rows, device, args.batch_size, args.workers) for rows in (test, val))
+        if P is None:
+            P, V = p, v
+            continue
+        for acc, new in ((P, p), (V, v)):
+            acc['prob'] = acc['prob'] + new['prob']
+            sign = np.where((acc['axis_pred'] * new['axis_pred']).sum(1, keepdims=True) < 0, -1.0, 1.0)
+            acc['axis_pred'] = acc['axis_pred'] + sign * new['axis_pred']
+    for acc in (P, V):
+        acc['prob'] = acc['prob'] / len(args.ckpts)
+        acc['pred'] = acc['prob'].argmax(1)
+        acc['axis_pred'] = acc['axis_pred'] / np.clip(np.linalg.norm(acc['axis_pred'], axis=1, keepdims=True), 1e-9, None)
+    temperature = calibrate_temperature(V, P) if len(val) else 1.0
+    m = summarize(P)
+    m['temperature'], m['members'] = temperature, len(args.ckpts)
+    info = dict(split='test', checkpoint=' + '.join(str(c) for c in args.ckpts), epoch=None, step=None,
+                device=describe_device(device), index=str(args.index), n_points=d['n_points'], contact_mm=d['contact_mm'],
+                limited=False, export=None)
+    write_report(m, meta, info, args.report)
+    log_err(f'ensemble of {len(args.ckpts)}: accuracy {fmt(m["accuracy"], 1, True)}, axis median '
+            f'{fmt(m["axis_all"].get("median"))}°; report {Path(args.report).with_suffix(".md")}')
     return m
 
 

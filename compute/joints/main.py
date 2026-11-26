@@ -65,6 +65,9 @@ def build_parser():
     p.add_argument('--head', type=parse_ints, default=(256, 128), help='pair MLP widths (default 256,128)')
     p.add_argument('--dropout', type=float, default=0.2)
     p.add_argument('--focal-gamma', type=float, default=0.0, help='0 = cross entropy; >0 focal type loss')
+    p.add_argument('--teachers', nargs='*', help='checkpoints to distil from: their averaged type probabilities join the loss')
+    p.add_argument('--distill-alpha', type=float, default=0.5, help='share of the type loss taken from the teachers (default 0.5)')
+    p.add_argument('--distill-t', type=float, default=2.0, help='distillation temperature (default 2)')
     p.add_argument('--init-encoder', help='encoder.pt from parts pretraining; transfers XYZ weights while retaining contact channels')
     p.add_argument('--workers', type=int, default=4, help='DataLoader processes (default 4)')
     p.add_argument('--seed', type=int, default=0)
@@ -82,6 +85,15 @@ def build_parser():
     p.add_argument('--export-report', help='an export .json to include in the report')
     p.add_argument('--predictions', help='also write one JSON line per pair here')
     p.add_argument('--limit', type=int, default=0, help='evaluate a deterministic subset of this many pairs')
+    p.add_argument('--device', default='auto')
+    p.add_argument('--batch-size', type=int, default=128)
+    p.add_argument('--workers', type=int, default=4)
+
+    p = sub.add_parser('ensemble', help='average several checkpoints on the test split; writes a report')
+    p.add_argument('--index', required=True)
+    p.add_argument('--dump')
+    p.add_argument('--ckpts', nargs='+', required=True)
+    p.add_argument('--report', required=True, help='writes <report>.md and <report>.json')
     p.add_argument('--device', default='auto')
     p.add_argument('--batch-size', type=int, default=128)
     p.add_argument('--workers', type=int, default=4)
@@ -124,6 +136,9 @@ def main(argv=None):
         return r.get('exit_code', 1) if r.get('stopped') else 0
     if args.cmd == 'eval':
         T.evaluate(args)
+        return 0
+    if args.cmd == 'ensemble':
+        T.ensemble(args)
         return 0
     if args.cmd == 'export':
         return T.export(args)

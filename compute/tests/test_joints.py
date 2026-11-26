@@ -202,6 +202,25 @@ class JointTraining(unittest.TestCase):
                                           '--epochs', '2', '--batch-size', '8', '--points', '48', '--widths', '8,16',
                                           '--head', '16', '--workers', '0', '--log-every', '0', '--augment', 'so3', *extra])
 
+    def test_ensemble_distil_and_edgeconv_export(self):
+        from joints.main import build_parser
+        from joints import train as T
+        edge = ('--encoder', 'edgeconv', '--edge-k', '4', '--augment', 'none')
+        for s in '01':
+            T.train(self._args(f'{self.t}/teach{s}', '--seed', s, *edge))
+        ck = [f'{self.t}/teach{s}/best.pt' for s in '01']
+        m = T.ensemble(build_parser().parse_args(['ensemble', '--index', f'{self.t}/idx', '--ckpts', *ck, '--report',
+                                                  f'{self.t}/ens', '--device', 'cpu', '--workers', '0']))
+        self.assertEqual(m['members'], 2)
+        self.assertTrue(Path(f'{self.t}/ens.md').exists())
+        T.train(self._args(f'{self.t}/student', '--teachers', *ck, *edge))
+        try:
+            import onnx  # noqa: F401
+        except ImportError:
+            self.skipTest('onnx is not installed: the EdgeConv export is not checked')
+        self.assertEqual(T.export(build_parser().parse_args(['export', '--ckpt', f'{self.t}/student/best.pt', '--out',
+                                                             f'{self.t}/student.onnx'])), 0)
+
     def test_xyz_pretrain_transfer_preserves_joint_channels(self):
         from cadnn.pointnet import encoder_payload
         from cadnn.runtime import save_ckpt, load_ckpt
