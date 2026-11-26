@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { GraphError } from './errors.js';
+import { resolveMaterial } from './softgoods-fabrics.js';
 
 const ID = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
 const TYPES = new Set(['line', 'arc', 'bezier']);
@@ -31,6 +32,8 @@ export function validateSoftgoodsDocument(value) {
   const d = { ...defaults(), ...clone(value || {}) };
   if (d.version !== 1) throw new GraphError(`Softgoods document version ${d.version} is not supported`);
   if (!Array.isArray(d.patterns) || !Array.isArray(d.seams) || !Array.isArray(d.attachments) || !Array.isArray(d.arrangement) || !Array.isArray(d.constraints) || !Array.isArray(d.annotations) || !Array.isArray(d.grades)) throw new GraphError('patterns, seams, attachments, arrangement, constraints, annotations and grades must be arrays');
+  // A material may stand on a fabric-library preset ({ preset: 'nylon-500d', ...overrides }); the preset has to exist.
+  for (const [id, m] of Object.entries(d.materials || {})) resolveMaterial(m, id);
   const patterns = new Map();
   for (const raw of d.patterns) {
     const id = identifier(raw.id, 'pattern');
