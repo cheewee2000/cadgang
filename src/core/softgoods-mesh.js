@@ -1,6 +1,9 @@
 // Boundary-conforming simulation meshes generated from authoritative patterns.
-// Curves and straight segments are sampled into stable boundary chains, Earcut
-// triangulates one outer contour plus holes, then long triangles are refined.
+// Curves and straight segments are sampled into stable boundary chains. Earcut
+// triangulates one outer contour plus holes; every boundary sample it skipped (it
+// drops collinear points) and a triangular lattice of interior points are then
+// inserted, and edge flips make the result Delaunay without ever crossing a
+// boundary. The cloth solver gets near-equilateral triangles at the target size.
 
 import earcut from 'earcut';
 import { GraphError } from './errors.js';
@@ -34,20 +37,91 @@ function boundariesOf(pattern, curveStep) {
     vertices.push(...loop.vertices);
     for (const [id, chain] of Object.entries(loop.segmentVertices)) segmentVertices[id] = chain.map((i) => i + offset);
   }
-  return { vertices, segmentVertices, holes };
+  return { vertices, segmentVertices, holes, loops: loops.map((l) => l.vertices) };
 }
 
-/** Refine every triangle into four until no edge exceeds target. */
-function refine(vertices, triangles, target, maxPasses = 6) {
+const insideLoop = (loop, p) => { let c = false; for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) { const a = loop[i], b = loop[j]; if ((a[1] > p[1]) !== (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) c = !c; } return c; };
+const segmentDistance = (p, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1))); return Math.hypot(a[0] + dx * t - p[0], a[1] + dy * t - p[1]); };
+
+/** Interior points on a triangular lattice of pitch h, inside the material and clear of every boundary. */
+function lattice(loops, h) {
+  const xs = loops[0].map((p) => p[0]), ys = loops[0].map((p) => p[1]), minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys), out = [];
+  // Centred on the bounding box, so a symmetric pattern gets a symmetric mesh.
+  const rows = Math.max(1, Math.round((maxY - minY) / (h * 0.866))), dy = (maxY - minY) / rows, cols = Math.max(1, Math.round((maxX - minX) / h)), dx = (maxX - minX) / cols;
+  for (let j = 1; j < rows; j++) for (let i = 0; i <= cols; i++) {
+    const p = [minX + (i + (j % 2 ? 0.5 : 0)) * dx, minY + j * dy];
+    if (!insideLoop(loops[0], p) || loops.slice(1).some((l) => insideLoop(l, p))) continue;
+    if (loops.some((l) => l.some((a, k) => segmentDistance(p, a, l[(k + 1) % l.length]) < 0.5 * Math.min(dx, dy)))) continue;
+    out.push(p);
+  }
+  return out;
+}
+
+/** Put vertex p into the triangulation: split the triangle it is in, or the edge it is on together with that edge's other triangle. */
+function insertVertex(vertices, triangles, p) {
+  const P = vertices[p];
+  for (let t = 0; t < triangles.length; t += 3) {
+    const v = [triangles[t], triangles[t + 1], triangles[t + 2]], V = v.map((i) => vertices[i]);
+    const turn = Math.sign((V[1][0] - V[0][0]) * (V[2][1] - V[0][1]) - (V[1][1] - V[0][1]) * (V[2][0] - V[0][0]));
+    if (!turn) continue;
+    // How far P is inside each edge, in mm.
+    const d = [0, 1, 2].map((k) => { const A = V[k], B = V[(k + 1) % 3]; return turn * ((B[0] - A[0]) * (P[1] - A[1]) - (B[1] - A[1]) * (P[0] - A[0])) / Math.hypot(B[0] - A[0], B[1] - A[1]); });
+    if (Math.min(...d) < -1e-7) continue;
+    const k = d.findIndex((x) => x < 1e-7);
+    if (k < 0) { triangles.splice(t, 3, v[0], v[1], p, v[1], v[2], p, v[2], v[0], p); return; }
+    const a = v[k], b = v[(k + 1) % 3], c = v[(k + 2) % 3];
+    triangles.splice(t, 3, a, p, c, p, b, c);
+    for (let u = 0; u < triangles.length; u += 3) for (let j = 0; j < 3; j++) if (triangles[u + j] === b && triangles[u + (j + 1) % 3] === a) { const e = triangles[u + (j + 2) % 3]; triangles.splice(u, 3, b, p, e, p, a, e); return; }
+    return;
+  }
+  throw new GraphError('A simulation mesh point fell outside its pattern');
+}
+
+/** Lawson flips: swap the diagonal of every pair of triangles that fails the empty-circle test. Boundary edges have one triangle and stay. */
+function flipToDelaunay(vertices, triangles, maxPasses = 2000) {
   for (let pass = 0; pass < maxPasses; pass++) {
-    let long = false; const mids = new Map(), out = [];
-    const mid = (a, b) => { const key = a < b ? `${a}/${b}` : `${b}/${a}`; if (mids.has(key)) return mids.get(key); const p = [(vertices[a][0] + vertices[b][0]) / 2, (vertices[a][1] + vertices[b][1]) / 2], i = vertices.push(p) - 1; mids.set(key, i); return i; };
-    for (let i = 0; i < triangles.length; i += 3) {
-      const a = triangles[i], b = triangles[i + 1], c = triangles[i + 2], d = (i, j) => Math.hypot(vertices[i][0] - vertices[j][0], vertices[i][1] - vertices[j][1]);
-      if (Math.max(d(a, b), d(b, c), d(c, a)) <= target) { out.push(a, b, c); continue; }
-      long = true; const ab = mid(a, b), bc = mid(b, c), ca = mid(c, a); out.push(a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca);
+    const directed = new Map();
+    for (let t = 0; t < triangles.length; t += 3) for (let k = 0; k < 3; k++) directed.set(`${triangles[t + k]}/${triangles[t + (k + 1) % 3]}`, [t, triangles[t + (k + 2) % 3]]);
+    const done = new Set(); let flips = 0;
+    for (const [key, [t, c]] of directed) {
+      const [a, b] = key.split('/').map(Number); if (a > b) continue;
+      const twin = directed.get(`${b}/${a}`); if (!twin || done.has(t) || done.has(twin[0])) continue;
+      const d = twin[1], A = vertices[a], B = vertices[b], C = vertices[c], D = vertices[d];
+      const ax = A[0] - D[0], ay = A[1] - D[1], bx = B[0] - D[0], by = B[1] - D[1], cx = C[0] - D[0], cy = C[1] - D[1];
+      const turn = (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]), inCircle = (ax * ax + ay * ay) * (bx * cy - cx * by) - (bx * bx + by * by) * (ax * cy - cx * ay) + (cx * cx + cy * cy) * (ax * by - bx * ay);
+      // The new diagonal c-d must cross a-b, or the flip would fold the quad over.
+      const side = (P, Q, R) => (Q[0] - P[0]) * (R[1] - P[1]) - (Q[1] - P[1]) * (R[0] - P[0]);
+      if (!(inCircle * Math.sign(turn) > 1e-9 * turn * turn) || !(side(C, D, A) * side(C, D, B) < 0)) continue;
+      triangles[t] = a; triangles[t + 1] = d; triangles[t + 2] = c; triangles[twin[0]] = d; triangles[twin[0] + 1] = b; triangles[twin[0] + 2] = c;
+      done.add(t); done.add(twin[0]); flips++;
     }
-    triangles = out; if (!long) break;
+    if (!flips) break;
+  }
+  return triangles;
+}
+
+/** Halve the longest over-length edge, and both triangles on it, until no edge exceeds target.
+ *  Splitting the longest edge first keeps the triangles near target size and near equilateral;
+ *  splitting every triangle in four turned earcut's long fans into slivers twenty times too dense. */
+function refine(vertices, triangles, target, maxPasses = 200) {
+  const len = (a, b) => Math.hypot(vertices[a][0] - vertices[b][0], vertices[a][1] - vertices[b][1]);
+  for (let pass = 0; pass < maxPasses; pass++) {
+    const edges = new Map();
+    for (let t = 0; t < triangles.length; t += 3) for (let k = 0; k < 3; k++) {
+      const a = triangles[t + k], b = triangles[t + (k + 1) % 3], key = a < b ? `${a}/${b}` : `${b}/${a}`;
+      if (!edges.has(key)) edges.set(key, { a, b, l: len(a, b), tris: [] });
+      edges.get(key).tris.push(t);
+    }
+    const long = [...edges.values()].filter((e) => e.l > target).sort((p, q) => q.l - p.l || p.a - q.a || p.b - q.b);
+    if (!long.length) break;
+    const done = new Set(), out = [];
+    for (const e of long) {
+      if (e.tris.some((t) => done.has(t))) continue;
+      const m = vertices.push([(vertices[e.a][0] + vertices[e.b][0]) / 2, (vertices[e.a][1] + vertices[e.b][1]) / 2]) - 1;
+      for (const t of e.tris) { done.add(t); const tri = [triangles[t], triangles[t + 1], triangles[t + 2]]; out.push(...tri.map((v) => (v === e.b ? m : v)), ...tri.map((v) => (v === e.a ? m : v))); }
+    }
+    for (let t = 0; t < triangles.length; t += 3) if (!done.has(t)) out.push(triangles[t], triangles[t + 1], triangles[t + 2]);
+    triangles = out;
   }
   return triangles;
 }
@@ -63,10 +137,13 @@ function chainsOf(vertices, segmentVertices) {
 
 export function meshPattern(pattern, { target = 25, curveStep = target } = {}) {
   if (!(target > 0 && curveStep > 0)) throw new GraphError('Simulation mesh spacing must be positive');
-  const { vertices, segmentVertices: coarse, holes } = boundariesOf(pattern, curveStep);
-  const flat = vertices.flat(), initial = earcut(flat, holes, 2);
+  const { vertices, segmentVertices: coarse, holes, loops } = boundariesOf(pattern, curveStep);
+  const boundary = vertices.length, initial = earcut(vertices.flat(), holes, 2);
   if (!initial.length) throw new GraphError(`Pattern '${pattern.id}' contour could not be triangulated (it may cross itself or contain a hole outside its outer contour)`);
-  const triangles = refine(vertices, initial, target), segmentVertices = chainsOf(vertices, coarse), boundaryCount = new Set(Object.values(segmentVertices).flat()).size;
+  const used = new Set(initial);
+  for (let i = 0; i < boundary; i++) if (!used.has(i)) insertVertex(vertices, initial, i);
+  for (const p of lattice(loops, target * 0.9)) insertVertex(vertices, initial, vertices.push(p) - 1);
+  const triangles = flipToDelaunay(vertices, refine(vertices, flipToDelaunay(vertices, initial), target)), segmentVertices = chainsOf(vertices, coarse), boundaryCount = new Set(Object.values(segmentVertices).flat()).size;
   const edges = new Map();
   for (let i = 0; i < triangles.length; i += 3) for (const [a, b] of [[triangles[i], triangles[i + 1]], [triangles[i + 1], triangles[i + 2]], [triangles[i + 2], triangles[i]]]) { const k = a < b ? `${a}/${b}` : `${b}/${a}`; edges.set(k, [a, b]); }
   return { id: pattern.id, uv: vertices.flat(), triangles, edges: [...edges.values()].flat(), boundaryCount, segmentVertices, holes: holes.length };

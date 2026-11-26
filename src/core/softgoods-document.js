@@ -25,12 +25,12 @@ function vec3(v, what) {
   if (!Array.isArray(v) || v.length !== 3 || !v.every(finite)) throw new GraphError(`${what} must be three finite numbers`);
   return v.map(Number);
 }
-const defaults = () => ({ version: 1, revision: 0, materials: {}, patterns: [], seams: [], attachments: [], arrangement: [], constraints: [], annotations: [], simulation: { status: 'not_run' } });
+const defaults = () => ({ version: 1, revision: 0, materials: {}, patterns: [], seams: [], attachments: [], arrangement: [], constraints: [], annotations: [], grades: [], simulation: { status: 'not_run' } });
 
 export function validateSoftgoodsDocument(value) {
   const d = { ...defaults(), ...clone(value || {}) };
   if (d.version !== 1) throw new GraphError(`Softgoods document version ${d.version} is not supported`);
-  if (!Array.isArray(d.patterns) || !Array.isArray(d.seams) || !Array.isArray(d.attachments) || !Array.isArray(d.arrangement) || !Array.isArray(d.constraints) || !Array.isArray(d.annotations)) throw new GraphError('patterns, seams, attachments, arrangement, constraints and annotations must be arrays');
+  if (!Array.isArray(d.patterns) || !Array.isArray(d.seams) || !Array.isArray(d.attachments) || !Array.isArray(d.arrangement) || !Array.isArray(d.constraints) || !Array.isArray(d.annotations) || !Array.isArray(d.grades)) throw new GraphError('patterns, seams, attachments, arrangement, constraints, annotations and grades must be arrays');
   const patterns = new Map();
   for (const raw of d.patterns) {
     const id = identifier(raw.id, 'pattern');
@@ -57,6 +57,7 @@ export function validateSoftgoodsDocument(value) {
     }
     const allowances = raw.allowances || {};
     for (const [sid, mm] of Object.entries(allowances)) if (!segments.has(sid) || !finite(mm) || Number(mm) < 0) throw new GraphError(`Pattern '${id}' has an invalid allowance on '${sid}'`);
+    if (raw.placement != null && !['front', 'back', 'left', 'right'].includes(raw.placement.region)) throw new GraphError(`Pattern '${id}' placement region '${raw.placement.region}' must be front, back, left or right`);
     patterns.set(id, { ...raw, points, segments });
   }
   const seamIds = new Set();
@@ -109,6 +110,18 @@ export function validateSoftgoodsDocument(value) {
     if (!p) throw new GraphError(`Annotation '${id}' refers to missing pattern '${a.pattern}'`);
     if (!Array.isArray(a.lines) || !a.lines.length) throw new GraphError(`Annotation '${id}' needs at least one point-pair line`);
     for (const pair of a.lines) if (!Array.isArray(pair) || pair.length !== 2 || pair.some((pid) => !p.points.has(pid))) throw new GraphError(`Annotation '${id}' has a line referring to a missing point`);
+  }
+  const sizes = new Set();
+  for (const g of d.grades) {
+    if (!g || typeof g.size !== 'string' || !g.size.trim()) throw new GraphError('A grade needs a size name');
+    if (sizes.has(g.size)) throw new GraphError(`Two grades are named '${g.size}'`); sizes.add(g.size);
+    if (!Array.isArray(g.rules)) throw new GraphError(`Grade '${g.size}' rules must be an array`);
+    const moved = new Set();
+    for (const rule of g.rules) {
+      if (!patterns.get(rule.pattern)?.points.has(rule.point)) throw new GraphError(`Grade '${g.size}' refers to missing point '${rule.pattern}.${rule.point}'`);
+      if (!finite(rule.dx) || !finite(rule.dy)) throw new GraphError(`Grade '${g.size}' rule for '${rule.pattern}.${rule.point}' needs finite dx and dy`);
+      if (moved.has(`${rule.pattern}.${rule.point}`)) throw new GraphError(`Grade '${g.size}' moves '${rule.pattern}.${rule.point}' twice`); moved.add(`${rule.pattern}.${rule.point}`);
+    }
   }
   return d;
 }
