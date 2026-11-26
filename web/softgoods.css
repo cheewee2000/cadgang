@@ -5,3 +5,8 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--paper);color:var
 #patternCanvas{height:180px;min-height:180px;border-bottom:var(--bw-hair) solid var(--rule);background:#fff}.pattern-item{display:block;width:100%;text-align:left;background:transparent;color:inherit;border:0;border-bottom:var(--bw-hair) solid var(--rule-soft);font:inherit;padding:7px 0;cursor:pointer}.pattern-item.selected{color:var(--signal-orange)}
 
 #check .bad b,#check .bad small{color:var(--signal-orange)}
+
+/* The 3D view fills the pane; the painter's canvas takes its place where there is no WebGL or no solver frame. */
+#view3d{flex:1;min-height:0;position:relative}#view3d canvas{position:absolute;inset:0}#view3d[hidden],#arrangeCanvas[hidden]{display:none}
+.pane-head{display:flex;justify-content:space-between;align-items:center}.views{display:flex;gap:2px}.views button{padding:2px 6px;font-size:var(--fs-12);border-color:transparent}#review.painter .views{display:none}
+#patternCanvas{cursor:grab}.chip{display:inline-block;width:8px;height:8px;margin-right:6px;border:var(--bw-hair) solid #000}#legend .ramp{display:inline-block;width:90px;height:8px;margin:0 6px;border:var(--bw-hair) solid #000;vertical-align:middle}

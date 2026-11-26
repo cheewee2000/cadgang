@@ -18,6 +18,7 @@ import { conformLines, physicsInput } from '../core/softgoods-physics.js';
 import { flattenMesh, describeFaces, mergeFlattened } from '../core/softgoods-flatten.js';
 import { importCadFile } from '../core/step.js';
 import { CAD_EXT, mayReadLocal } from './view.js';
+import { cutContours } from '../core/softgoods-export.js';
 
 /** The viewer's packed mesh (view.js pack) back as {positions, normals, indices, faces, bodies}. */
 function unpackMesh(buf) {
@@ -81,6 +82,8 @@ export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcas
   r.get('/check', async (req, res) => { try { const d = await ready(req, doc.toJSON()), check = checkDesign(d); res.json(req.query.fit ? { ...check, fit: fitReport(d, await drapeDocumentAsync(d, { target: req.query.target }, bodies(req))) } : check); } catch (e) { fail(res, e); } });
   // Measure the draped design: body {measures: [{type: distance|circumference|edge|seam|bounds, ...}], drape: {target, steps, tolerance}}.
   r.post('/measure', async (req, res) => { try { const d = doc.toJSON(), drape = await drapeDocumentAsync(d, req.body?.drape, bodies(req)); res.json({ revision: d.revision, drape: { settled: drape.settled, steps: drape.steps, residual: drape.residual, target: drape.options.target }, units: 'mm', results: measureDrape(d, drape, req.body?.measures || []) }); } catch (e) { fail(res, e); } });
+  // The cut line of every pattern, as the DXF carries it, for the page's 2D drawing. A pattern whose allowance cannot be offset has none.
+  r.get('/cut', (_req, res) => { const out = {}; for (const p of doc.toJSON().patterns) { try { out[p.id] = cutContours(p); } catch { out[p.id] = []; } } res.json(out); });
   r.post('/patterns/rectangle', (req, res) => { try { res.json(doc.addRectangle(req.body || {})); } catch (e) { fail(res, e); } });
   r.patch('/patterns/:pattern/points/:point', (req, res) => { try { res.json(doc.updatePoint(req.params.pattern, req.params.point, req.body?.x, req.body?.y)); } catch (e) { fail(res, e); } });
   r.post('/seams', (req, res) => { try { res.json(doc.addSeam(req.body || {})); } catch (e) { fail(res, e); } });
