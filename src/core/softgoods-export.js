@@ -141,3 +141,10 @@ export function exportSoftgoods(document, dir, name) {
   const pack = techPack(document, name), json = path.join(dir, `${name}_tech-pack.json`), html = path.join(dir, `${name}_tech-pack.html`); fs.writeFileSync(json, JSON.stringify(pack, null, 2)); fs.writeFileSync(html, techPackHTML(pack)); files.push(json, html);
   return { name, files, patterns: document.patterns.length, seams: document.seams.length, sizes: pack.sizes, check: { ok: pack.check.ok, seams: pack.check.seams.filter((q) => !q.ok), constraints: pack.check.constraints.filter((c) => !c.withinTolerance), sizes: pack.check.sizes.filter((z) => !z.ok).map((z) => z.size) } };
 }
+
+// The same R12 writer, for exports that are not one pattern (the marker lays many pieces in one file). layers: [[name, AutoCAD colour index], ...].
+export const dxfLine = line, dxfText = text;
+export function dxfFile(entities, layers) {
+  const table = layers.map(([n, colour]) => `0\nLAYER\n2\n${n}\n70\n0\n62\n${colour}\n6\nCONTINUOUS`).join('\n');
+  return `0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n${layers.length}\n${table}\n0\nENDTAB\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n${entities.join('\n')}\n0\nENDSEC\n0\nEOF\n`;
+}
