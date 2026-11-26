@@ -3,9 +3,13 @@
 # the model is shown: points drawn from the contact region, a second frame the size of the smaller part, more points,
 # and neighbours ranked on input xyz (the graph that exports exactly). Compare with the nine plain seeds in
 # joint-ensemble-v1. Every stage resumes.
+# STUDY=surface is the second half: the same model on points spread over the parts' faces, with exact contact and
+# normals, from the cache `main.py surface` builds (SURFACE).
 set -euo pipefail
 : "${WORK:=/mnt/shared/cadgang}"
-: "${ROOT:=$WORK/joint-inputs-v1}"
+: "${STUDY:=inputs}"
+: "${ROOT:=$WORK/joint-$STUDY-v1}"
+: "${SURFACE:=$WORK/automate/joints-surface}"
 : "${INDEX:=$WORK/automate/joints-index}"
 : "${DUMP:=$WORK/automate/dump}"
 : "${LANES:=8}" "${DEVICE:=rocm}" "${STAGES:=30 60}" "${BIG_STAGES:=15 30}" "${WORKERS:=6}"
@@ -33,13 +37,23 @@ lane() {
   done
 }
 
-g=0
 # tag | stages | options. The 512-point lanes cost about four times as much per epoch, so they stop at half the epochs.
-while IFS='|' read -r tag stages opts; do
-  [ "$g" -lt "$LANES" ] || break
-  lane "$g" "$tag" "$stages" $opts & pids="$pids $!"
-  g=$((g + 1))
-done <<LANES
+lanes() {
+  if [ "$STUDY" = surface ]; then
+    [ -f "$SURFACE/surface.json" ] || { echo "no surface cache at $SURFACE" >&2; exit 1; }
+    S="--surface $SURFACE"
+    cat <<L
+surf|$STAGES|$S
+surf-normals|$STAGES|$S --normals
+surf-normals-focus50|$STAGES|$S --normals --focus 0.5
+surf-normals-local|$STAGES|$S --normals --local-frame
+surf-normals-focus50-local|$STAGES|$S --normals --focus 0.5 --local-frame
+surf-normals-static|$STAGES|$S --normals --edge-graph static
+surf-normals-focus50-local-static|$STAGES|$S --normals --focus 0.5 --local-frame --edge-graph static
+surf-normals-p512|$BIG_STAGES|$S --normals --points 512
+L
+  else
+    cat <<L
 focus50|$STAGES|--focus 0.5
 local|$STAGES|--local-frame
 focus50-local|$STAGES|--focus 0.5 --local-frame
@@ -48,6 +62,17 @@ static|$STAGES|--edge-graph static
 static-focus50-local|$STAGES|--edge-graph static --focus 0.5 --local-frame
 p512|$BIG_STAGES|--points 512
 p512-focus50-local|$BIG_STAGES|--points 512 --focus 0.5 --local-frame
+L
+  fi
+}
+list=$(lanes)
+g=0
+while IFS='|' read -r tag stages opts; do
+  [ "$g" -lt "$LANES" ] || break
+  lane "$g" "$tag" "$stages" $opts & pids="$pids $!"
+  g=$((g + 1))
+done <<LANES
+$list
 LANES
 bad=0; for p in $pids; do wait "$p" || bad=1; done
 python compute/research/summarize_joint_sweep.py "$ROOT"
