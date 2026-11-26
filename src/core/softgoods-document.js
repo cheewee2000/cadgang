@@ -25,12 +25,12 @@ function vec3(v, what) {
   if (!Array.isArray(v) || v.length !== 3 || !v.every(finite)) throw new GraphError(`${what} must be three finite numbers`);
   return v.map(Number);
 }
-const defaults = () => ({ version: 1, revision: 0, materials: {}, patterns: [], seams: [], attachments: [], arrangement: [], simulation: { status: 'not_run' } });
+const defaults = () => ({ version: 1, revision: 0, materials: {}, patterns: [], seams: [], attachments: [], arrangement: [], constraints: [], annotations: [], simulation: { status: 'not_run' } });
 
 export function validateSoftgoodsDocument(value) {
   const d = { ...defaults(), ...clone(value || {}) };
   if (d.version !== 1) throw new GraphError(`Softgoods document version ${d.version} is not supported`);
-  if (!Array.isArray(d.patterns) || !Array.isArray(d.seams) || !Array.isArray(d.attachments) || !Array.isArray(d.arrangement)) throw new GraphError('patterns, seams, attachments and arrangement must be arrays');
+  if (!Array.isArray(d.patterns) || !Array.isArray(d.seams) || !Array.isArray(d.attachments) || !Array.isArray(d.arrangement) || !Array.isArray(d.constraints) || !Array.isArray(d.annotations)) throw new GraphError('patterns, seams, attachments, arrangement, constraints and annotations must be arrays');
   const patterns = new Map();
   for (const raw of d.patterns) {
     const id = identifier(raw.id, 'pattern');
@@ -83,6 +83,32 @@ export function validateSoftgoodsDocument(value) {
     if (arranged.has(pid)) throw new GraphError(`Pattern '${pid}' is arranged twice`); arranged.add(pid);
     vec3(a.position || [0, 0, 0], `Arrangement '${pid}' position`);
     vec3(a.rotation || [0, 0, 0], `Arrangement '${pid}' rotation`);
+  }
+  const constraintIds = new Set();
+  for (const c of d.constraints) {
+    const id = identifier(c.id, 'constraint');
+    if (constraintIds.has(id)) throw new GraphError(`Two constraints are named '${id}'`); constraintIds.add(id);
+    if (!['distance', 'length'].includes(c.type)) throw new GraphError(`Constraint '${id}' has unknown type '${c.type}'`);
+    if (!finite(c.target) || Number(c.target) < 0 || (c.tolerance != null && (!finite(c.tolerance) || Number(c.tolerance) < 0))) throw new GraphError(`Constraint '${id}' target and tolerance must be non-negative finite numbers`);
+    if (c.type === 'distance') {
+      for (const side of ['a', 'b']) { const ref = c[side], p = patterns.get(ref?.pattern); if (!p?.points.has(ref?.point)) throw new GraphError(`Constraint '${id}' ${side} refers to missing point '${ref?.pattern}.${ref?.point}'`); }
+    } else {
+      const p = patterns.get(c.pattern);
+      if (!p) throw new GraphError(`Constraint '${id}' refers to missing pattern '${c.pattern}'`);
+      const ids = c.segments ?? p.contours[c.contour];
+      if (!Array.isArray(ids) || !ids.length || ids.some((sid) => !p.segments.has(sid))) throw new GraphError(`Constraint '${id}' needs existing segment ids or a valid contour index`);
+      if (c.segments && c.contour != null) throw new GraphError(`Constraint '${id}' must use segments or contour, not both`);
+    }
+  }
+  const annotationIds = new Set();
+  for (const a of d.annotations) {
+    const id = identifier(a.id, 'annotation');
+    if (annotationIds.has(id)) throw new GraphError(`Two annotations are named '${id}'`); annotationIds.add(id);
+    if (!['dart', 'pleat', 'fold_line'].includes(a.type)) throw new GraphError(`Annotation '${id}' has unknown type '${a.type}'`);
+    const p = patterns.get(a.pattern);
+    if (!p) throw new GraphError(`Annotation '${id}' refers to missing pattern '${a.pattern}'`);
+    if (!Array.isArray(a.lines) || !a.lines.length) throw new GraphError(`Annotation '${id}' needs at least one point-pair line`);
+    for (const pair of a.lines) if (!Array.isArray(pair) || pair.length !== 2 || pair.some((pid) => !p.points.has(pid))) throw new GraphError(`Annotation '${id}' has a line referring to a missing point`);
   }
   return d;
 }
