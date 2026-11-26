@@ -51,3 +51,21 @@ export function evaluateMeasurementConstraints(document) {
     return { id: constraint.id, name: constraint.name, type: constraint.type, measured: +measured.toFixed(6), target: constraint.target, delta: +delta.toFixed(6), withinTolerance: Math.abs(delta) <= (constraint.tolerance ?? 0) };
   });
 }
+
+/** The document at one graded size: every pattern moved by that size's rules, ids unchanged so seams and constraints still resolve. */
+export function gradeDocument(document, grade) {
+  return { ...document, patterns: document.patterns.map((p) => ({ ...gradePattern(p, { size: grade.size, rules: grade.rules.filter((r) => r.pattern === p.id).map(({ point, dx, dy }) => ({ point, dx, dy })) }), id: p.id })) };
+}
+
+/** Lengths of the two sides of every seam. A plain seam sews only if they agree within its ease; a gather or elastic seam may differ on purpose. */
+export function seamLengths(document) {
+  const patterns = new Map(document.patterns.map((p) => [p.id, p])), length = (ref) => { const p = patterns.get(ref.pattern); return segmentLength(p, p.segments.find((s) => s.id === ref.segment)); };
+  return document.seams.map((s) => { const a = length(s.a), b = length(s.b), mismatch = Math.abs(a - b) / Math.max(a, b, 1e-9); return { id: s.id, kind: s.kind || 'plain', lengthA: +a.toFixed(2), lengthB: +b.toFixed(2), mismatch: +mismatch.toFixed(5), ok: ['gather', 'elastic'].includes(s.kind) || mismatch <= Number(s.ease || 0) + 1e-9 }; });
+}
+
+/** What a pattern maker checks before cutting: named measurements against their targets and both sides of every seam, at the base size and at every graded size. */
+export function checkDesign(document) {
+  const one = (d) => { const constraints = evaluateMeasurementConstraints(d), seams = seamLengths(d); return { ok: constraints.every((c) => c.withinTolerance) && seams.every((s) => s.ok), constraints, seams }; };
+  const base = one(document), sizes = (document.grades || []).map((g) => ({ size: g.size, ...one(gradeDocument(document, g)) }));
+  return { ...base, ok: base.ok && sizes.every((s) => s.ok), sizes };
+}
