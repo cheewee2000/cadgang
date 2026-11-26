@@ -134,3 +134,14 @@ test('measured anisotropic fabric uses validated XPBD tensile data independent o
   assert.ok(two < 10 && eight < 10, `measured strip strains remain bounded (${two}%, ${eight}%)`);
   assert.ok(Math.abs(two - eight) < 1, `XPBD response is iteration-stable (${two}% at 2, ${eight}% at 8)`);
 });
+
+test('thickness-aware self collision separates non-neighbours and preserves topology neighbours', async () => {
+  const { projectSelfCollisions } = await import('../src/core/softgoods.js');
+  const p = new Float64Array([0, 0, 0, 0.2, 0, 0, 0.1, 0, 0]);
+  const w = new Float64Array([1, 1, 1]), r = new Float64Array([0.5, 0.5, 0.5]);
+  const excluded = new Set(['0:1']);
+  const result = projectSelfCollisions(p, w, r, excluded);
+  assert.ok(result.contacts >= 1); assert.ok(result.maxPenetration > 0);
+  assert.ok(Math.hypot(p[6] - p[0], p[7] - p[1], p[8] - p[2]) >= 0.999, 'non-neighbours separate by combined half thickness');
+  assert.ok(Math.hypot(p[3] - p[0], p[4] - p[1], p[5] - p[2]) < 1, 'topology neighbours may remain closer than thickness');
+});

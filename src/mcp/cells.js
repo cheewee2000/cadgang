@@ -230,7 +230,7 @@ soft — softgoods the way CLO works a garment: pieces cut flat from fabric, sew
       the cloth's surface comes to the body (ok when not inside it; the solver aims for the clearance asked and lands within a few tenths). g.timing then has {total ms, steps, nodes}.
   Pieces are faces, not solids: bbox, distance, area and STEP/STL export work; volume, mass and booleans do not. Start pieces
   near where they end up (a shoulder strap laid over the shoulder, not on the floor) — the drape is a relaxation, so a
-  piece started far away or inside the body ends up somewhere strange. No self collision, darts or pleats yet.
+  piece started far away or inside the body ends up somewhere strange. Set selfCollision:true for thickness-aware layer separation (slower). Darts and pleats are authored in the persistent softgoods document.
 
 ASSERTION CELLS — add a cell with kind: 'assert' and its program states claims instead of building geometry.
   export default ({ assert, input }) => { assert.minWall(input, 1.5); assert.watertight(input); };
