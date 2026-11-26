@@ -41,7 +41,7 @@ spec:
             - {name: WORK, value: /mnt/shared/cadgang}
             - {name: ROOT, value: /mnt/shared/cadgang/joint-ensemble-v1}
             - {name: REF, value: compute/joint-ensemble}
-            - {name: COMMIT, value: 5b398d4ee8375c435897f6fcc8d143d54fdca2a1}
+            - {name: COMMIT, value: 725f46b7971cdb1dead802f284fc9da56063a0a8}
             - {name: PYTHONUNBUFFERED, value: "1"}
           resources:
             requests: {cpu: "32", memory: 128Gi, amd.com/gpu: "8"}
