@@ -28,7 +28,7 @@
  * rigidity (isotropic or {warp,weft}) in N·mm. Those constraints use XPBD compliance,
  * so their response does not depend on the number of projection iterations. Legacy
  * stretch/shear/bend factors remain supported for visual studies.
- * No self collision yet; thickness is used for body contact but the result is a face.
+ * Optional thickness-aware particle self collision prevents non-neighbouring cloth layers from passing through each other; thickness is also used for body contact, while the fitted result remains a face.
  */
 
 import {
@@ -88,6 +88,54 @@ const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm = (a) => { const l = Math.hypot(...a) || 1; return mul(a, 1 / l); };
+
+
+/**
+ * Project non-neighbouring cloth particles apart to their combined physical radii.
+ * A spatial hash makes the pass linear for ordinary cloth. `excluded` contains
+ * "low:high" pairs joined by the cloth topology; those may sit within one thickness.
+ * Exported so workers and tests can use the same deterministic contact projection.
+ */
+export function projectSelfCollisions(positions, inverseMass, radii, excluded = new Set(), { cellSize = null } = {}) {
+  const count = inverseMass.length;
+  if (positions.length !== count * 3 || radii.length !== count) throw new GraphError('soft self collision: positions, inverseMass and radii have incompatible sizes');
+  let diameter = 0;
+  for (let i = 0; i < count; i++) if (inverseMass[i] > 0) diameter = Math.max(diameter, 2 * radii[i]);
+  const cell = cellSize ?? diameter;
+  if (!(cell > 0)) return { contacts: 0, maxPenetration: 0 };
+  const buckets = new Map(), key = (x, y, z) => `${x},${y},${z}`;
+  for (let i = 0; i < count; i++) {
+    if (!(inverseMass[i] > 0) || !(radii[i] > 0)) continue;
+    const q = [Math.floor(positions[i * 3] / cell), Math.floor(positions[i * 3 + 1] / cell), Math.floor(positions[i * 3 + 2] / cell)];
+    const k = key(...q), b = buckets.get(k) || []; b.push(i); buckets.set(k, b);
+  }
+  let contacts = 0, maxPenetration = 0;
+  const offsets = [-1, 0, 1];
+  for (const [bucketKey, members] of buckets) {
+    const q = bucketKey.split(',').map(Number);
+    for (const ox of offsets) for (const oy of offsets) for (const oz of offsets) {
+      const otherKey = key(q[0] + ox, q[1] + oy, q[2] + oz);
+      if (otherKey < bucketKey) continue;
+      const others = buckets.get(otherKey); if (!others) continue;
+      for (const a of members) for (const b of others) {
+        if (a >= b && otherKey === bucketKey) continue;
+        const lo = Math.min(a, b), hi = Math.max(a, b);
+        if (excluded.has(`${lo}:${hi}`)) continue;
+        let dx = positions[b * 3] - positions[a * 3], dy = positions[b * 3 + 1] - positions[a * 3 + 1], dz = positions[b * 3 + 2] - positions[a * 3 + 2];
+        let d = Math.hypot(dx, dy, dz), want = radii[a] + radii[b];
+        if (d >= want) continue;
+        if (d < 1e-12) { const axis = (a + b) % 3; dx = axis === 0 ? 1 : 0; dy = axis === 1 ? 1 : 0; dz = axis === 2 ? 1 : 0; d = 1; }
+        const wa = inverseMass[a], wb = inverseMass[b], w = wa + wb; if (!w) continue;
+        const penetration = want - (d === 1 && Math.hypot(positions[b * 3] - positions[a * 3], positions[b * 3 + 1] - positions[a * 3 + 1], positions[b * 3 + 2] - positions[a * 3 + 2]) < 1e-12 ? 0 : d);
+        const correction = penetration / (d * w);
+        positions[a * 3] -= dx * correction * wa; positions[a * 3 + 1] -= dy * correction * wa; positions[a * 3 + 2] -= dz * correction * wa;
+        positions[b * 3] += dx * correction * wb; positions[b * 3 + 1] += dy * correction * wb; positions[b * 3 + 2] += dz * correction * wb;
+        contacts++; maxPenetration = Math.max(maxPenetration, penetration);
+      }
+    }
+  }
+  return { contacts, maxPenetration };
+}
 
 /** Even-odd point in polygon, 2D. */
 function inside(poly, x, y) {
@@ -264,14 +312,14 @@ class Garment {
    * Records, like assert.*: each seam's length match and the gap it left, each piece's worst stretch, settling, and the
    * closest the cloth comes to the body. A miss is recorded, not thrown: the point of a drape is to look at it.
    */
-  make({ body = null, gravity = [0, 0, -1], g = 9810, steps = 6000, iterations = 4, dt = 1 / 1000, clearance = 0.5, settle = 50, wall = 30 } = {}, checked = [], flats = []) {
+  make({ body = null, gravity = [0, 0, -1], g = 9810, steps = 6000, iterations = 4, dt = 1 / 1000, clearance = 0.5, selfCollision = false, settle = 50, wall = 30 } = {}, checked = [], flats = []) {
     if (!this.pieces.length) throw new GraphError(`soft.garment('${this.name}').make: no pieces`);
     const t0 = Date.now();
     const grids = [];
     let count = 0;
     for (const p of this.pieces) { const gr = layoutGrid(p, count); grids.push(gr); count += gr.nu * gr.nv; }
     const x = new Float64Array(count * 3), x0 = new Float64Array(count * 3), vel = new Float64Array(count * 3), invm = new Float64Array(count);
-    const fabricOf = new Array(count), thick = new Float64Array(count), cloth = new Uint8Array(count);   // cloth: inside the outline, not the rim
+    const fabricOf = new Array(count), thick = new Float64Array(count), selfRadius = new Float64Array(count), cloth = new Uint8Array(count);   // cloth: inside the outline, not the rim
     const cons = [];  // [a, b, rest, k, kind, alpha, lambda]; alpha is XPBD compliance / dt²
     const bends = [];  // [a, middle, b, compliance / dt²]: a fabric with a measured rigidity
     const bf = body ? bodyField(body) : null, field = bf?.distance ?? null;
@@ -286,7 +334,7 @@ class Garment {
           x[n * 3] = w[0]; x[n * 3 + 1] = w[1]; x[n * 3 + 2] = w[2];
           invm[n] = active[i * nv + j] ? 1 / (mass * gr.cover[i * nv + j]) : 0;   // a rim node weighs what little cloth it carries, and so follows its neighbours
           cloth[n] = gr.cover[i * nv + j] === 1 ? 1 : 0;
-          fabricOf[n] = f; thick[n] = f.thickness / 2 + clearance;
+          fabricOf[n] = f; thick[n] = f.thickness / 2 + clearance; selfRadius[n] = f.thickness / 2;
           const grain = piece.grain * Math.PI / 180, warp = [Math.sin(grain), Math.cos(grain)];
           const measuredAlpha = (du, dv, width, rest, family) => {
             let axial;
@@ -324,6 +372,9 @@ class Garment {
     }
     x0.set(x);
     const gridOf = (piece) => grids.find((gr) => gr.piece === piece);
+    const selfExcluded = new Set();
+    for (const [a, b] of cons) selfExcluded.add(`${Math.min(a, b)}:${Math.max(a, b)}`);
+    let selfContacts = 0, selfPenetration = 0;
 
     // seams: paired bilinear attachments every half grid along the shorter edge; pins: an attachment to a fixed point
     const pairs = [];
@@ -456,6 +507,7 @@ class Garment {
           x[b * 3] += invm[b] * s * lx; x[b * 3 + 1] += invm[b] * s * ly; x[b * 3 + 2] += invm[b] * s * lz;
         }
         links(true); anchors();
+        if (selfCollision) { const hit = projectSelfCollisions(x, invm, selfRadius, selfExcluded); selfContacts += hit.contacts; selfPenetration = Math.max(selfPenetration, hit.maxPenetration); }
       }
       // What a weight rests on. Cloth the solve has just brought back into a block pushes on it with the momentum that took:
       // little, cloth being light, so a limp panel's bending carries next to nothing and a foam one's a real share. Cloth that
@@ -545,6 +597,8 @@ class Garment {
       checked.push({ label: `seam ${s.a.piece.name}/${s.b.piece.name} gap`, ok: gap <= 1, value: Number(gap.toFixed(3)), limit: 1, unit: 'mm', detail: null });
     }
     if (field) checked.push({ label: `${this.name} body clearance`, ok: gap >= 0, value: Number(gap.toFixed(3)), limit: 0, unit: 'mm', detail: { asked: clearance } });   // the cloth's own surface is off the body; the solver aims for `clearance` and lands within a few tenths
+
+    if (selfCollision) checked.push({ label: `${this.name} self collision`, ok: true, value: selfContacts, limit: null, unit: 'contacts', detail: { maxCorrectedPenetrationMm: Number(selfPenetration.toFixed(3)), thicknessAware: true } });
 
     // strain per piece, from the structural springs
     for (const gr of grids) {
