@@ -13,6 +13,7 @@ import { measureDrape, fitReport } from '../core/softgoods-measure.js';
 import { checkDesign } from '../core/softgoods-operations.js';
 import { validateSoftgoodsDocument } from '../core/softgoods-document.js';
 import { editSoftgoods, editChanges } from '../core/softgoods-edit.js';
+import { conformLines, physicsInput } from '../core/softgoods-physics.js';
 
 // Where every piece starts in 3D. A piece with placement stands at its region of the avatar; one without keeps the row it was given,
 // or is laid flat beside the others. A design set again keeps the avatar it had, so re-prompting a pattern does not lose the body.
@@ -29,7 +30,7 @@ const EXPORT_FORMATS = [...PRODUCTION_FORMATS, ...DRAPE_FORMATS];
 export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcast = () => {} } = {}) {
   const r = express.Router();
   const fail = (res, e) => res.status(e instanceof GraphError ? 400 : 500).json({ error: e.message || String(e) });
-  r.get('/simulation-input', (req, res) => { try { const d = doc.toJSON(), target = Math.max(5, Math.min(100, Number(req.query.target || 25))), meshes = d.patterns.map((p) => meshPattern(p, { target })), seams = resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 }); res.json({ revision: d.revision, meshes, seams, attachments: d.attachments || [], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain })), collisionBody: d.simulation?.avatar ? { ...d.simulation.avatar, ...avatarBody(d.simulation.avatar) } : null }); } catch (e) { fail(res, e); } });
+  r.get('/simulation-input', (req, res) => { try { const d = doc.toJSON(), target = Math.max(5, Math.min(100, Number(req.query.target || 25))), meshes = d.patterns.map((p) => meshPattern(p, { target, lines: conformLines(d, p) })), seams = resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 }); res.json({ revision: d.revision, meshes, seams, attachments: d.attachments || [], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain, shrink: p.shrink, freeze: p.freeze, strengthen: p.strengthen })), ...physicsInput(d, meshes), collisionBody: d.simulation?.avatar ? { ...d.simulation.avatar, ...avatarBody(d.simulation.avatar) } : null }); } catch (e) { fail(res, e); } });
   r.get('/document', (_req, res) => res.json(doc.toJSON()));
   r.put('/document', (req, res) => { try { res.json(doc.replace(arranged(req.body, req.body?.simulation?.avatar || doc.data.simulation?.avatar))); } catch (e) { fail(res, e); } });
   // One pattern-making operation ({ op, ...args }, see src/core/softgoods-edit.js) on the stored design: a new revision, like a set.
