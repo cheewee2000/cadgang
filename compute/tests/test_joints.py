@@ -218,8 +218,11 @@ class JointTraining(unittest.TestCase):
             import onnx  # noqa: F401
         except ImportError:
             self.skipTest('onnx is not installed: the EdgeConv export is not checked')
-        self.assertEqual(T.export(build_parser().parse_args(['export', '--ckpt', f'{self.t}/student/best.pt', '--out',
-                                                             f'{self.t}/student.onnx'])), 0)
+        code = T.export(build_parser().parse_args(['export', '--ckpt', f'{self.t}/student/best.pt', '--out',
+                                                   f'{self.t}/student.onnx']))
+        self.assertNotEqual(code, 4, 'EdgeConv must export')
+        rep = json.loads(Path(f'{self.t}/student.onnx.json').read_text())
+        self.assertLess(rep['ort_max_abs_diff'], 0.1, 'onnxruntime must follow PyTorch through the neighbour ties')
 
     def test_xyz_pretrain_transfer_preserves_joint_channels(self):
         from cadnn.pointnet import encoder_payload

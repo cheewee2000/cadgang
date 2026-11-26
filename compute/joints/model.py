@@ -25,6 +25,9 @@ class EdgeConvBlock(nn.Module):
             p = x[:, :, :3]
             sq = (p * p).sum(-1)
             d = sq[:, :, None] + sq[:, None, :] - 2 * p @ p.transpose(1, 2)
+            # Points whose first three features are equal (all zero after a ReLU, often) tie exactly, and PyTorch and
+            # onnxruntime broke those ties differently: 4% of real pairs got another answer. The lower index now wins.
+            d = d + torch.arange(n, dtype=d.dtype, device=d.device) * 1e-7
             idx = d.topk(k + 1, largest=False).indices[:, :, 1:]
         c = x.shape[2]
         nbr = x.gather(1, idx.flatten(1)[:, :, None].expand(-1, -1, c)).reshape(x.shape[0], n, k, c)
