@@ -11,11 +11,11 @@ function initialize(input) {
   const arrangements = new Map(input.arrangement.map((a) => [a.pattern, a])), patterns = new Map(input.patterns.map((p) => [p.id, p]));
   let total = 0; const pieces = [];
   for (const m of input.meshes) { const off = total; total += m.uv.length / 2; pieces.push({ ...m, off }); }
-  const x = new Float64Array(total * 3), prev = new Float64Array(total * 3), inv = new Float64Array(total).fill(1), radius = new Float64Array(total), constraints = [], excluded = new Set(), pieceOf = new Map();
+  const x = new Float64Array(total * 3), prev = new Float64Array(total * 3), inv = new Float64Array(total).fill(1), radius = new Float64Array(total), constraints = [], excluded = new Set(), pieceOf = new Map(), materialAt = new Array(total);
   for (const p of pieces) {
     const ar = arrangements.get(p.id) || {}, spec = patterns.get(p.id) || {}, grain = Number(spec.grain?.angle ?? 90) * Math.PI / 180, gx = Math.cos(grain), gy = Math.sin(grain), mat = input.materials?.[spec.material] || {};
-    for (let i = 0; i < p.uv.length / 2; i++) { radius[p.off+i]=Number(mat.thickness||0.6)/2; const q = transform(p.uv[i * 2], p.uv[i * 2 + 1], ar); set(x, p.off + i, q); pieceOf.set(p.off + i, p.id); }
-    for (let i = 0; i < p.edges.length; i += 2) { const a = p.edges[i], b = p.edges[i + 1], du = p.uv[b * 2] - p.uv[a * 2], dv = p.uv[b * 2 + 1] - p.uv[a * 2 + 1], l = Math.hypot(du, dv), along = Math.abs((du * gx + dv * gy) / (l || 1)); const warp = Number(mat.warpCompliance ?? 2e-7), weft = Number(mat.weftCompliance ?? 5e-7), bias = Number(mat.biasCompliance ?? 2e-6), alpha = along ** 4 * warp + (1 - along) ** 4 * weft + 2 * along * (1 - along) * bias; constraints.push({ a: p.off + a, b: p.off + b, rest: l, alpha, lambda: 0, kind: 'fabric' }); excluded.add(`${Math.min(p.off+a,p.off+b)}:${Math.max(p.off+a,p.off+b)}`); }
+    for (let i = 0; i < p.uv.length / 2; i++) { materialAt[p.off+i]=mat; radius[p.off+i]=Number(mat.thickness||0.6)/2; inv[p.off+i]=1/Math.max(1e-9,Number(mat.arealDensity??mat.weight??250)*900*1e-6); const q = transform(p.uv[i * 2], p.uv[i * 2 + 1], ar); set(x, p.off + i, q); pieceOf.set(p.off + i, p.id); }
+    for (let i = 0; i < p.edges.length; i += 2) { const a = p.edges[i], b = p.edges[i + 1], du = p.uv[b * 2] - p.uv[a * 2], dv = p.uv[b * 2 + 1] - p.uv[a * 2 + 1], l = Math.hypot(du, dv), along = Math.abs((du * gx + dv * gy) / (l || 1)); const measuredWarp=Number(mat.tensile?.warp),measuredWeft=Number(mat.tensile?.weft),measuredShear=Number(mat.shearRigidity),width=Math.max(1,l); const warp = Number(mat.warpCompliance ?? (measuredWarp>0?1/(measuredWarp*width*1e6):2e-7)), weft = Number(mat.weftCompliance ?? (measuredWeft>0?1/(measuredWeft*width*1e6):5e-7)), bias = Number(mat.biasCompliance ?? (measuredShear>0?1/(measuredShear*width*1e6):2e-6)), alpha = along ** 4 * warp + (1 - along) ** 4 * weft + 2 * along * (1 - along) * bias; constraints.push({ a: p.off + a, b: p.off + b, rest: l, alpha, lambda: 0, kind: 'fabric' }); excluded.add(`${Math.min(p.off+a,p.off+b)}:${Math.max(p.off+a,p.off+b)}`); }
   }
   prev.set(x);
   // Attachments are fixed world points, located by nearest UV vertex for this first worker slice.
@@ -23,7 +23,7 @@ function initialize(input) {
   // Server-resolved seam pairs are bilinear boundary attachments; expand each into
   // a four-point XPBD coincidence constraint so ease/gather correspondence is exact.
   for (const s of input.seams) { const A = pieces.find((p) => p.id === s.a.pattern), B = pieces.find((p) => p.id === s.b.pattern); if (!A || !B) continue; for (const pair of s.pairs || []) constraints.push({ av: pair.a.vertices.map(i => A.off + i), aw: pair.a.weights, bv: pair.b.vertices.map(i => B.off + i), bw: pair.b.weights, alpha: Number(s.seamCompliance ?? 1e-9), lambda: 0, kind: 'seam-pair' }); }
-  state = { input, pieces, x, prev, inv, radius, constraints, excluded, velocities: new Float64Array(total * 3), pressure: new Float32Array(total), running: false, step: 0, collision: input.collisionBody ? 'avatar+self' : 'self', pressureAvailable: !!input.collisionBody };
+  state = { input, pieces, x, prev, inv, radius, materialAt, constraints, excluded, velocities: new Float64Array(total * 3), pressure: new Float32Array(total), running: false, step: 0, collision: input.collisionBody ? 'avatar+self' : 'self', pressureAvailable: !!input.collisionBody };
 }
 
 function project(c, dt) {
@@ -46,7 +46,7 @@ function collideAvatar(dt) {
 }
 function tick() {
   if (!state?.running) return; const dt = 1 / 120, { x, prev, velocities: v } = state; prev.set(x);
-  for (let i = 0; i < state.inv.length; i++) { v[i * 3] *= .995; v[i * 3 + 1] *= .995; v[i * 3 + 2] = (v[i * 3 + 2] - 9810 * dt) * .995; x[i * 3] += v[i * 3] * dt; x[i * 3 + 1] += v[i * 3 + 1] * dt; x[i * 3 + 2] += v[i * 3 + 2] * dt; }
+  for (let i = 0; i < state.inv.length; i++) { const damp=1-Math.max(0,Math.min(1,Number(state.materialAt?.[i]?.damping??.005)));v[i * 3] *= damp; v[i * 3 + 1] *= damp; v[i * 3 + 2] = (v[i * 3 + 2] - 9810 * dt) * damp; x[i * 3] += v[i * 3] * dt; x[i * 3 + 1] += v[i * 3 + 1] * dt; x[i * 3 + 2] += v[i * 3 + 2] * dt; }
   for (const c of state.constraints) c.lambda = 0; for (let k = 0; k < 8; k++) { for (const c of state.constraints) project(c, dt); collideAvatar(dt); collideSelf(); }
   for (let i = 0; i < state.inv.length; i++) { v[i * 3] = (x[i * 3] - prev[i * 3]) / dt; v[i * 3 + 1] = (x[i * 3 + 1] - prev[i * 3 + 1]) / dt; v[i * 3 + 2] = (x[i * 3 + 2] - prev[i * 3 + 2]) / dt; }
   state.step++; if (state.step % 2 === 0) send();

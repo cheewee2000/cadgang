@@ -85,3 +85,9 @@ test('browser XPBD preview separates cloth layers by material thickness', () => 
   assert.match(worker, /function collideSelf/); assert.match(worker, /mat\.thickness/);
   assert.match(worker, /excluded\.add/); assert.match(worker, /avatar\+self/);
 });
+
+test('browser XPBD consumes measured tensile, shear, density and damping properties', () => {
+  const worker = fs.readFileSync(new URL('../web/softgoods-worker.js', import.meta.url), 'utf8');
+  assert.match(worker, /mat\.tensile\?\.warp/); assert.match(worker, /mat\.shearRigidity/);
+  assert.match(worker, /mat\.arealDensity\?\?mat\.weight/); assert.match(worker, /\.damping/);
+});
