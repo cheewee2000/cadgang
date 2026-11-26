@@ -19,7 +19,7 @@
 
 import { GraphError } from './errors.js';
 import { sampleSegment } from './softgoods-export.js';
-import { seamSide, seamSideLabel } from './softgoods-seams.js';
+import { seamSide, seamSideLabel, resolveSeamCorrespondence } from './softgoods-seams.js';
 import { patternSVG } from './softgoods-print.js';
 import { FABRICS } from './softgoods-fabrics.js';
 
@@ -60,9 +60,13 @@ export const TRIM_KINDS = Object.freeze({
   zipper: { place: 'length', mate: 'second side' }, 'hook-and-loop': { place: 'length', mate: 'loop side' },
   binding: { place: 'length' }, piping: { place: 'length' }, elastic: { place: 'length' }, drawcord: { place: 'length' }, topstitch: { place: 'length' }, webbing: { place: 'length' },
 });
+// The kinds that hold two things together. One with a mate is closed in the cloth preview unless it says closed: false (a jacket
+// worn open); any other trim with a mate is closed only when it says closed: true.
+const CLOSURES = ['zipper', 'hook-and-loop', 'button', 'snap'];
+const shut = (trim) => trim.mate != null && (trim.closed ?? CLOSURES.includes(trim.kind));
 // A kind that is not listed is a piece of hardware at a spot (a cord lock, a toggle, a hook), with an optional mate.
 const HARDWARE = { place: 'point', mate: 'mate' };
-const FIELDS = ['id', 'kind', 'name', 'spec', 'qty', 'supplier', 'partNumber', 'unitPrice', 'pricePerMeter', 'at', 'along', 'path', 'elastic', 'mate', 'flip', 'count', 'pitch', 'margin', 'inset', 'mateInset', 'length', 'hardware', 'notes'];
+const FIELDS = ['id', 'kind', 'name', 'spec', 'qty', 'supplier', 'partNumber', 'unitPrice', 'pricePerMeter', 'at', 'along', 'path', 'elastic', 'mate', 'flip', 'closed', 'count', 'pitch', 'margin', 'inset', 'mateInset', 'length', 'hardware', 'notes'];
 const POSITIVE = ['diameter', 'width', 'height', 'tapeWidth', 'finishedWidth', 'flange', 'stitchLength', 'spacing', 'buttonholeLength'];
 const NON_NEGATIVE = ['thickness', 'overlap', 'cornerAllowance', 'bartackInset', 'allowance', 'mass', 'massPerMeter', 'rigidity'];
 
@@ -302,6 +306,8 @@ export function validateTrims(document) {
     if (spec.lengths != null && !(Array.isArray(spec.lengths) && spec.lengths.length && spec.lengths.every((v) => finite(v) && v > 0))) throw new GraphError(`${what} spec.lengths must list the lengths it can be bought in, mm`);
     if (spec.tailLengths != null && !(Array.isArray(spec.tailLengths) && spec.tailLengths.length === 2 && spec.tailLengths.every((v) => finite(v) && v >= 0))) throw new GraphError(`${what} spec.tailLengths must be [start, end], the free length beyond each end in mm`);
     if (spec.buttonhole != null && !['parallel', 'perpendicular'].includes(spec.buttonhole)) throw new GraphError(`${what} spec.buttonhole must be parallel or perpendicular (to the edge)`);
+    if (t.closed != null && typeof t.closed !== 'boolean') throw new GraphError(`${what} closed must be true or false`);
+    if (t.closed && t.mate == null) throw new GraphError(`${what} can only be closed onto a mate`);
     if (t.qty != null && !(Number.isInteger(t.qty) && t.qty > 0)) throw new GraphError(`${what} qty must be a whole number, at least 1`);
     for (const k of ['unitPrice', 'pricePerMeter']) if (t[k] != null && !(finite(t[k]) && t[k] >= 0)) throw new GraphError(`${what} ${k} must be zero or more`);
     for (const k of ['inset', 'mateInset']) if (t[k] != null && !finite(t[k])) throw new GraphError(`${what} ${k} must be a finite number of mm`);
@@ -455,7 +461,7 @@ export function listTrims(document) {
 }
 
 /**
- * What the trims mean physically, for the cloth solver to use later (nothing reads this yet). Coordinates are pattern mm.
+ * What the trims mean physically. Coordinates are pattern mm. The solver reads none of this itself: what it acts on is closures().
  *   seam     two edges held together (a zipper, hook-and-loop): pairs at matching fractions, every `spacing` mm, and, when each
  *            side is one seam side, `seam` in the shape of the design's seams[]
  *   tack     two spots held together (a button in its buttonhole, a snap): `attachments` in the shape of the design's cloth-to-cloth tacks
@@ -463,13 +469,14 @@ export function listTrims(document) {
  *   elastic  a band that wants to be relaxedRatio of the edge it is sewn to; `elastic` names the design's own elastic when the trim
  *            points at one (the solver already gathers that)
  *   point    a mass at a spot (a rivet, an eyelet, a buckle)
+ * closed: true marks a closure the design wears shut: closures() below sews those into the solver's own seams and attachments.
  * rigidity (bending, N·mm) and the masses come from the trim's spec. A zipper or webbing without one takes the webbing
  * figure of the fabric library and says so in rigiditySource; a mass nobody gave is null.
  */
 export function simulationTrims(document, { spacing = 12.5 } = {}) {
   const uv = ({ pattern, x, y }) => ({ pattern, x, y }), paths = (chains) => chains.map((c) => ({ pattern: c.pattern, points: c.points }));
   return (document.trims || []).flatMap((trim) => {
-    const g = trimGeometry(document, trim), spec = trim.spec || {}, base = { id: trim.id, kind: trim.kind };
+    const g = trimGeometry(document, trim), spec = trim.spec || {}, base = { id: trim.id, kind: trim.kind, ...(shut(trim) ? { closed: true } : {}) };
     // A pair of spots held together is written as the design's own cloth-to-cloth tack, attachments[]: { id, pattern, at, to: { pattern, at } }.
     if (g.place === 'point') return [g.mate ? { ...base, type: 'tack', attachments: g.positions.map((p, i) => ({ id: `${trim.id}_${i + 1}`, pattern: p.pattern, at: [p.x, p.y], to: { pattern: g.mate[i].pattern, at: [g.mate[i].x, g.mate[i].y] }, kind: trim.kind, ...(spec.strength != null ? { strength: spec.strength } : {}) })), massG: spec.mass ?? null } : { ...base, type: 'point', points: g.positions.map(uv), massG: spec.mass ?? null }];
     if (trim.kind === 'topstitch') return [];
@@ -484,6 +491,29 @@ export function simulationTrims(document, { spacing = 12.5 } = {}) {
     if (trim.kind === 'elastic') return [{ ...base, type: 'elastic', ...(trim.elastic != null ? { elastic: trim.elastic } : {}), ...physical, relaxedRatio: g.relaxedRatio, relaxedLengthMm: round(g.lengthMm * g.relaxedRatio), paths: paths(g.chains) }];
     return [{ ...base, type: 'strip', ...physical, ...(spec.tailLengths ? { tailLengths: spec.tailLengths } : {}), paths: paths(g.chains) }];
   });
+}
+/**
+ * The closed closures as the solver's own input: a zipper or hook-and-loop as a resolved seam between its two edges, a button or
+ * snap pair as a cloth-to-cloth tack. Both input builders (GET /simulation-input and simulationInput in softgoods-drape.js) add
+ * these to the design's seams and attachments. Only a closure that is closed and passes its check is sewn: a zipper whose two sides
+ * differ is left open, and the check says why. A design with no trims, or with every closure open, adds nothing.
+ */
+export function closures(document, meshes, { spacing = 12.5 } = {}) {
+  const seams = [], attachments = [];
+  if (!(document.trims || []).some(shut)) return { seams, attachments };
+  const ok = new Map(checkTrims(document).trims.map((t) => [t.id, t.ok]));
+  for (const fact of simulationTrims(document, { spacing })) {
+    if (!fact.closed || !ok.get(fact.id)) continue;
+    if (fact.type === 'tack') attachments.push(...fact.attachments);
+    if (fact.type !== 'seam') continue;
+    // The check allows the two sides a millimetre or a hundredth apart; the seam is given that as ease. Should the resolver still
+    // refuse it (the mesh measures a curve a little differently), the closure is left open rather than the whole input lost.
+    const ease = Math.abs(fact.lengthMm - fact.mateLengthMm) / Math.max(fact.lengthMm, fact.mateLengthMm) + 0.005;
+    if (fact.seam) try { seams.push(...resolveSeamCorrespondence([{ ...fact.seam, ease, correspondence: [] }], meshes, { spacing })); } catch { /* left open */ }
+    // A side made of several entries (an edge cut by a pleat) is not one seam side: it is held point for point instead.
+    else attachments.push(...fact.pairs.map((p, i) => ({ id: `${fact.id}_${i + 1}`, pattern: p.a.pattern, at: [p.a.x, p.a.y], to: { pattern: p.b.pattern, at: [p.b.x, p.b.y] }, kind: fact.kind })));
+  }
+  return { seams, attachments };
 }
 /** The simulation input's share of it: { trims } for a design that has trims, nothing for one that has none, so its input is what it always was. */
 export const trimsInput = (document, options) => (document.trims?.length ? { trims: simulationTrims(document, options) } : {});

@@ -40,7 +40,7 @@ const trimShape = {
   id: z.string(), kind: z.string(), name: z.string().optional(), spec: z.record(z.any()).optional(), notes: z.string().optional(),
   qty: z.number().int().positive().optional(), supplier: z.string().optional(), partNumber: z.string().optional(), unitPrice: z.number().nonnegative().optional(), pricePerMeter: z.number().nonnegative().optional(),
   at: spot.optional(), along: z.array(edge).min(1).optional(), path: z.object({ pattern: z.string(), points: z.array(z.union([z.string(), z.array(z.number()).length(2)])).min(2).optional(), line: z.string().optional(), closed: z.boolean().optional() }).optional(), elastic: z.string().optional(),
-  mate: z.union([spot, z.array(edge).min(1)]).optional(), flip: z.boolean().optional(),
+  mate: z.union([spot, z.array(edge).min(1)]).optional(), flip: z.boolean().optional(), closed: z.boolean().optional(),
   count: z.number().int().positive().optional(), pitch: z.number().positive().optional(), margin: z.union([z.number().nonnegative(), z.array(z.number().nonnegative()).length(2)]).optional(), inset: z.number().optional(), mateInset: z.number().optional(),
   length: z.number().positive().optional(), hardware: z.array(z.object({ kind: z.string(), id: z.string().optional(), name: z.string().optional(), qty: z.number().int().positive().optional(), unitPrice: z.number().nonnegative().optional(), supplier: z.string().optional(), partNumber: z.string().optional(), at: z.union([z.number(), z.string()]).optional(), spec: z.record(z.any()).optional() })).optional(),
 };
@@ -99,6 +99,7 @@ Placement, exactly one of:
 - elastic (kind elastic only): the id of the design's own elastic, an elastics[] entry or a seam with elastic. The cloth preview gathers by that entry's ratio and the trim adds what is bought: width, cut length, price. An elastic trim added along one whole segment, or on a path between two point ids, with spec.ratio makes that elastics[] entry itself (same id) and points at it; updating its spec.ratio changes the entry, removing the trim removes it.
 A point trim along an edge is a row: give count or pitch (and margin, one number or [start, end], for the first and last; without it a count is spread with half a pitch at each end) and inset for how far in from the edge.
 mate is the other half: for a row, the edge the buttonholes or sockets go on (they land at the same fractions; flip: true when the two edges are drawn in opposite directions, as with a seam); for one spot, another spot; for a zipper or hook-and-loop, the second edge. A zipper whose two sides differ in length fails the check.
+closed: a zipper, hook-and-loop, button or snap with a mate is closed in the cloth preview (the zipper as a seam between its two edges, each button or snap as a tack to its mate); closed: false leaves it open, a jacket worn unzipped. Any other trim with a mate closes only with closed: true. A closure that fails its check (a zipper whose sides differ) is left open in the preview.
 Trims follow cadgang_softgoods_edit: one on an edge that is cut (a dart, a pleat, a split) runs over both parts, and a piece cut in two takes its trims to the half they sit on. mirror and unfold do not copy trims: add the other hand's.
 
 spec holds what the thing is; all of it shows in the tech pack. Keys that change the result:

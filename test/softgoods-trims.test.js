@@ -17,6 +17,7 @@ import { trimGeometry, trimMarks, rowSpacing, checkTrims, simulationTrims, trimS
 import { softgoodsRouter } from '../src/server/softgoods.js';
 import { editSoftgoods } from '../src/core/softgoods-edit.js';
 import { simulationInput } from '../src/core/softgoods-drape.js';
+import { simulate } from '../web/softgoods-worker.js';
 import { registerSoftgoodsTools } from '../src/mcp/softgoods.js';
 import { tee } from './fixtures/softgoods-tee.js';
 import { exportHashes } from './fixtures/softgoods-baseline.mjs';
@@ -201,12 +202,61 @@ test('trims follow pattern edits: a cut edge, a dart and a piece cut in two', ()
   assert.deepEqual(pleated.trims[0].along, [{ pattern: 'front', segment: 'front_top' }, { pattern: 'front', segment: 'front_top_2' }], 'the zipper runs over both parts of the cut edge');
   assert.equal(length(pleated, 'top_zip'), 300, 'and not over the cloth folded into the pleat'); assert.equal(length(pleated, 'hem'), 300); assert.equal(checkDesign(pleated).trims[0].ok, true);
   assert.equal(spot(pleated, 'tab')[2], 20, 'the snap is still 20 mm above the bottom edge');
+  // Its side is now two entries, which is not one seam side: closed in the preview, it is held point for point instead.
+  const held = simulationInput(pleated, 40); assert.equal(held.seams.some((s) => s.id === 'top_zip'), false); assert.ok(held.attachments.filter((a) => a.kind === 'zipper' && a.to.pattern === 'back').length >= 8);
   // Cut the front in two from the middle of its bottom edge to the middle of its top: the snap and the label go to the half they sit on.
   const cut = editSoftgoods(d, { op: 'split', pattern: 'front', from: { segment: 'front_bottom', at: 0.5 }, to: { segment: 'front_top', at: 0.5 } }), home = (id) => { const t = cut.trims.find((q) => q.id === id); return (t.at || t.along[0]).pattern; };
   assert.deepEqual(spot(cut, 'tab'), [home('tab'), 225, 20]); assert.deepEqual(spot(cut, 'badge'), [home('badge'), 250, 100]); assert.equal(home('tab'), home('badge'));
   assert.ok(['front_a', 'front_b'].includes(home('tab')));
   // The zipper and the hem ran across the cut: they cannot belong to one half, and the edit says so instead of guessing.
   assert.throws(() => editSoftgoods(withTrims(panels(['front', 300, 200]), { id: 'all_round', kind: 'binding', along: [{ pattern: 'front', contour: 0 }] }), { op: 'split', pattern: 'front', from: { segment: 'front_bottom', at: 0.5 }, to: { segment: 'front_top', at: 0.5 } }), /Trim 'all_round' refers to missing pattern 'front'/);
+});
+
+// Where the flat point uv of a piece is in 3D, in a frame of the solver.
+function draped(f, input, id, uv) {
+  const m = input.meshes.find((q) => q.id === id), off = f.pieces.find((q) => q.id === id).off, P = (i) => [0, 1, 2].map((k) => f.positions[(off + i) * 3 + k]);
+  for (let t = 0; t < m.triangles.length; t += 3) { const [a, b, c] = [0, 1, 2].map((k) => m.triangles[t + k]), ax = m.uv[a * 2], ay = m.uv[a * 2 + 1], bx = m.uv[b * 2] - ax, by = m.uv[b * 2 + 1] - ay, cx = m.uv[c * 2] - ax, cy = m.uv[c * 2 + 1] - ay, d = bx * cy - by * cx, wb = ((uv[0] - ax) * cy - (uv[1] - ay) * cx) / d, wc = (bx * (uv[1] - ay) - by * (uv[0] - ax)) / d; if (wb >= -1e-9 && wc >= -1e-9 && wb + wc <= 1 + 1e-9) return [0, 1, 2].map((k) => (1 - wb - wc) * P(a)[k] + wb * P(b)[k] + wc * P(c)[k]); }
+  throw new Error(`no triangle of ${id} holds ${uv}`);
+}
+// A front in two halves, 200 × 300 each, standing upright. The left half hangs from two pins at its top corners; the right half is held by nothing but the trim.
+function hungFront(trim, rightAt, { height = 300, pins = [] } = {}) {
+  const d = new SoftgoodsDocument(null); d.addRectangle({ id: 'left', width: 200, height: 300 }); d.addRectangle({ id: 'right', width: 200, height });
+  return validateSoftgoodsDocument({ ...d.toJSON(), materials: { canvas: { arealDensity: 340, thickness: 0.6, damping: 0.05 } }, arrangement: [{ pattern: 'left', position: [0, 0, 700], rotation: [90, 0, 0] }, { pattern: 'right', position: rightAt, rotation: [90, 0, 0] }],
+    attachments: [{ id: 'pin_l', pattern: 'left', at: [0, 300], to: [0, 0, 1000] }, { id: 'pin_r', pattern: 'left', at: [200, 300], to: [200, 0, 1000] }, ...pins], trims: [trim] });
+}
+const apart = (f, input, a, b) => Math.hypot(...draped(f, input, 'left', a).map((v, k) => v - draped(f, input, 'right', b)[k]));
+
+test('a closed zipper zips the two fronts together in the preview, and closed: false leaves them open', () => {
+  const zip = (extra = {}) => ({ id: 'front_zip', kind: 'zipper', spec: { chain: '#5' }, along: [{ pattern: 'left', segment: 'left_right' }], mate: [{ pattern: 'right', segment: 'right_left' }], flip: true, ...extra });
+  const gaps = (f, input) => [0, 150, 300].map((y) => apart(f, input, [200, y], [0, y]));
+  // The right front starts 30 mm from the left one. Closed (the default for a zipper), its edge ends on the left front's, and it hangs there.
+  const input = simulationInput(hungFront(zip(), [230, 0, 700]), 40);
+  assert.deepEqual(input.seams.map((s) => [s.id, s.kind, Math.round(s.lengthA)]), [['front_zip', 'zipper', 300]]); assert.equal(input.trims[0].closed, true);
+  for (const g of gaps(simulate(input, 0), input)) assert.ok(Math.abs(g - 30) < 0.01, `starts ${g} mm open`);
+  const shut = simulate(input, 240); for (const g of gaps(shut, input)) assert.ok(g < 1, `ends ${g.toFixed(2)} mm apart`);
+  assert.ok(draped(shut, input, 'right', [100, 300])[2] > 850, 'the right front hangs from the zipper');
+  // Worn open: the input is what it would be without the closure, and nothing holds the right front, which falls away.
+  const open = simulationInput(hungFront(zip({ closed: false }), [230, 0, 700]), 40);
+  assert.deepEqual(open.seams, []); assert.deepEqual(open.attachments.map((a) => a.id), ['pin_l', 'pin_r']); assert.ok(!('closed' in open.trims[0]));
+  for (const g of gaps(simulate(open, 240), open)) assert.ok(g > 300, `open, yet ${g.toFixed(0)} mm apart`);
+  // A zipper whose two sides differ is not sewn and does not stop the preview: the check reports it.
+  const off = hungFront(zip(), [230, 0, 700], { height: 340 }), unsewn = simulationInput(off, 40);
+  assert.deepEqual(unsewn.seams, []); assert.equal(checkDesign(off).trims[0].ok, false); assert.match(checkDesign(off).trims[0].issues[0], /300 mm and 340 mm/);
+  assert.throws(() => hungFront({ id: 'r', kind: 'rivet', at: { pattern: 'left', u: 5, v: 5 }, closed: true }, [230, 0, 700]), /can only be closed onto a mate/);
+});
+
+test('three buttons hold a placket at three points, and it gapes between them', () => {
+  // The right front laps 30 mm over the left; its far edge is pulled 60 mm forward, as a body would push it. Buttons at 50, 150 and 250 mm up.
+  const buttoned = (extra = {}) => hungFront({ id: 'placket', kind: 'button', spec: { diameter: 15 }, along: [{ pattern: 'left', segment: 'left_right' }], mate: [{ pattern: 'right', segment: 'right_left' }], flip: true, count: 3, inset: 15, ...extra }, [170, -5, 700],
+    { pins: [{ id: 'pin_bl', pattern: 'left', at: [0, 0], to: [0, 0, 700] }, { id: 'pin_br', pattern: 'left', at: [200, 0], to: [200, 0, 700] }, { id: 'pull_t', pattern: 'right', at: [200, 300], to: [355, -60, 1000] }, { id: 'pull_b', pattern: 'right', at: [200, 0], to: [355, -60, 700] }] });
+  const input = simulationInput(buttoned(), 40), f = simulate(input, 240), gap = (frame, from, y) => apart(frame, from, [185, y], [15, y]);
+  assert.deepEqual(input.attachments.filter((a) => a.kind === 'button').map((a) => [a.id, a.at, a.to]), [['placket_1', [185, 50], { pattern: 'right', at: [15, 50] }], ['placket_2', [185, 150], { pattern: 'right', at: [15, 150] }], ['placket_3', [185, 250], { pattern: 'right', at: [15, 250] }]]);
+  for (const y of [50, 150, 250]) assert.ok(gap(f, input, y) < 0.5, `the button at ${y} holds: ${gap(f, input, y).toFixed(2)} mm`);
+  for (const y of [100, 200]) assert.ok(gap(f, input, y) > 1, `between the buttons at ${y} it gapes: ${gap(f, input, y).toFixed(2)} mm`);
+  for (const y of [0, 300]) assert.ok(gap(f, input, y) > 5, `beyond the last button at ${y} it gapes more: ${gap(f, input, y).toFixed(2)} mm`);
+  // Unbuttoned, nothing holds the placket at all.
+  const open = simulationInput(buttoned({ closed: false }), 40); assert.equal(open.attachments.some((a) => a.kind === 'button'), false);
+  assert.ok(gap(simulate(open, 240), open, 150) > 50);
 });
 
 // A pouch front with everything on it: buttons with buttonholes on the back, a zipper across both tops, two topstitch rows, a rivet, a label, and a strap on the back.
