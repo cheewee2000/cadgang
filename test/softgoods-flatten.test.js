@@ -351,6 +351,28 @@ test('a flattened can and box go through every production format, and drape sewn
   }
 });
 
+test('the cut that opens a tube names its seam, and a zipper put there closes the can in the drape', () => {
+  const r = flattenMesh(body('can', [side(30, 30, 80), disc(30, 80, 1), disc(30, 0, -1)])), [cut] = r.report.cuts;
+  assert.deepEqual(cut.seams, ['sew_can_wrap_can_wrap']); assert.ok(!('keys' in cut));
+  const seam = r.seams.find((s) => s.id === cut.seams[0]); assert.equal(seam.a.pattern, 'can_wrap'); assert.equal(seam.b.pattern, 'can_wrap');
+  // The plain seam comes out and a zipper goes along its two sides.
+  const zipped = (closed) => validateSoftgoodsDocument({ ...mergeFlattened(new SoftgoodsDocument(null).toJSON(), r), seams: r.seams.filter((s) => s !== seam), trims: [{ id: 'side_zip', kind: 'zipper', spec: { chain: '#5' }, along: [seam.a], mate: [seam.b], flip: seam.flip, closed }] });
+  // How far apart the two cut edges of the side are at their widest, after the drape.
+  const gape = (d) => {
+    const w = drapeDocument(d, { target: 30, steps: 120 }).pieces.find((p) => p.id === 'can_wrap'), n = w.uv.length / 2, width = Math.max(...Array.from({ length: n }, (_, i) => w.uv[2 * i])); let widest = 0;
+    for (let i = 0; i < n; i++) if (w.uv[2 * i] < 1e-6) for (let j = 0; j < n; j++) if (Math.abs(w.uv[2 * j] - width) < 1e-6 && Math.abs(w.uv[2 * j + 1] - w.uv[2 * i + 1]) < 1e-6) widest = Math.max(widest, Math.hypot(w.positions[3 * i] - w.positions[3 * j], w.positions[3 * i + 1] - w.positions[3 * j + 1], w.positions[3 * i + 2] - w.positions[3 * j + 2]));
+    return widest;
+  };
+  const shut = zipped(true), check = checkDesign(shut);
+  assert.equal(check.ok, true); assert.deepEqual(check.trims.map((t) => [t.id, t.ok, t.lengthMm, t.mateLengthMm]), [['side_zip', true, 80, 80]]);
+  assert.deepEqual(simulationInput(shut, 30).seams.map((s) => [s.id, s.kind]), [['sew_can_wrap_can_top', 'plain'], ['sew_can_wrap_can_bottom', 'plain'], ['side_zip', 'zipper']]);
+  const closedGap = gape(shut), openGap = gape(zipped(false));
+  assert.ok(closedGap < 2, `zipped, the side closes to ${closedGap.toFixed(2)} mm`); assert.ok(openGap > 3 * closedGap && openGap > 4, `unzipped it gapes ${openGap.toFixed(2)} mm`);
+  // A cut the caller gives, and the border between two faces kept open, name their seams the same way.
+  assert.deepEqual(flattenMesh(body('sleeve', [side(30, 30, 80)]), { cuts: [{ path: [[0, -30, 0], [0, -30, 80]] }] }).report.cuts[0].seams, ['sew_sleeve_wrap_sleeve_wrap']);
+  const pair = flattenMesh(body('case', box(100, 60, 40)), { cuts: [[1, 2]] }).report.cuts[0]; assert.deepEqual(pair.seams, ['sew_case_top_case_front']);
+});
+
 test('a flattened dome takes the dart its advice asks for, through the edit route', async () => {
   const doc = new SoftgoodsDocument(null), app = express(); app.use(express.json()); app.use('/s', softgoodsRouter(doc));
   const r = flattenMesh(body('dome', [hemisphere(50)])), rim = r.patterns[0].segments[0].id; doc.replace(mergeFlattened(doc.toJSON(), r));

@@ -389,7 +389,7 @@ function openAndFlatten(M, tris, cut, opt, cuts) {
   for (let guard = 0; guard < 64; guard++) {
     const out = []; let again = false;
     for (const patch of buildPatches(M, tris, cut)) {
-      const report = (why, r) => { const g = r.path.map((v) => patch.gv[v]); let length = 0; for (let i = 1; i < g.length; i++) { cut.add(edgeKey(M, g[i - 1], g[i])); length += Math.hypot(M.P[3 * g[i]] - M.P[3 * g[i - 1]], M.P[3 * g[i] + 1] - M.P[3 * g[i - 1] + 1], M.P[3 * g[i] + 2] - M.P[3 * g[i - 1] + 2]); } cuts.push({ kind: 'auto', why, faces: [...new Set(patch.gt.map((t) => M.faceOf[t]))].sort((a, b) => a - b), from: xyz(M, g[0]), to: xyz(M, g.at(-1)), length: r3(length) }); again = true; };
+      const report = (why, r) => { const g = r.path.map((v) => patch.gv[v]), keys = []; let length = 0; for (let i = 1; i < g.length; i++) { keys.push(edgeKey(M, g[i - 1], g[i])); cut.add(keys.at(-1)); length += Math.hypot(M.P[3 * g[i]] - M.P[3 * g[i - 1]], M.P[3 * g[i] + 1] - M.P[3 * g[i - 1] + 1], M.P[3 * g[i] + 2] - M.P[3 * g[i - 1] + 2]); } cuts.push({ kind: 'auto', why, keys, faces: [...new Set(patch.gt.map((t) => M.faceOf[t]))].sort((a, b) => a - b), from: xyz(M, g[0]), to: xyz(M, g.at(-1)), length: r3(length) }); again = true; };
       if (!patch.loops.length) {
         const adj = patchAdjacency(M, patch), a = shortest(adj, [0], null).path.at(-1);
         report('a closed surface was slit between its two farthest points', shortest(adj, [a], null)); continue;
@@ -566,7 +566,7 @@ function settle(piece) {
  *   minWidth     pieces narrower than this (twice their area over their perimeter, mm; default 3) are left out and
  *                listed in report.skipped: chamfers, the walls of small holes, slivers
  *   material, name, avoid (ids already taken), source (carried into every pattern's source)
- * Returns { body, patterns, seams, arrangement, report: { pieces, seams, cuts, skipped }, meshes (uv + xyz of every piece, not for the document) }.
+ * Returns { body, patterns, seams, arrangement, report: { pieces, seams, cuts (each with the ids of the seams that close it), skipped }, meshes (uv + xyz of every piece, not for the document) }.
  */
 export function flattenMesh(mesh, options = {}) {
   const opt = { strainLimit: 0.02, smoothAngle: 20, merge: true, tolerance: 0.2, offset: 0, allowance: 10, minWidth: 3, ...Object.fromEntries(Object.entries(options).filter(([, v]) => v != null)) };
@@ -589,23 +589,23 @@ export function flattenMesh(mesh, options = {}) {
   let graph = null;
   for (const c of opt.cuts || []) {
     if (Array.isArray(c) && c.length === 2 && c.every(Number.isInteger)) {
-      let length = 0;
-      for (const [e, users] of M.edges) { const fs = users.map((h) => M.faceOf[(h / 3) | 0]); if (fs.includes(c[0]) && fs.includes(c[1])) { cut.add(e); const a = Math.floor(e / M.nv), b = e % M.nv; length += Math.hypot(M.P[3 * a] - M.P[3 * b], M.P[3 * a + 1] - M.P[3 * b + 1], M.P[3 * a + 2] - M.P[3 * b + 2]); } }
+      let length = 0; const keys = [];
+      for (const [e, users] of M.edges) { const fs = users.map((h) => M.faceOf[(h / 3) | 0]); if (fs.includes(c[0]) && fs.includes(c[1])) { cut.add(e); keys.push(e); const a = Math.floor(e / M.nv), b = e % M.nv; length += Math.hypot(M.P[3 * a] - M.P[3 * b], M.P[3 * a + 1] - M.P[3 * b + 1], M.P[3 * a + 2] - M.P[3 * b + 2]); } }
       if (!length) throw new GraphError(`Faces ${c[0]} and ${c[1]} do not share a border among the chosen faces`);
-      cuts.push({ kind: 'given', why: `the border between faces ${c[0]} and ${c[1]}`, faces: [...c], length: r3(length) });
+      cuts.push({ kind: 'given', why: `the border between faces ${c[0]} and ${c[1]}`, keys, faces: [...c], length: r3(length) });
     } else if (Array.isArray(c?.path) && c.path.length >= 2 && c.path.every((p) => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite))) {
       graph ||= adjacency(M, M.nv, [...M.edges.keys()].map((e) => [Math.floor(e / M.nv), e % M.nv, Math.floor(e / M.nv), e % M.nv]));
       const used = [...new Set(chosen.flatMap((t) => [M.tri[3 * t], M.tri[3 * t + 1], M.tri[3 * t + 2]]))];
       const snap = (p) => used.reduce((best, v) => (Math.hypot(M.P[3 * v] - p[0], M.P[3 * v + 1] - p[1], M.P[3 * v + 2] - p[2]) < Math.hypot(M.P[3 * best] - p[0], M.P[3 * best + 1] - p[1], M.P[3 * best + 2] - p[2]) ? v : best), used[0]);
-      const stops = c.path.map(snap); let length = 0;
+      const stops = c.path.map(snap), keys = []; let length = 0;
       for (let i = 1; i < stops.length; i++) {
         if (stops[i] === stops[i - 1]) continue;
         const r = shortest(graph, [stops[i - 1]], (v) => v === stops[i]); if (!r) throw new GraphError('A cut path crosses a gap between the chosen faces');
-        for (let k = 1; k < r.path.length; k++) cut.add(edgeKey(M, r.path[k - 1], r.path[k]));
+        for (let k = 1; k < r.path.length; k++) { keys.push(edgeKey(M, r.path[k - 1], r.path[k])); cut.add(keys.at(-1)); }
         length += r.length;
       }
       if (!length) throw new GraphError('A cut path needs two points that are apart on the mesh');
-      cuts.push({ kind: 'given', why: 'a cut path', from: xyz(M, stops[0]), to: xyz(M, stops.at(-1)), length: r3(length) });
+      cuts.push({ kind: 'given', why: 'a cut path', keys, from: xyz(M, stops[0]), to: xyz(M, stops.at(-1)), length: r3(length) });
     } else throw new GraphError('A cut is [faceA, faceB] or {path: [[x,y,z], [x,y,z], ...]}');
   }
 
@@ -731,6 +731,7 @@ export function flattenMesh(mesh, options = {}) {
     const mismatch = Math.abs(a.length - b.length) / Math.max(a.length, b.length, 1e-9), ease = Math.ceil((mismatch + 0.001) * 1e4) / 1e4;
     const id = unique(`sew_${slug(a.piece.id, 22)}_${slug(b.piece.id, 22)}`), label = (c) => `${c.piece.id}.${c.runs.map((r) => r.id).join('+')}`;
     seams.push({ id, a: a.ref, b: b.ref, flip, ease, kind: 'plain', correspondence });
+    a.seam = id;
     seamReport.push({ id, a: label(a), b: label(b), lengthA: r3(a.length), lengthB: r3(b.length), mismatch: +mismatch.toFixed(5), ease, ...(a.piece === b.piece && { closes: 'the piece onto itself' }) });
     // Match notches: where either side starts a new segment part way along the seam (a corner of the other piece
     // lands there, or a curve was broken to fit), both sides are marked at that place unless they turn a corner there themselves.
@@ -749,7 +750,9 @@ export function flattenMesh(mesh, options = {}) {
   }
   const arrangement = pieces.map((p) => ({ pattern: p.id, position: p.position, rotation: p.rotation, layer: 0, source: 'flatten' }));
   const meshes = pieces.map((p) => ({ id: p.id, uv: p.flat.uv, xyz: p.patch.P, triangles: p.patch.tri, stretch: p.flat.stretch }));
-  return { body: M.body, patterns, seams, arrangement, report: { pieces: report, seams: seamReport, cuts, skipped }, meshes };
+  // Every cut names the seams that close it again: a cut up a tube is where a zipper goes (a trim along that seam's two sides).
+  const closing = (keys) => { const on = new Set(keys); return chains.filter((c) => c.seam && c.edges.some((e) => on.has(e.key))).map((c) => c.seam); };
+  return { body: M.body, patterns, seams, arrangement, report: { pieces: report, seams: seamReport, cuts: cuts.map(({ keys, ...c }) => ({ ...c, seams: closing(keys) })), skipped }, meshes };
 }
 
 /** The bodies of a mesh and the faces of one of them: what a caller names in flattenMesh. */
