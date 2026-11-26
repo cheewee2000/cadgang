@@ -1,18 +1,19 @@
-// An ASTM D6673 / AAMA-292 flavoured DXF: one file per size, one BLOCK per pattern piece, information on numbered layers.
-// It is called "aama-style", not "AAMA": the layer numbers below were checked against a published summary of
+// An ASTM D6673 flavoured DXF: one file per size, one BLOCK per pattern piece, information on numbered layers.
+// It is called "astm-style", not "ASTM" (and says nothing about the older AAMA-292, which the source read does not cover): the layer numbers below were checked against a published summary of
 // ASTM D6673-10 (the Patro documentation's "DXF ASTM File Format" table; the standard itself is paywalled and was
 // withdrawn in 2019), but the wording of the system text ("Piece Name:", "Size:", ...), drawing a notch as a line and
-// the absence of turn/curve points (layers 2, 3), quality-validation curves (84-87) and a grade rule table are NOT
+// the absence of turn/curve points (layers 2, 3), the quality-validation curves (84-87, which the standard marks mandatory)
+// and a grade rule table are NOT
 // verified against the standard. Try it in the receiving CAD before relying on it.
 
 import { cutContours, patternDXF, dxfFile } from './softgoods-export.js';
 import { dxfEntities } from './softgoods-marker.js';
 
 /** What goes where, returned with the export so nobody has to guess. */
-export const AAMA_STYLE = Object.freeze({
+export const ASTM_STYLE = Object.freeze({
   layers: { 1: 'piece boundary (the closed CUT contour) and piece system text', 4: 'notches (a line from the cut edge inward)', 7: 'grain line', 8: 'internal lines: darts, pleats, folds and any other mark', 11: 'internal cutouts (CUT contours of holes)', 14: 'sew lines (STITCH)', 15: 'annotation text' },
   from: { CUT: '1 / 11', NOTCH: '4', GRAIN: '7', DART: '8', PLEAT: '8', FOLD: '8', STITCH: '14', TEXT: '15', ALLOWANCE: 'not written' },
-  verified: 'Layer numbers against a published summary of ASTM D6673-10. Text labels, notch entities and the missing layers 2, 3, 5, 84-87 are not verified.',
+  verified: 'Layer numbers against a published summary of ASTM D6673-10. Text labels, notch entities and units and closure rules are not verified; layers 2, 3, 5 and the mandatory validation curves 84-87 are not written; the file is DXF R12 where the standard says R13.',
 });
 const LAYER = { NOTCH: 4, GRAIN: 7, STITCH: 14 };
 const area = (q) => Math.abs(q.reduce((sum, p, i) => sum + p[0] * q[(i + 1) % q.length][1] - q[(i + 1) % q.length][0] * p[1], 0));
@@ -21,7 +22,7 @@ const line = (a, b, layer) => `0\nLINE\n8\n${layer}\n10\n${a[0]}\n20\n${a[1]}\n3
 const text = (at, value, layer, height = 5) => `0\nTEXT\n8\n${layer}\n10\n${at[0]}\n20\n${at[1]}\n30\n0\n40\n${height}\n1\n${value}`;
 
 /** Every pattern of the document (already at the wanted size) as a block, inserted side by side. */
-export function aamaStyleDXF(document, { name = 'softgoods', size = 'base', annotations = document.annotations || [] } = {}) {
+export function astmStyleDXF(document, { name = 'softgoods', size = 'base', annotations = document.annotations || [] } = {}) {
   const blocks = [], entities = [text([0, -20], `Style Name: ${name}`, 1), text([0, -30], 'Units: METRIC', 1)]; let x = 0;
   for (const p of document.patterns) {
     const contours = cutContours(p), outer = contours.reduce((best, q) => (area(q) > area(best) ? q : best)), { lines, texts } = dxfEntities(patternDXF(p, annotations.filter((a) => a.pattern === p.id)));
@@ -43,5 +44,5 @@ export function aamaStyleDXF(document, { name = 'softgoods', size = 'base', anno
     blocks.push(`0\nBLOCK\n8\n1\n2\n${p.id}\n70\n0\n10\n0\n20\n0\n30\n0\n3\n${p.id}\n${body.join('\n')}\n0\nENDBLK\n8\n1`);
     entities.push(`0\nINSERT\n8\n1\n2\n${p.id}\n10\n${x - minX}\n20\n${-minY}\n30\n0`); x += Math.max(...xs) - minX + 50;
   }
-  return dxfFile(entities, Object.keys(AAMA_STYLE.layers).map((n) => [n, 7]), blocks);
+  return dxfFile(entities, Object.keys(ASTM_STYLE.layers).map((n) => [n, 7]), blocks);
 }
