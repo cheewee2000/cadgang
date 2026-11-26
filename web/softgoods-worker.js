@@ -159,7 +159,8 @@ function band(c, dt) {
 // CREASE is the fold's stiffness, N·mm per radian per mm of fold. A fold closes over its first FOLDING steps, and never corrects
 // more than TURN radians in a substep, so it turns the cloth and does not snap it.
 // ponytail: one stiffness for every crease; make it a field of the annotation when a soft roll and a pressed crease must differ.
-const CREASE = 1, TURN = 0.5, FOLDING = 60;
+const CREASE = 1, TURN = 0.5;
+export const FOLDING = 60;
 function crease(c, dt) {
   const { x, give: inv } = state, [x1, x2, x3, x4] = c.i.map((i) => V(x, i)), N1 = cross3(sub3(x1, x3), sub3(x1, x4)), N2 = cross3(sub3(x2, x4), sub3(x2, x3)), E = sub3(x4, x3), e = Math.hypot(...E), a = dot3(N1, N1), b = dot3(N2, N2); if (e < 1e-9 || a < 1e-12 || b < 1e-12) return;
   const angle = Math.atan2(-dot3(cross3(N1, N2), E) / e, dot3(N1, N2)), p = dot3(sub3(x1, x4), E) / e / a, q = dot3(sub3(x2, x4), E) / e / b, r = -dot3(sub3(x1, x3), E) / e / a, s = -dot3(sub3(x2, x3), E) / e / b;

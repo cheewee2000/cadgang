@@ -122,6 +122,20 @@ test('the server drapes elastic and stuffing as the page simulates them, until t
   assert.deepEqual(billOfMaterials(document).trims, [{ kind: 'elastic', id: 'edge_left', count: 1, lengthMm: 180 }, { kind: 'elastic', id: 'edge_right', count: 1, lengthMm: 180 }]);
 });
 
+test('the server drape waits for a fold to close before it calls the cloth settled', () => {
+  // A stiff strip, one half clamped level in mid air, the other folded up from it. The tip of the free half is 100 mm from the fold.
+  const folded = (angle) => { const strip = rect('strip', 200, 40); strip.points.push({ id: 'fold_a', x: 100, y: 0 }, { id: 'fold_b', x: 100, y: 40 });
+    const base = { version: 1, materials: { canvas: { ...canvas, rigidity: 20 } }, patterns: [strip], seams: [], arrangement: [{ pattern: 'strip', position: [-100, -20, 300], rotation: [0, 0, 0] }], annotations: [{ id: 'crease', type: 'fold_line', pattern: 'strip', lines: [['fold_a', 'fold_b']], angle }] };
+    const m = simulationInput(validateSoftgoodsDocument(base), 20).meshes[0], clamps = []; for (let i = 0; i < m.uv.length / 2; i++) if (m.uv[i * 2] <= 100 + 1e-6) clamps.push({ id: `clamp_${i}`, pattern: 'strip', at: [m.uv[i * 2], m.uv[i * 2 + 1]], to: [m.uv[i * 2] - 100, m.uv[i * 2 + 1] - 20, 300] });
+    const d = validateSoftgoodsDocument({ ...base, attachments: clamps }), tip = (drape) => { const pos = drape.pieces[0].positions; let z = 0, n = 0; for (let i = 0; i < m.uv.length / 2; i++) if (m.uv[i * 2] > 200 - 1e-6) { z += pos[i * 3 + 2] - 300; n++; } return z / n; };
+    return { d, tip }; };
+  const square = folded(90), up = drapeDocument(square.d, { target: 20 });
+  assert.ok(up.settled && up.steps >= 60, `settled after ${up.steps} steps`); assert.ok(Math.abs(square.tip(up) - 100) < 3, `the free half stands ${square.tip(up).toFixed(1)} mm up from the fold`);
+  // A fold of 1° moves the cloth less than the settle tolerance while it closes: stopped at the first quiet moment it would be two thirds folded.
+  const slight = folded(1), rest = drapeDocument(slight.d, { target: 20 }), long = drapeDocument(slight.d, { target: 20, steps: 240, tolerance: 1e-6 });
+  assert.ok(rest.settled && rest.steps >= 60, `a slight fold is given its 60 steps to close: ${rest.steps}`); assert.ok(Math.abs(slight.tip(rest) - slight.tip(long)) < 0.2, `its tip is at ${slight.tip(rest).toFixed(2)} mm, and at ${slight.tip(long).toFixed(2)} mm after 240 steps`);
+});
+
 test('a pleat made by the pleat edit, given an angle, stands creased along its three fold lines in the drape', () => {
   // The fold angle at every mesh edge along a run of vertices, in degrees, positive toward the face of the pattern.
   const sub = (a, b) => a.map((v, i) => v - b[i]), cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];

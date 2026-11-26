@@ -11,7 +11,7 @@ import { resolveSeamCorrespondence } from './softgoods-seams.js';
 import { avatarBody } from './softgoods-arrange.js';
 import { resolveMaterials } from './softgoods-fabrics.js';
 import { conformLines, physicsInput } from './softgoods-physics.js';
-import { simulate, advance } from '../../web/softgoods-worker.js';
+import { simulate, advance, FOLDING } from '../../web/softgoods-worker.js';
 
 /** What the solver starts from: the meshed patterns, their resolved seams, where each piece stands and the body.
  *  The page gets the same from GET /api/softgoods/simulation-input (src/server/softgoods.js); test/softgoods-drape.test.js holds the two equal. */
@@ -33,8 +33,10 @@ function run(document, options) {
   if (!document.patterns?.length) throw new GraphError('No softgoods patterns to drape');
   const input = simulationInput(document, options.target), names = new Set(document.patterns.map((p) => p.material)), materials = { ...input.materials };
   for (const name of names) materials[name] = { ...materials[name], damping: Math.max(options.damping, Number(materials[name]?.damping ?? 0)) };
+  // A creased fold closes over the solver's first FOLDING steps, and a slight one moves the cloth less than the tolerance while it does: the cloth is not at rest before then.
+  const closing = input.folds?.length ? FOLDING : 0;
   let frame = simulate({ ...input, materials }, 0), before = frame.positions, steps = 0, residual = Infinity;
-  while (steps < options.steps && !(residual < options.tolerance)) {
+  while (steps < options.steps && !(residual < options.tolerance && steps >= closing)) {
     const n = Math.min(CHUNK, options.steps - steps); frame = advance(n); steps += n;
     let sum = 0; for (let i = 0; i < before.length; i++) sum += (frame.positions[i] - before[i]) ** 2;
     residual = Math.sqrt(sum / (before.length / 3)) / n; before = frame.positions;
