@@ -156,7 +156,7 @@ function bendKick(dt) {
 // hanging cloth stops stretching under its own weight, so the strain map shows fit and not solver error.
 const SUBSTEPS = 8;
 function tick() {
-  if (!state?.running) return; const dt = 1 / 120 / SUBSTEPS, { x, prev, velocities: v, push, contact } = state; contact.fill(0); bendKick(1 / 120);
+  if (!state?.running) return; const began = performance.now(), dt = 1 / 120 / SUBSTEPS, { x, prev, velocities: v, push, contact } = state; contact.fill(0); bendKick(1 / 120);
   for (let sub = 0; sub < SUBSTEPS; sub++) {
     prev.set(x); push.fill(0);
     for (let i = 0; i < state.inv.length; i++) { const damp=1-Math.max(0,Math.min(1,Number(state.materialAt?.[i]?.damping??.005)))/SUBSTEPS;v[i * 3] *= damp; v[i * 3 + 1] *= damp; v[i * 3 + 2] = (v[i * 3 + 2] - 9810 * dt) * damp; const speed = Math.hypot(v[i * 3], v[i * 3 + 1], v[i * 3 + 2]), cap = speed > MAX_SPEED ? MAX_SPEED / speed : 1; v[i * 3] *= cap; v[i * 3 + 1] *= cap; v[i * 3 + 2] *= cap; x[i * 3] += v[i * 3] * dt; x[i * 3 + 1] += v[i * 3 + 1] * dt; x[i * 3 + 2] += v[i * 3 + 2] * dt; }
@@ -166,7 +166,7 @@ function tick() {
     for (let i = 0; i < state.inv.length; i++) { v[i * 3] = (x[i * 3] - prev[i * 3]) / dt; v[i * 3 + 1] = (x[i * 3 + 1] - prev[i * 3 + 1]) / dt; v[i * 3 + 2] = (x[i * 3 + 2] - prev[i * 3 + 2]) / dt; contact[i] += state.density[i] * 1e-6 * push[i] / (dt * dt) / SUBSTEPS; }
   }
   for (let i = 0; i < state.inv.length; i++) state.pressure[i] += 0.1 * (contact[i] - state.pressure[i]);
-  state.step++; if (state.step % 2 === 0 && typeof postMessage === 'function') send();
+  state.step++; state.ms = (state.ms ?? 0) + 0.1 * (performance.now() - began - (state.ms ?? 0)); if (state.step % 2 === 0 && typeof postMessage === 'function') send();
 }
 /** The solver without a page: initialise, advance, return the frame. Tests and scripts call this. */
 export function simulate(input, steps = 0) { initialize(input); state.running = true; for (let i = 0; i < steps; i++) tick(); state.running = false; return snapshot(); }
@@ -180,6 +180,6 @@ function snapshot() {
   }
   let minStrain = Infinity, maxStrain = -Infinity, maxPressure = 0;
   for (let i = 0; i < strain.length; i++) { strain[i] = count[i] ? strain[i] / count[i] : 0; minStrain = Math.min(minStrain, strain[i]); maxStrain = Math.max(maxStrain, strain[i]); maxPressure=Math.max(maxPressure,pressure[i]); }
-  return { type: 'frame', step: state.step, body: state.input.collisionBody?.shapes || [], collision: state.collision, diagnostics: { strain: { unit: 'ratio', min: minStrain, max: maxStrain }, pressure: { available: state.pressureAvailable, unit: 'Pa', min: 0, max: maxPressure, reason: state.pressureAvailable ? null : 'No collision body is present in this preview' } }, positions, strain, pressure, pieces: state.pieces.map((p) => ({ id: p.id, off: p.off, count: p.uv.length / 2, triangles: p.triangles })) };
+  return { type: 'frame', step: state.step, ms: state.ms ?? 0, body: state.input.collisionBody?.shapes || [], collision: state.collision, diagnostics: { strain: { unit: 'ratio', min: minStrain, max: maxStrain }, pressure: { available: state.pressureAvailable, unit: 'Pa', min: 0, max: maxPressure, reason: state.pressureAvailable ? null : 'No collision body is present in this preview' } }, positions, strain, pressure, pieces: state.pieces.map((p) => ({ id: p.id, off: p.off, count: p.uv.length / 2, triangles: p.triangles })) };
 }
 globalThis.onmessage = (e) => { const m = e.data; if (m.type === 'init') { initialize(m.input); send(); } else if (m.type === 'run') { state.running = true; clearInterval(timer); timer = setInterval(tick, 1000 / 60); } else if (m.type === 'pause') state.running = false; else if (m.type === 'reset') { initialize(state.input); send(); } };
