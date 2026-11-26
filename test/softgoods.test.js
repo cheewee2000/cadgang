@@ -111,3 +111,26 @@ test('a fabric with a measured rigidity droops as a beam does; without one it ha
   assert.ok(limp > 60, `the limp strip hangs down (tip ${limp.toFixed(1)} mm below the tacks)`);
   assert.ok(Math.abs(stiff - beam) < 0.25 * beam, `the stiff strip droops ${stiff.toFixed(1)} mm; a beam of that rigidity droops ${beam.toFixed(1)}`);
 });
+
+test('measured anisotropic fabric uses validated XPBD tensile data independent of solver iterations', () => {
+  assert.throws(() => fabric({ tensile: { warp: 0, weft: 20 } }), /tensile\.warp must be greater than zero/);
+  assert.throws(() => fabric({ shearRigidity: -1 }), /shearRigidity must be greater than zero/);
+  assert.throws(() => fabric({ damping: 2 }), /damping must be from 0 to 1/);
+  const measured = fabric({ name: 'test-weave', arealDensity: 180, thickness: 0.4, tensile: { warp: 40, weft: 8 }, shearRigidity: 3, rigidity: { warp: 0.2, weft: 0.05 }, damping: 0.04 });
+  assert.equal(measured.weight, 180); assert.equal(measured.tensile.warp, 40); assert.equal(measured.rigidity.weft, 0.05);
+
+  const strainAt = (iterations) => {
+    const scope = beginBrepScope();
+    try {
+      const checked = [], g = softNamespace(checked, []).garment('measured');
+      g.piece('strip', rect(40, 160), measured, { grid: 20, grain: 0 })
+        .place([0, 0, 0], [1, 0, 0], [0, 0, -1])
+        .pin([0, 0], [0, 0, 0]).pin([40, 0], [40, 0, 0]);
+      g.make({ steps: 500, iterations, settle: 1000, wall: 5 });
+      return row(checked, 'strip stretch').value;
+    } finally { scope.dispose(); }
+  };
+  const two = strainAt(2), eight = strainAt(8);
+  assert.ok(two < 10 && eight < 10, `measured strip strains remain bounded (${two}%, ${eight}%)`);
+  assert.ok(Math.abs(two - eight) < 1, `XPBD response is iteration-stable (${two}% at 2, ${eight}% at 8)`);
+});

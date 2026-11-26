@@ -199,8 +199,8 @@ soft — softgoods the way CLO works a garment: pieces cut flat from fabric, sew
   'name  cut N  fabric  W x H mm  allowance a' on TEXT). THE PATTERN IS THE DELIVERABLE: the sewer cuts from the DXF,
   so get names, quantities, allowances, notches and lengths right first; the drape is a rough picture of how the pieces
   sit (it settles to the rest shape; it is not an animation). mm throughout.
-  soft.fabric('cordura-500d' | 'nylon-210d' | 'spacer-mesh' | 'eva-10mm' | {weight g/m², thickness, stretch, shear, bend 0..1, friction, maxStretch %, rigidity N·mm})
-    rigidity is a MEASURED bending stiffness and replaces the bend factor: the fabric's weight in N/mm² times its bending length cubed (the
+  soft.fabric('cordura-500d' | 'nylon-210d' | 'spacer-mesh' | 'eva-10mm' | {weight/arealDensity g/m², thickness mm, stretch/shear/bend 0..1, friction, damping 0..1, maxStretch %, tensile:{warp,weft} N/mm, shearRigidity N/mm, rigidity N·mm | {warp,weft}})
+    tensile and shearRigidity are measured extensional stiffnesses solved as XPBD compliance (stable across solver iteration counts); rigidity is a MEASURED bending stiffness and replaces the bend factor: the fabric's weight in N/mm² times its bending length cubed (the
     bending length is half the overhang at which a strip droops 41.5°, ASTM D1388). A cantilever of it then droops what a beam does, so a
     panel holds or loses its shape as the real cloth would. Without it bend is a solver factor and the shape is only a picture.
   soft.avatar({chest: 1000, waist: 860, hip: 980, torso: 480, shoulders: 400, neck: 390, head: 230, arm: 300})  a mannequin to
