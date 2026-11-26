@@ -5,11 +5,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { GraphError } from './errors.js';
 import { exportSoftgoods } from './softgoods-export.js';
-import { gradePattern } from './softgoods-operations.js';
+import { gradeDocument, gradePattern } from './softgoods-operations.js';
 import { makeMarkers, markerDXF, markerSVG, markerSummary, sizeSet } from './softgoods-marker.js';
 import { billOfMaterials, bomPage } from './softgoods-bom.js';
 import { patternSVG, printHTML } from './softgoods-print.js';
-import { astmStyleDXF, ASTM_STYLE } from './softgoods-astm.js';
+import { astmStyleDXF, astmStyleOf } from './softgoods-astm.js';
+import { trimMarks } from './softgoods-trims.js';
 
 export const PRODUCTION_FORMATS = ['marker', 'bom', 'print', 'svg'];
 
@@ -36,11 +37,11 @@ export function exportProduction(document, dir, name, { formats = [], dxf, width
   if (want('print')) { const options = defined({ paper, margin, overlap, orientation, sizes }); file(`print_${String(paper || 'a4').toLowerCase()}.html`, printHTML(document, { name, ...options })); }
   if (want('svg')) {
     const notes = (p) => (document.annotations || []).filter((a) => a.pattern === p.id);
-    for (const p of document.patterns) file(`${p.id}.svg`, patternSVG(p, notes(p)));
-    for (const g of document.grades || []) for (const p of document.patterns) { const graded = gradePattern(p, { size: g.size, rules: g.rules.filter((r) => r.pattern === p.id).map(({ point, dx, dy }) => ({ point, dx, dy })) }); file(`${graded.id}.svg`, patternSVG({ ...graded, name: `${p.name || p.id} ${g.size}` }, notes(p))); }
+    for (const p of document.patterns) file(`${p.id}.svg`, patternSVG(p, notes(p), trimMarks(document, p.id)));
+    for (const g of document.grades || []) for (const p of document.patterns) { const graded = gradePattern(p, { size: g.size, rules: g.rules.filter((r) => r.pattern === p.id).map(({ point, dx, dy }) => ({ point, dx, dy })) }); file(`${graded.id}.svg`, patternSVG({ ...graded, name: `${p.name || p.id} ${g.size}` }, notes(p), document.trims?.length ? trimMarks(gradeDocument(document, g), p.id) : null)); }
   }
   if (dxf != null && !['astm-style', 'aama-style'].includes(dxf)) throw new GraphError(`Unknown DXF flavour '${dxf}'. Known: astm-style`);
-  if (dxf) { for (const s of sizeSet(document, ['base', ...(document.grades || []).map((g) => g.size)])) file(`astm-style${s.size === 'base' ? '' : `_${s.size.replace(/[^\w.-]+/g, '_')}`}.dxf`, astmStyleDXF(s.document, { name, size: s.size, annotations: document.annotations })); report.astmStyle = ASTM_STYLE; }
+  if (dxf) { for (const s of sizeSet(document, ['base', ...(document.grades || []).map((g) => g.size)])) file(`astm-style${s.size === 'base' ? '' : `_${s.size.replace(/[^\w.-]+/g, '_')}`}.dxf`, astmStyleDXF(s.document, { name, size: s.size, annotations: document.annotations })); report.astmStyle = astmStyleOf(document); }
   const result = exportSoftgoods(document, dir, name, { fit });
   for (const [f, text] of out) { fs.writeFileSync(f, text); result.files.push(f); }
   return { ...result, ...report };

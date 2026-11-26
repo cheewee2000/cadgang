@@ -10,6 +10,7 @@ import { meshPattern } from './softgoods-mesh.js';
 import { resolveSeamCorrespondence } from './softgoods-seams.js';
 import { avatarBody } from './softgoods-arrange.js';
 import { resolveMaterials } from './softgoods-fabrics.js';
+import { closures, trimsInput } from './softgoods-trims.js';
 import { conformLines, physicsInput } from './softgoods-physics.js';
 import { simulate, advance, FOLDING } from '../../web/softgoods-worker.js';
 
@@ -17,8 +18,8 @@ import { simulate, advance, FOLDING } from '../../web/softgoods-worker.js';
  *  The page gets the same from GET /api/softgoods/simulation-input (src/server/softgoods.js); test/softgoods-drape.test.js holds the two equal. */
 export function simulationInput(d, target = 25) {
   target = Math.max(5, Math.min(100, Number(target) || 25));
-  const meshes = d.patterns.map((p) => meshPattern(p, { target, lines: conformLines(d, p) })), seams = resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 });
-  return { revision: d.revision, meshes, seams, attachments: d.attachments || [], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain, shrink: p.shrink, freeze: p.freeze, strengthen: p.strengthen })), ...physicsInput(d, meshes), collisionBody: d.simulation?.avatar ? { ...d.simulation.avatar, ...avatarBody(d.simulation.avatar) } : null };
+  const meshes = d.patterns.map((p) => meshPattern(p, { target, lines: conformLines(d, p) })), shut = closures(d, meshes, { spacing: target / 2 }), seams = [...resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 }), ...shut.seams];
+  return { revision: d.revision, meshes, seams, attachments: [...(d.attachments || []), ...shut.attachments], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain, shrink: p.shrink, freeze: p.freeze, strengthen: p.strengthen })), ...physicsInput(d, meshes), ...trimsInput(d, { spacing: target / 2 }), collisionBody: d.simulation?.avatar ? { ...d.simulation.avatar, ...avatarBody(d.simulation.avatar) } : null };
 }
 
 // The cloth is stepped CHUNK steps at a time and has settled when its vertices moved, root mean square, less than

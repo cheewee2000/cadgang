@@ -4,8 +4,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { GraphError } from './errors.js';
-import { checkDesign, gradePattern, seamLengths } from './softgoods-operations.js';
+import { checkDesign, gradeDocument, gradePattern, seamLengths } from './softgoods-operations.js';
 import { billOfMaterials, bomHTML } from './softgoods-bom.js';
+import { trimMarks, trimsReport, trimsHTML } from './softgoods-trims.js';
 import { seamSideLabel } from './softgoods-seams.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -105,8 +106,10 @@ export function capDarts(pattern, annotations = []) {
   return p;
 }
 
-/** R12 DXF with exact STITCH geometry and a closed manufacturing CUT contour. */
-export function patternDXF(pattern, annotations = []) {
+/** R12 DXF with exact STITCH geometry and a closed manufacturing CUT contour.
+ *  marks (trimMarks of the document for this pattern, or null) adds the trims: a cross and a POINT at every drilled spot on DRILL,
+ *  extents and outlines on TRIM, stitch rows on TOPSTITCH. Without marks the file is what it always was. */
+export function patternDXF(pattern, annotations = [], marks = null) {
   const entities = [];
   for (const loop of pattern.contours) for (const id of loop) { const q = sampleSegment(pattern, pattern.segments.find((s) => s.id === id)); for (let i = 1; i < q.length; i++) entities.push(line(q[i - 1], q[i], 'STITCH')); }
   for (const q of cutContours(capDarts(pattern, annotations))) for (let i = 0; i < q.length; i++) entities.push(line(q[i], q[(i + 1) % q.length], 'CUT'));
@@ -132,14 +135,20 @@ export function patternDXF(pattern, annotations = []) {
   entities.push(line([c[0] - d[0], c[1] - d[1]], [c[0] + d[0], c[1] + d[1]], 'GRAIN'));
   entities.push(text([c[0], c[1]], `${pattern.name || pattern.id}  CUT ${pattern.cut || 1}  ${pattern.material || ''}`, Math.max(3, span / 12)));
   const layerNames = ['STITCH', 'CUT', 'ALLOWANCE', 'NOTCH', 'GRAIN', 'TEXT', 'DART', 'PLEAT', 'FOLD', 'INTERNAL'];
-  const layers = layerNames.map((n, i) => `0\nLAYER\n2\n${n}\n70\n0\n62\n${[3,7,2,6,4,7,1,5,6,8][i]}\n6\nCONTINUOUS`).join('\n');
+  if (marks) {
+    for (const l of marks.lines) entities.push(line(l.a, l.b, l.layer));
+    for (const d of marks.drills) entities.push(`0\nPOINT\n8\nDRILL\n10\n${d.at[0]}\n20\n${d.at[1]}\n30\n0`);
+    for (const t of marks.texts) entities.push(text(t.at, t.value, t.height));
+    layerNames.push('DRILL', 'TRIM', 'TOPSTITCH');
+  }
+  const layers = layerNames.map((n, i) => `0\nLAYER\n2\n${n}\n70\n0\n62\n${[3,7,2,6,4,7,1,5,6,8,1,5,3][i]}\n6\nCONTINUOUS`).join('\n');
   return `0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n${layerNames.length}\n${layers}\n0\nENDTAB\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n${entities.join('\n')}\n0\nENDSEC\n0\nEOF\n`;
 }
 
 export function techPack(document, name = 'softgoods', { fit = null } = {}) {
   const patterns = document.patterns.map((p) => ({ id: p.id, name: p.name || p.id, material: p.material || '', cut: p.cut || 1, grain: p.grain || null, allowances: p.allowances || {}, notches: p.notches || [], annotations: (document.annotations || []).filter((a) => a.pattern === p.id), segments: p.segments.map((s) => ({ id: s.id, type: s.type, lengthMm: +segmentLength(p, s).toFixed(2) })) }));
   const measured = new Map(seamLengths(document).map((q) => [q.id, q])), seams = document.seams.map((s) => ({ ...s, lengthAmm: measured.get(s.id).lengthA, lengthBmm: measured.get(s.id).lengthB }));
-  return { schema: 'cadgang.softgoods-tech-pack.v1', name, generatedAt: new Date().toISOString(), revision: document.revision, materials: document.materials || {}, patterns, seams, constraints: document.constraints || [], annotations: document.annotations || [], sizes: (document.grades || []).map((g) => g.size), check: checkDesign(document), bom: billOfMaterials(document), notes: ['All dimensions mm.', 'DXF STITCH geometry is authoritative.', 'DXF CUT geometry is the closed seam-allowance cutting boundary; ALLOWANCE records the per-edge schedule.'], ...(fit ? { fit } : {}) };
+  return { schema: 'cadgang.softgoods-tech-pack.v1', name, generatedAt: new Date().toISOString(), revision: document.revision, materials: document.materials || {}, patterns, seams, constraints: document.constraints || [], annotations: document.annotations || [], sizes: (document.grades || []).map((g) => g.size), check: checkDesign(document), bom: billOfMaterials(document), ...(document.trims?.length ? { trims: trimsReport(document) } : {}), notes: ['All dimensions mm.', 'DXF STITCH geometry is authoritative.', 'DXF CUT geometry is the closed seam-allowance cutting boundary; ALLOWANCE records the per-edge schedule.', ...(document.trims?.length ? ['DXF DRILL holds a cross and a POINT at every button, snap, rivet and eyelet; TRIM holds trim extents, outlines and buttonholes; TOPSTITCH holds stitch rows and bartacks.'] : [])], ...(fit ? { fit } : {}) };
 }
 
 // The optional fit section: a report from src/core/softgoods-measure.js fitReport, which costs a drape, so it is there only when asked for.
@@ -154,18 +163,18 @@ export function techPackHTML(pack) {
   const seams = pack.seams.map((s) => `<tr><td>${esc(s.id)}</td><td>${esc(seamSideLabel(s.a))}</td><td>${esc(seamSideLabel(s.b))}</td><td>${s.lengthAmm ?? ''}</td><td>${s.lengthBmm ?? ''}</td><td>${esc(s.kind || 'plain')}</td><td>${flag(pack.check?.seams.find((q) => q.id === s.id))}</td></tr>`).join('');
   const measured = (list) => list.map((c) => `<li>${esc(c.name || c.id)} · ${esc(c.type)} · target ${c.target} mm · measured ${c.measured} mm · ${c.withinTolerance ? 'OK' : `OUT BY ${c.delta} mm`}</li>`).join('');
   const sizes = (pack.check?.sizes || []).map((z) => `<tr><td>${esc(z.size)}</td><td>${z.ok ? 'OK' : 'CHECK'}</td><td>${esc(z.seams.filter((q) => !q.ok).map((q) => `${q.id}: ${q.lengthA} / ${q.lengthB} mm`).join('; '))}</td><td>${esc(z.constraints.filter((c) => !c.withinTolerance).map((c) => `${c.name || c.id}: ${c.measured} mm`).join('; '))}</td></tr>`).join('');
-  return `<!doctype html><meta charset="utf-8"><title>${esc(pack.name)} tech pack</title><style>body{font:13px monospace;margin:32px;color:#111}h1{font-size:22px}h2{margin-top:32px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:6px;text-align:left}small{color:#666}@media print{body{margin:12mm}}</style><h1>${esc(pack.name)} · TECH PACK</h1><small>Revision ${pack.revision} · ${esc(pack.generatedAt)}</small><h2>PATTERN SCHEDULE</h2><table><tr><th>Pattern</th><th>Material</th><th>Cut</th><th>Allowances</th><th>Notches</th><th>Annotations</th></tr>${rows}</table><h2>SEAM SCHEDULE</h2><table><tr><th>Seam</th><th>A</th><th>B</th><th>A mm</th><th>B mm</th><th>Type</th><th>Lengths</th></tr>${seams}</table><h2>MEASUREMENT CONSTRAINTS</h2><ul>${measured(pack.check?.constraints || [])}</ul>${sizes ? `<h2>GRADED SIZES</h2><table><tr><th>Size</th><th>Check</th><th>Seams that no longer match</th><th>Measurements out of tolerance</th></tr>${sizes}</table>` : ''}${pack.bom ? bomHTML(pack.bom) : ''}${pack.fit ? fitHTML(pack.fit) : ''}<h2>NOTES</h2><ol>${pack.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ol>`;
+  return `<!doctype html><meta charset="utf-8"><title>${esc(pack.name)} tech pack</title><style>body{font:13px monospace;margin:32px;color:#111}h1{font-size:22px}h2{margin-top:32px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:6px;text-align:left}small{color:#666}@media print{body{margin:12mm}}</style><h1>${esc(pack.name)} · TECH PACK</h1><small>Revision ${pack.revision} · ${esc(pack.generatedAt)}</small><h2>PATTERN SCHEDULE</h2><table><tr><th>Pattern</th><th>Material</th><th>Cut</th><th>Allowances</th><th>Notches</th><th>Annotations</th></tr>${rows}</table><h2>SEAM SCHEDULE</h2><table><tr><th>Seam</th><th>A</th><th>B</th><th>A mm</th><th>B mm</th><th>Type</th><th>Lengths</th></tr>${seams}</table><h2>MEASUREMENT CONSTRAINTS</h2><ul>${measured(pack.check?.constraints || [])}</ul>${sizes ? `<h2>GRADED SIZES</h2><table><tr><th>Size</th><th>Check</th><th>Seams that no longer match</th><th>Measurements out of tolerance</th></tr>${sizes}</table>` : ''}${pack.trims ? trimsHTML(pack.trims) : ''}${pack.bom ? bomHTML(pack.bom) : ''}${pack.fit ? fitHTML(pack.fit) : ''}<h2>NOTES</h2><ol>${pack.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ol>`;
 }
 
 export function exportSoftgoods(document, dir, name, { fit = null } = {}) {
   if (!/^[\w.-]+$/.test(name)) throw new GraphError('Export name may contain letters, digits, dot, dash and underscore only');
   if (!document.patterns.length) throw new GraphError('No softgoods patterns to export');
   fs.mkdirSync(dir, { recursive: true }); const files = [];
-  for (const p of document.patterns) { const file = path.join(dir, `${name}_${p.id}.dxf`); fs.writeFileSync(file, patternDXF(p, (document.annotations || []).filter((a) => a.pattern === p.id))); files.push(file); }
+  for (const p of document.patterns) { const file = path.join(dir, `${name}_${p.id}.dxf`); fs.writeFileSync(file, patternDXF(p, (document.annotations || []).filter((a) => a.pattern === p.id), trimMarks(document, p.id))); files.push(file); }
   // A graded size is the same pattern with its points moved: same segments, allowances, notches and annotations.
-  for (const g of document.grades || []) for (const p of document.patterns) { const graded = gradePattern(p, { size: g.size, rules: g.rules.filter((r) => r.pattern === p.id).map(({ point, dx, dy }) => ({ point, dx, dy })) }), file = path.join(dir, `${name}_${graded.id}.dxf`); fs.writeFileSync(file, patternDXF({ ...graded, name: `${p.name || p.id} ${g.size}` }, (document.annotations || []).filter((a) => a.pattern === p.id))); files.push(file); }
+  for (const g of document.grades || []) for (const p of document.patterns) { const graded = gradePattern(p, { size: g.size, rules: g.rules.filter((r) => r.pattern === p.id).map(({ point, dx, dy }) => ({ point, dx, dy })) }), file = path.join(dir, `${name}_${graded.id}.dxf`); fs.writeFileSync(file, patternDXF({ ...graded, name: `${p.name || p.id} ${g.size}` }, (document.annotations || []).filter((a) => a.pattern === p.id), document.trims?.length ? trimMarks(gradeDocument(document, g), p.id) : null)); files.push(file); }
   const pack = techPack(document, name, { fit }), json = path.join(dir, `${name}_tech-pack.json`), html = path.join(dir, `${name}_tech-pack.html`); fs.writeFileSync(json, JSON.stringify(pack, null, 2)); fs.writeFileSync(html, techPackHTML(pack)); files.push(json, html);
-  return { name, files, patterns: document.patterns.length, seams: document.seams.length, sizes: pack.sizes, check: { ok: pack.check.ok, seams: pack.check.seams.filter((q) => !q.ok), constraints: pack.check.constraints.filter((c) => !c.withinTolerance), sizes: pack.check.sizes.filter((z) => !z.ok).map((z) => z.size) } };
+  return { name, files, patterns: document.patterns.length, seams: document.seams.length, sizes: pack.sizes, check: { ok: pack.check.ok, seams: pack.check.seams.filter((q) => !q.ok), constraints: pack.check.constraints.filter((c) => !c.withinTolerance), sizes: pack.check.sizes.filter((z) => !z.ok).map((z) => z.size), ...(pack.check.trims ? { trims: pack.check.trims.filter((t) => !t.ok) } : {}), ...(pack.check.warnings ? { warnings: pack.check.warnings } : {}) } };
 }
 
 // The same R12 writer, for exports that are not one pattern (the marker lays many pieces in one file). layers: [[name, AutoCAD colour index], ...]; blocks: whole BLOCK ... ENDBLK records.

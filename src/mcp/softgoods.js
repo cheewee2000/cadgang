@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { FABRICS } from '../core/softgoods-fabrics.js';
+import { SEAM_KINDS, TRIM_KINDS } from '../core/softgoods-trims.js';
 
 const ref = z.object({ pattern: z.string(), segment: z.string().optional(), segments: z.array(z.string()).min(1).optional(), from: z.number().min(0).max(1).optional(), to: z.number().min(0).max(1).optional() });
 const point = z.object({ id: z.string(), x: z.number(), y: z.number() });
@@ -33,6 +34,19 @@ const annotation = z.object({ id: z.string(), type: z.enum(['dart', 'pleat', 'fo
 const grade = z.object({ size: z.string(), rules: z.array(z.object({ pattern: z.string(), point: z.string(), dx: z.number(), dy: z.number() })) });
 const drapeOptions = z.object({ target: z.number().min(5).max(100).optional().describe('Mesh edge length, mm (25)'), steps: z.number().int().positive().optional().describe('Most solver steps to run (600)'), tolerance: z.number().positive().optional().describe('Settled when the cloth moves less than this, mm per step root mean square (0.02)') });
 const drapePoint = z.object({ pattern: z.string(), point: z.string().optional(), at: z.array(z.number()).length(2).optional() });
+const edge = ref.extend({ contour: z.number().int().nonnegative().optional() });
+const spot = z.object({ pattern: z.string(), u: z.number().optional(), v: z.number().optional(), point: z.string().optional(), segment: z.string().optional(), t: z.number().min(0).max(1).optional(), inset: z.number().optional() });
+const trimShape = {
+  id: z.string(), kind: z.string(), name: z.string().optional(), spec: z.record(z.any()).optional(), notes: z.string().optional(),
+  qty: z.number().int().positive().optional(), supplier: z.string().optional(), partNumber: z.string().optional(), unitPrice: z.number().nonnegative().optional(), pricePerMeter: z.number().nonnegative().optional(),
+  at: spot.optional(), along: z.array(edge).min(1).optional(), path: z.object({ pattern: z.string(), points: z.array(z.union([z.string(), z.array(z.number()).length(2)])).min(2).optional(), line: z.string().optional(), closed: z.boolean().optional() }).optional(), elastic: z.string().optional(),
+  mate: z.union([spot, z.array(edge).min(1)]).optional(), flip: z.boolean().optional(), closed: z.boolean().optional(),
+  count: z.number().int().positive().optional(), pitch: z.number().positive().optional(), margin: z.union([z.number().nonnegative(), z.array(z.number().nonnegative()).length(2)]).optional(), inset: z.number().optional(), mateInset: z.number().optional(),
+  length: z.number().positive().optional(), hardware: z.array(z.object({ kind: z.string(), id: z.string().optional(), name: z.string().optional(), qty: z.number().int().positive().optional(), unitPrice: z.number().nonnegative().optional(), supplier: z.string().optional(), partNumber: z.string().optional(), at: z.union([z.number(), z.string()]).optional(), spec: z.record(z.any()).optional() })).optional(),
+};
+const trim = z.object(trimShape);
+// An update names only what changes; null takes a field (or a spec key) away.
+const trimPatch = z.object(Object.fromEntries(Object.entries(trimShape).map(([k, v]) => [k, v.nullable()]))).partial();
 const avatar = z.object({ height: z.number().positive(), chest: z.number().positive(), depth: z.number().positive().optional(), shoulders: z.number().positive().optional(), ease: z.number().nonnegative().optional() });
 
 const GUIDE = `Prompt-first softgoods design. Write the complete structured design, then the user reviews it draped in 3D and exports manufacturing patterns and a tech pack. The 2D pattern is authoritative; simulation never changes it. All lengths are mm.
@@ -48,6 +62,10 @@ Materials are what the cloth preview uses: arealDensity g/m², thickness mm, ten
 Production. A material may carry rollWidth (usable mm, 1500 assumed without one) and pricePerMeter (per running metre of roll) or pricePerSqm. A pattern is cut its cut quantity of times; mirror:true flips every second copy (cut 2, mirror: a left and a right). The export can lay markers (the cut pieces nested on the roll, grain along it, with yield), write a bill of materials (cloth by net and consumed area, weight, cost, seam length by kind, a thread estimate), a 1:1 tiled print and SVGs.
 
 Internal lines. internalLines on a pattern are lines drawn on the piece (a stitch line, a pocket placement): a point pair [a, b] or {id, type: line|arc|bezier, a, b, c | c1, c2} using the pattern's own points. They must stay on the material and are exported on the DXF layer INTERNAL.
+
+Seam kinds. kind is free text; these are known, with the stitch rows the thread estimate counts and the least allowance the check warns below: ${Object.entries(SEAM_KINDS).map(([k, v]) => `${k} (${v.rows} row${v.rows > 1 ? 's' : ''}, usually ${v.allowance} mm, at least ${v.min})`).join(', ')}.
+
+Trims and hardware are trims: [{id, kind, spec, ...placement}], kept on a set only if you send them back. Add, change and remove one at a time with cadgang_softgoods_trim, which explains placement and returns each trim's derived length and positions.
 
 Edits. cadgang_softgoods_edit does one pattern-making operation on the stored design, so a mirror, split, dart or pleat does not mean rewriting every point: use it to change a design, and set to write a new one.
 
@@ -70,7 +88,50 @@ action:
 - autoNotch {seams?: [ids], fractions?: [0..1], every?: mm, ends?, depth?}: matched notches on both sides of every seam (or the named ones): at its ends, and at fractions (default the middle) or every so many mm of side a. The other side's notch is where the seam's flip, ease and correspondence put it. Running it again adds nothing.`;
 const xy = z.array(z.number()).length(2), place = z.union([z.string(), z.object({ segment: z.string(), at: z.number().min(0).max(1) })]), pointOrXY = z.union([z.string(), xy]);
 
+const TRIMS = `Trims and hardware on the softgoods design: one trim per call, placed by pattern, segment and point ids. All lengths mm. Every answer is the whole list, each trim with its derived geometry (lengthMm measured on the pattern, cutLengthMm to buy or cut, positions and mate positions in pattern mm, count per unit) and the check.
+
+Kinds. At a spot: ${Object.keys(TRIM_KINDS).filter((k) => TRIM_KINDS[k].place === 'point').join(', ')}; any other kind (cord-lock, toggle, hook...) is hardware at a spot. Along a length: ${Object.keys(TRIM_KINDS).filter((k) => TRIM_KINDS[k].place === 'length').join(', ')}.
+
+Placement, exactly one of:
+- at: one spot. {pattern, u, v} in pattern mm, {pattern, point}, or {pattern, segment, t 0..1, inset mm into the piece}.
+- along: a run of edges measured as one length. Each entry is written like a seam side: {pattern, segment, from?, to?}, or {pattern, segments: [ids that follow one another], from?, to?} with from a fraction of the first and to of the last; or {pattern, contour: 0} for a whole outline (binding all round).
+- path: a line on a piece, {pattern, points: [point id | [x, y], ...], closed?} or {pattern, line: '<id of one of its internalLines>'}. For webbing sewn across a panel or a topstitch row that follows no edge.
+- elastic (kind elastic only): the id of the design's own elastic, an elastics[] entry or a seam with elastic. The cloth preview gathers by that entry's ratio and the trim adds what is bought: width, cut length, price. An elastic trim added along one whole segment, or on a path between two point ids, with spec.ratio makes that elastics[] entry itself (same id) and points at it; updating its spec.ratio changes the entry, removing the trim removes it.
+A point trim along an edge is a row: give count or pitch (and margin, one number or [start, end], for the first and last; without it a count is spread with half a pitch at each end) and inset for how far in from the edge.
+mate is the other half: for a row, the edge the buttonholes or sockets go on (they land at the same fractions; flip: true when the two edges are drawn in opposite directions, as with a seam); for one spot, another spot; for a zipper or hook-and-loop, the second edge. A zipper whose two sides differ in length fails the check.
+closed: a zipper, hook-and-loop, button or snap with a mate is closed in the cloth preview (the zipper as a seam between its two edges, each button or snap as a tack to its mate); closed: false leaves it open, a jacket worn unzipped. Any other trim with a mate closes only with closed: true. A closure that fails its check (a zipper whose sides differ) is left open in the preview.
+Trims follow cadgang_softgoods_edit: one on an edge that is cut (a dart, a pleat, a split) runs over both parts, and a piece cut in two takes its trims to the half they sit on. mirror and unfold do not copy trims: add the other hand's.
+
+spec holds what the thing is; all of it shows in the tech pack. Keys that change the result:
+- button: diameter (required), thickness (3), buttonholeLength (diameter + thickness), buttonhole 'parallel' (default) or 'perpendicular' to the edge.
+- snap, rivet, eyelet, grommet: diameter. label: width, height.
+- zipper: chain ('#5'), tapeWidth (whole closed tape; typical widths are assumed for #3 25, #5 32, #8 38, #10 40), separating, sliders, lengths ([150, 180, 200...]: cutLengthMm snaps to the nearest and the check says how far off it is), allowance (least seam allowance on its edges; default three quarters of one tape side).
+- binding: finishedWidth, tapeWidth, overlap, cornerAllowance per corner (corners are counted). piping: flange.
+- elastic: width, overlap, and ratio (relaxed length over the edge it is sewn to, 0.8 = 20% shorter) unless it points at the design's own elastic. drawcord: width (the channel), tailLengths [start, end].
+- topstitch: rows, offset (from the edge: 6, or 0 on a path), spacing between rows (6), stitchLength. Counted in the thread estimate.
+- webbing, hook-and-loop: width, offset, tailLengths [start, end] free beyond the sewn part, bartacks (false for none), bartackInset. hardware: [{kind: 'buckle' | 'ladder-lock' | 'd-ring' | ..., qty, unitPrice, partNumber, at}] is what is threaded on it.
+- For the cloth preview: mass (g, a point trim), massPerMeter (g), rigidity (N·mm), strength (N/mm, how hard a button or snap holds).
+Sizes go in spec, not beside it. length (beside spec) overrides the derived cut length. qty overrides the count per unit, which is otherwise the marks × the cut quantity of the piece. unitPrice (each) or pricePerMeter, supplier and partNumber fill the bill of materials.
+
+Exports. The pattern DXFs gain layers DRILL (a cross and a POINT at each button, snap, rivet, eyelet), TRIM (zipper tape and binding extents, webbing outlines and centre lines, buttonholes, labels) and TOPSTITCH (rows, bartacks); the 1:1 print and the marker draw them; the astm-style DXF puts drill POINTs on layer 13 and the rest on 8. The tech pack gains a trims schedule and a placement drawing per piece, and the bill of materials counts, lengths and costs. A design without trims exports exactly as before.`;
+
 export function registerSoftgoodsTools(server, { call, ok, fail }) {
+  server.registerTool('cadgang_softgoods_trim', {
+    title: 'Add, change, remove or list softgoods trims and hardware', description: TRIMS,
+    inputSchema: {
+      action: z.enum(['add', 'update', 'remove', 'list']),
+      id: z.string().optional().describe('The trim to update or remove.'),
+      trim: trimPatch.optional().describe('add: the whole trim (id, kind, spec and one placement). update: only the fields that change; spec is merged key by key and null removes a field.'),
+    }, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  }, async ({ action, id, trim: body }) => {
+    try {
+      if (action === 'list') return ok(await call('/softgoods/trims'));
+      if (action === 'add') return ok(await call('/softgoods/trims', { method: 'POST', body: body || {} }));
+      if (!id) throw new Error(`${action} needs the id of the trim`);
+      return ok(await call(`/softgoods/trims/${encodeURIComponent(id)}`, action === 'remove' ? { method: 'DELETE' } : { method: 'PATCH', body: body || {} }));
+    } catch (e) { return fail(e); }
+  });
+
   server.registerTool('cadgang_softgoods_get', {
     title: 'Get the softgoods design', description: `${GUIDE}\n\nReturns the complete persistent design and its check.`, inputSchema: { fit: z.boolean().optional().describe('Also drape the design and return its fit report in check.fit (takes seconds)') },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -86,7 +147,7 @@ export function registerSoftgoodsTools(server, { call, ok, fail }) {
       elastics: z.array(z.object({ id: z.string(), pattern: z.string(), segment: z.string().optional(), line: z.union([z.string(), z.array(z.string()).length(2)]).optional(), ...elastic })).optional(),
       stuffing: z.array(z.object({ id: z.string(), patterns: z.array(z.string()).min(1), pressure: z.number().nonnegative().optional(), volume: z.number().positive().optional() })).optional(),
       arrangement: z.array(z.object({ pattern: z.string(), position: z.array(z.number()).length(3), rotation: z.array(z.number()).length(3), layer: z.number().optional() })).optional(),
-      constraints: z.array(constraint).optional(), annotations: z.array(annotation).optional(), grades: z.array(grade).optional(), avatar: avatar.optional(),
+      constraints: z.array(constraint).optional(), annotations: z.array(annotation).optional(), grades: z.array(grade).optional(), trims: z.array(trim).optional(), avatar: avatar.optional(),
     }, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   }, async ({ avatar: body, ...design }) => { try { const d = await call('/softgoods/document', { method: 'PUT', body: { version: 1, ...design, simulation: { status: 'not_run', ...(body ? { avatar: body } : {}) } } }); return ok({ revision: d.revision, patterns: d.patterns.length, seams: d.seams.length, avatar: d.simulation?.avatar || null, arrangement: d.arrangement, check: await call('/softgoods/check') }); } catch (e) { return fail(e); } });
 
@@ -110,7 +171,7 @@ export function registerSoftgoodsTools(server, { call, ok, fail }) {
     inputSchema: {
       name: z.string().regex(/^[\w.-]+$/),
       formats: z.array(z.enum(['marker', 'bom', 'print', 'svg', 'glb', 'obj', 'fit'])).optional(),
-      dxf: z.enum(['astm-style', 'aama-style']).optional().describe('Also write one DXF per size with every piece as a block on the numbered ASTM D6673 layers (1 boundary, 4 notches, 7 grain, 8 internal lines, 11 cutouts, 14 sew lines, 15 annotation). The layer numbers follow a published summary of the standard; the text labels, notch entities and units are not checked against it, and the mandatory validation layers 84-87 are not written. The result lists the mapping as astmStyle.'),
+      dxf: z.enum(['astm-style', 'aama-style']).optional().describe('Also write one DXF per size with every piece as a block on the numbered ASTM D6673 layers (1 boundary, 4 notches, 7 grain, 8 internal lines, 11 cutouts, 14 sew lines, 15 annotation; with trims, 13 drill holes as POINTs and trim lines on 8). The layer numbers follow a published summary of the standard; the text labels, notch entities and units are not checked against it, and the mandatory validation layers 84-87 are not written. The result lists the mapping as astmStyle.'),
       width: z.union([z.number().positive(), z.record(z.number().positive())]).optional().describe('Usable roll width mm, for every material or {material: mm}. Default: the material\'s rollWidth, else 1500.'),
       gap: z.number().nonnegative().optional().describe('Clear distance between pieces on the marker, mm. Default 3.'),
       turns: z.union([z.literal(180), z.literal(0), z.literal(90), z.literal('free')]).optional().describe('180 (default): grain along the roll, either way up. 0: napped cloth, one way only. 90: quarter turns too. free: any angle, for cloth with no direction.'),

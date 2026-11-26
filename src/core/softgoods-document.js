@@ -11,6 +11,7 @@ import { sampleSegment } from './softgoods-export.js';
 import { insideLoop, segmentDistance } from './softgoods-mesh.js';
 import { seamSide } from './softgoods-seams.js';
 import { validatePhysics, validateTack } from './softgoods-physics.js';
+import { validateTrims, elasticEntry } from './softgoods-trims.js';
 
 const ID = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
 const TYPES = new Set(['line', 'arc', 'bezier']);
@@ -43,7 +44,7 @@ export function inMaterial(loops, p, tolerance = 0.5) {
 }
 /** An internal line is a point pair [a, b] or a segment-shaped {id, type, a, b, ...}; either way, read it as a segment. */
 export const internalSegment = (l) => (Array.isArray(l) ? { type: 'line', a: l[0], b: l[1] } : l);
-const defaults = () => ({ version: 1, revision: 0, materials: {}, patterns: [], seams: [], attachments: [], arrangement: [], constraints: [], annotations: [], grades: [], simulation: { status: 'not_run' } });
+const defaults = () => ({ version: 1, revision: 0, materials: {}, patterns: [], seams: [], attachments: [], arrangement: [], constraints: [], annotations: [], grades: [], trims: [], simulation: { status: 'not_run' } });
 
 export function validateSoftgoodsDocument(value) {
   const d = { ...defaults(), ...clone(value || {}) };
@@ -159,6 +160,9 @@ export function validateSoftgoodsDocument(value) {
     }
   }
   validatePhysics(d, patterns);
+  // Trims and hardware are placed on the patterns above; softgoods-trims.js owns their schema and derives their geometry.
+  if (!Array.isArray(d.trims)) throw new GraphError('trims must be an array');
+  validateTrims(d);
   return d;
 }
 
@@ -202,6 +206,35 @@ export class SoftgoodsDocument {
     id = identifier(id || uid('seam'), 'seam');
     const seam = { id, a: clone(a), b: clone(b), flip: !!flip, ease: Number(ease), kind, correspondence: [] };
     const next = clone(this.data); next.seams.push(seam); validateSoftgoodsDocument(next); this.data = next; this.touch(); return clone(seam);
+  }
+  // Trims go through the same door as everything else: the whole document is validated with the change before it is kept.
+  _commit(next, result) { this.data = validateSoftgoodsDocument(next); this.touch(); return clone(result); }
+  addTrim(trim) {
+    let t = { ...clone(trim || {}), id: identifier(trim?.id || uid(String(trim?.kind || 'trim').replace(/[^a-zA-Z0-9_-]/g, '_')), 'trim') }; const next = clone(this.data), e = elasticEntry(t);
+    if (next.trims.some((x) => x.id === t.id)) throw new GraphError(`Trim '${t.id}' already exists`);
+    // An elastic on one whole edge or between two points is the cloth preview's to gather: its ratio is kept once, in elastics[], and the trim points at it.
+    if (e) {
+      if ((next.elastics ||= []).some((x) => x.id === e.id)) throw new GraphError(`Elastic '${e.id}' already exists: point the trim at it with elastic: '${e.id}'`);
+      const { along, path, spec: { ratio, ...spec }, ...rest } = t; next.elastics.push(e); t = { ...rest, spec, elastic: e.id };
+    }
+    next.trims.push(t); return this._commit(next, t);
+  }
+  /** Fields given replace the trim's own; spec is merged key by key; null removes a field or a spec key. */
+  updateTrim(id, patch = {}) {
+    const next = clone(this.data), t = next.trims.find((x) => x.id === id); if (!t) throw new GraphError(`No trim '${id}'`);
+    if (patch.id != null && patch.id !== id) throw new GraphError('A trim keeps its id: remove it and add another to rename it');
+    const strip = (o) => { for (const k of Object.keys(o)) if (o[k] === null) delete o[k]; return o; };
+    // The ratio of an elastic the trim points at lives on that elastic: a new one is written there.
+    if (t.elastic != null && patch.spec?.ratio != null) { const e = (next.elastics || []).find((x) => x.id === t.elastic) || next.seams.find((x) => x.id === t.elastic)?.elastic; if (e) e.ratio = patch.spec.ratio; patch = { ...patch, spec: { ...patch.spec, ratio: null } }; }
+    Object.assign(t, clone(patch), patch.spec === undefined ? {} : { spec: patch.spec === null ? null : strip({ ...(t.spec || {}), ...clone(patch.spec) }) }); strip(t);
+    return this._commit(next, t);
+  }
+  removeTrim(id) {
+    const next = clone(this.data), i = next.trims.findIndex((x) => x.id === id); if (i < 0) throw new GraphError(`No trim '${id}'`);
+    const [gone] = next.trims.splice(i, 1);
+    // The elastic an elastic trim brought with it (same id) goes with it; one the design already had stays.
+    if (gone.elastic != null && gone.elastic === gone.id && next.elastics) next.elastics = next.elastics.filter((e) => e.id !== gone.id);
+    return this._commit(next, gone);
   }
   updateArrangement(patternId, { position, rotation, layer } = {}) {
     const a = this.data.arrangement.find((x) => x.pattern === patternId); if (!a) throw new GraphError(`Pattern '${patternId}' has no arrangement`);
