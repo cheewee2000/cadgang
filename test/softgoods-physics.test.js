@@ -13,6 +13,9 @@ import { checkDesign } from '../src/core/softgoods-operations.js';
 import { softgoodsRouter } from '../src/server/softgoods.js';
 import { registerSoftgoodsTools } from '../src/mcp/softgoods.js';
 import { simulate } from '../web/softgoods-worker.js';
+import { drapeDocument, simulationInput } from '../src/core/softgoods-drape.js';
+import { editSoftgoods } from '../src/core/softgoods-edit.js';
+import { billOfMaterials } from '../src/core/softgoods-bom.js';
 
 const rect = (id, w, h, extra = {}) => { const s = ['bottom', 'right', 'top', 'left'], p = ['bl', 'br', 'tr', 'tl'], c = [[0, 0], [w, 0], [w, h], [0, h]]; return { id, name: id, material: 'canvas', cut: 1, points: p.map((k, i) => ({ id: `${id}_${k}`, x: c[i][0], y: c[i][1] })), segments: s.map((n, i) => ({ id: `${id}_${n}`, type: 'line', a: `${id}_${p[i]}`, b: `${id}_${p[(i + 1) % 4]}` })), contours: [s.map((n) => `${id}_${n}`)], allowances: {}, notches: [], grain: { angle: 90 }, ...extra }; };
 const canvas = { arealDensity: 340, thickness: 0.6, damping: 0.05 };
@@ -21,7 +24,7 @@ const floor = { shapes: [] };
 async function inputFor(design, target = 25) {
   const doc = new SoftgoodsDocument(null), app = express(); app.use(express.json()); app.use('/s', softgoodsRouter(doc)); const server = app.listen(0);
   const call = async (p, method = 'GET', body) => { const r = await fetch(`http://127.0.0.1:${server.address().port}/s${p}`, { method, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) }), j = await r.json(); if (j.error) throw new Error(j.error); return j; };
-  try { await call('/document', 'PUT', { version: 1, ...design }); return { ...(await call(`/simulation-input?target=${target}`)), check: await call('/check') }; } finally { server.close(); }
+  try { const document = await call('/document', 'PUT', { version: 1, ...design }); return { ...(await call(`/simulation-input?target=${target}`)), check: await call('/check'), document }; } finally { server.close(); }
 }
 // The sleeveless tunic of test/softgoods-review.test.js: two panels, shoulder and side seams, the neck and armholes left open.
 function tunic(points = {}) {
@@ -62,7 +65,7 @@ test('a design that uses none of the new physics simulates exactly as it did', a
 
   // And the server hands such a design to the solver with nothing added.
   const input = await inputFor({ ...design, simulation: { avatar: { height: 1700, chest: 900 } } }, 30);
-  assert.deepEqual(Object.keys(input).sort(), ['arrangement', 'attachments', 'check', 'collisionBody', 'materials', 'meshes', 'patterns', 'revision', 'seams']);
+  assert.deepEqual(Object.keys(input).sort(), ['arrangement', 'attachments', 'check', 'collisionBody', 'document', 'materials', 'meshes', 'patterns', 'revision', 'seams']);
   assert.deepEqual(input.patterns[0], { id: 'front', material: 'canvas', grain: { angle: 90 } }); assert.deepEqual(input.meshes[0], JSON.parse(JSON.stringify(meshes[0])));
   assert.equal(input.check.physics, undefined); assert.equal(simulate(input, 1).stuffing, undefined);
 });
@@ -90,13 +93,52 @@ test('on the body an elastic hem draws a tunic in to its ratio, and an elastic a
   // The hem, 1040 mm round, hangs below the body: nothing stops the elastic and it comes to 0.6 of that.
   const hemmed = await inputFor({ ...tunic(), elastics: ['front', 'back'].map((p) => ({ id: `${p}_hem`, pattern: p, segment: `${p}_bottom`, ratio: 0.6 })), simulation: body }, 40), f = simulate(hemmed, 120);
   within(round(f, hemmed, (m, id) => m.segmentVertices[`${id}_bottom`]), 0.6 * 1040, 0.03, 'the hem');
-  // At the waist, a line drawn across each panel 250 mm up, the body is 828 mm round there and in the way of the same elastic.
-  const waisted = await inputFor({ ...tunic({ wl: [0, 250], wr: [520, 250] }), elastics: ['front', 'back'].map((p) => ({ id: `${p}_waist`, pattern: p, line: [`${p}_wl`, `${p}_wr`], ratio: 0.6 })), simulation: body }, 40), g = simulate(waisted, 120);
+  // At the waist, an internal line drawn across each panel 250 mm up with the internalLine edit and named by the elastic,
+  // the body is 828 mm round and in the way of the same elastic.
+  const lined = ['front', 'back'].reduce((d, p) => editSoftgoods(d, { op: 'internalLine', pattern: p, a: [0, 250], b: [520, 250], id: `${p}_waistline` }), validateSoftgoodsDocument({ version: 1, ...tunic() }));
+  const waisted = await inputFor({ ...lined, elastics: ['front', 'back'].map((p) => ({ id: `${p}_waist`, pattern: p, line: `${p}_waistline`, ratio: 0.6 })), simulation: body }, 40), g = simulate(waisted, 120);
   assert.deepEqual(waisted.elastics[0].chain, meshOf(waisted, 'front').lineVertices[0], 'the mesh follows the line and the elastic lies on it');
   within(round(g, waisted, (m) => m.lineVertices[0]), 828, 0.03, 'the waist, drawn in until it fits the body');
   // Neither strains the cloth more than hanging from the shoulders already does.
   const plain = await inputFor({ ...tunic(), simulation: body }, 40), most = simulate(plain, 120).diagnostics.strain.max;
   assert.ok(f.diagnostics.strain.max < most + 0.01 && g.diagnostics.strain.max < most + 0.01, `strain ${f.diagnostics.strain.max.toFixed(3)} and ${g.diagnostics.strain.max.toFixed(3)} against ${most.toFixed(3)} without elastic`);
+});
+
+test('the server drapes elastic and stuffing as the page simulates them, until they settle, and the bill lists the elastic', async () => {
+  // A strip hung by one end with an elastic down each side, and a pillow held by the corners of its top square, in a preset fabric.
+  const design = { materials: { canvas: { preset: 'nylon-500d', damping: 0.05 } }, patterns: [rect('strip', 40, 300), rect('top', 200, 200), rect('under', 200, 200)],
+    seams: ['bottom', 'right', 'top', 'left'].map((s) => ({ id: `sew_${s}`, a: { pattern: 'top', segment: `top_${s}` }, b: { pattern: 'under', segment: `under_${s}` }, flip: false })),
+    elastics: ['left', 'right'].map((s) => ({ id: `edge_${s}`, pattern: 'strip', segment: `strip_${s}`, ratio: 0.6, stiffness: 0.5 })), stuffing: [{ id: 'fill', patterns: ['top', 'under'], volume: 0.8 }],
+    attachments: [{ id: 'l', pattern: 'strip', at: [0, 300], to: [0, 0, 1000] }, { id: 'r', pattern: 'strip', at: [40, 300], to: [40, 0, 1000] }, ...[[0, 0], [200, 0], [200, 200], [0, 200]].map((c, k) => ({ id: `corner_${k}`, pattern: 'top', at: c, to: [300 + c[0], c[1], 500] }))],
+    arrangement: [{ pattern: 'strip', position: [0, 0, 700], rotation: [90, 0, 0] }, { pattern: 'top', position: [300, 0, 500], rotation: [0, 0, 0] }, { pattern: 'under', position: [300, 0, 490], rotation: [0, 0, 0] }] };
+  const { check, document, ...page } = await inputFor(design), input = simulationInput(document, 25);
+  assert.deepEqual(page, JSON.parse(JSON.stringify(input)), 'the drape starts from what the page is given, elastics and stuffing included');
+  assert.equal(input.elastics.length, 2); assert.equal(input.stuffing[0].id, 'fill'); assert.equal(input.materials.canvas.arealDensity, 270, 'and from the preset fabric, filled in');
+  const drape = drapeDocument(document), f = simulate(input, drape.steps);
+  assert.ok(drape.settled && drape.steps < 300, `settled after ${drape.steps} steps, moving ${drape.residual.toFixed(4)} mm a step, at the pillow's 23 substeps`);
+  for (const p of drape.pieces) assert.deepEqual(p.positions, f.positions.slice(p.off * 3, (p.off + p.count) * 3), `${p.id} is draped where the page's solver puts it`);
+  const strip = drape.pieces[0], edge = meshOf(page, 'strip').segmentVertices.strip_left, length = edge.reduce((n, v, i) => i ? n + dist([0, 1, 2].map((k) => strip.positions[v * 3 + k]), [0, 1, 2].map((k) => strip.positions[edge[i - 1] * 3 + k])) : 0, 0);
+  assert.ok(length > 179 && length < 190, `the elastic edge of the draped strip is ${length.toFixed(1)} mm`); assert.ok(f.stuffing[0].volume > 0.72 && f.stuffing[0].volume <= 0.8, `the draped pillow holds ${f.stuffing[0].volume.toFixed(3)} L`);
+  assert.deepEqual(billOfMaterials(document).trims, [{ kind: 'elastic', id: 'edge_left', count: 1, lengthMm: 180 }, { kind: 'elastic', id: 'edge_right', count: 1, lengthMm: 180 }]);
+});
+
+test('a pleat made by the pleat edit, given an angle, stands creased along its three fold lines in the drape', () => {
+  // The fold angle at every mesh edge along a run of vertices, in degrees, positive toward the face of the pattern.
+  const sub = (a, b) => a.map((v, i) => v - b[i]), cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const folds = (m, chain, at) => chain.slice(1).map((b, k) => { const a = chain[k], opp = []; for (let t = 0; t < m.triangles.length; t += 3) { const tri = [0, 1, 2].map((j) => m.triangles[t + j]); if (tri.includes(a) && tri.includes(b)) opp.push(tri.find((v) => v !== a && v !== b)); }
+    const U = (i) => [m.uv[i * 2], m.uv[i * 2 + 1]], left = (U(b)[0] - U(a)[0]) * (U(opp[0])[1] - U(a)[1]) - (U(b)[1] - U(a)[1]) * (U(opp[0])[0] - U(a)[0]) > 0, [x1, x2, x3, x4] = [opp[left ? 0 : 1], opp[left ? 1 : 0], a, b].map(at), N1 = cross(sub(x1, x3), sub(x1, x4)), N2 = cross(sub(x2, x4), sub(x2, x3)), E = sub(x4, x3);
+    return Math.atan2(-dot(cross(N1, N2), E) / Math.hypot(...E), dot(N1, N2)) * 180 / Math.PI; });
+  const median = (v) => [...v].sort((p, q) => p - q)[Math.floor(v.length / 2)];
+  for (const angle of [90, -90]) {
+    let d = validateSoftgoodsDocument({ version: 1, materials: { canvas: { ...canvas, rigidity: 0.5 } }, patterns: [rect('panel', 300, 200)], seams: [], arrangement: [] });
+    d = editSoftgoods(d, { op: 'pleat', pattern: 'panel', segment: 'panel_top', at: 0.5, intake: 40, bothEnds: true, id: 'tuck' });
+    d.annotations.find((a) => a.id === 'tuck').angle = angle; d.arrangement = [{ pattern: 'panel', position: [0, 0, 1000], rotation: [0, 0, 0] }]; d = validateSoftgoodsDocument(d);
+    // Into the pleat, back on itself at the fold in the middle, and level again: the middle fold turns twice as far, the other way (held 5° short of flat on itself).
+    const input = simulationInput(d, 20), m = input.meshes[0]; assert.deepEqual(input.folds.map((q) => q.angle), [angle, -2 * angle, angle]); assert.equal(m.lineVertices.length, 3);
+    const drape = drapeDocument(d, { target: 20, steps: 120 }), pos = drape.pieces[0].positions, at = (i) => [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]], want = [angle, -Math.sign(angle) * 175, angle];
+    m.lineVertices.forEach((chain, k) => { const got = median(folds(m, chain, at)); assert.ok(Math.abs(got - want[k]) < 8, `fold line ${k + 1} of the ${angle}° pleat is creased ${got.toFixed(0)}°, wanted ${want[k]}°`); });
+    for (const s of drape.seams) for (const pair of s.pairs) { const [a, b] = [pair.a, pair.b].map((side) => side.vertices.reduce((q, v, j) => q.map((x, i) => x + at(v)[i] * side.weights[j]), [0, 0, 0])); assert.ok(dist(a, b) < 2, `pleat seam ${s.id} is sewn shut`); }
+  }
 });
 
 test('an elastic in a seam gathers both of its sides alike', async () => {
@@ -108,6 +150,13 @@ test('an elastic in a seam gathers both of its sides alike', async () => {
   // 140 mm (ruffling out of the floor is what real cloth does, and nothing here starts it). Both sides gather alike and the cloth is not strained.
   const f = simulate({ ...sewn, collisionBody: floor }, 180), sides = [run(f, sewn, 'a', meshOf(sewn, 'a').segmentVertices.a_right), run(f, sewn, 'b', meshOf(sewn, 'b').segmentVertices.b_left)];
   assert.ok(sides[0] > 139 && sides[0] < 175, `the seam drew up from 200 to ${sides[0].toFixed(1)} mm`); within(sides[1], sides[0], 0.01, 'the other side of the seam'); assert.ok(f.diagnostics.strain.max < 0.03);
+  // A seam that sews only part of an edge: 200 mm of strip a to the middle 200 mm of a 300 mm edge of b. The elastic lies on that span of b and nowhere else.
+  const span = await inputFor({ materials: { canvas }, patterns: [rect('a', 40, 200), rect('b', 40, 300)], seams: [{ id: 'join', a: { pattern: 'a', segment: 'a_right' }, b: { pattern: 'b', segment: 'b_left', from: 1 / 6, to: 5 / 6 }, flip: true, elastic: { ratio: 0.7, stiffness: 1 } }],
+    arrangement: [{ pattern: 'a', position: [0, 0, 0.3], rotation: [0, 0, 0] }, { pattern: 'b', position: [41, -50, 0.3], rotation: [0, 0, 0] }] }, 20), onB = span.elastics[1], ys = onB.chain.map((v) => meshOf(span, 'b').uv[v * 2 + 1]);
+  assert.deepEqual([onB.pattern, onB.ratio, onB.stiffness], ['b', 0.7, 0]); assert.ok(Math.min(...ys) >= 50 - 1e-6 && Math.max(...ys) <= 250 + 1e-6 && Math.max(...ys) - Math.min(...ys) >= 160, `the elastic on b runs from ${Math.min(...ys)} to ${Math.max(...ys)} mm of its 300`);
+  assert.deepEqual(span.check.physics.map((p) => [p.id, p.length, p.relaxed]), [['join', 200, 140]]);
+  const h = simulate({ ...span, collisionBody: floor }, 180), drawn = run(h, span, 'a', meshOf(span, 'a').segmentVertices.a_right);
+  assert.ok(drawn < 185 && h.positions.every(Number.isFinite), `the sewn span drew up to ${drawn.toFixed(1)} mm`); assert.ok(h.diagnostics.strain.max < 0.04);
 });
 
 test('the simulation mesh follows a line drawn inside a pattern, and is untouched without one', () => {
@@ -214,6 +263,8 @@ test('the new fields are validated with a reason, checked, and carried by the pr
   bad((d) => { d.elastics = [{ id: 'e', pattern: 'a', segment: 'a_top', line: ['a_bl', 'a_tr'], ratio: 0.6 }]; }, /give segment or line/);
   bad((d) => { d.elastics = [{ id: 'e', pattern: 'a', segment: 'nowhere', ratio: 0.6 }]; }, /missing segment 'a\.nowhere'/);
   bad((d) => { d.elastics = [{ id: 'e', pattern: 'a', line: ['a_bl', 'b_tr'], ratio: 0.6 }]; }, /two different points of pattern 'a'/);
+  bad((d) => { d.elastics = [{ id: 'e', pattern: 'a', line: 'casing', ratio: 0.6 }]; }, /missing internal line 'a\.casing'/);
+  bad((d) => { d.patterns[0].points.push({ id: 'h1', x: 30, y: 60 }, { id: 'h2', x: 60, y: 30 }); d.patterns[0].internalLines = [{ id: 'casing', type: 'bezier', a: 'a_bl', b: 'a_tr', c1: 'h1', c2: 'h2' }]; d.elastics = [{ id: 'e', pattern: 'a', line: 'casing', ratio: 0.6 }]; }, /follows a straight line, and internal line 'casing' is curved \(bezier\)/);
   bad((d) => { d.attachments = [{ id: 't', pattern: 'a', at: [10, 10], to: { pattern: 'c', at: [1, 1] } }]; }, /tacks to missing pattern 'c'/);
   bad((d) => { d.attachments = [{ id: 't', pattern: 'a', at: [10, 10], to: [0, 0, 0], strength: 0 }]; }, /strength must be positive/);
   bad((d) => { d.stuffing = [{ id: 's', patterns: ['a', 'b'] }]; }, /needs a pressure \(Pa\) or a volume \(litres\)/);

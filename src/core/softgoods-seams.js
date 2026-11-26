@@ -17,7 +17,7 @@ export const seamSideLabel = (ref) => { const s = seamSide(ref); return `${s.pat
 /** The length of a span, given the length of each of its segments. */
 export const spanLength = (side, lengths) => lengths.reduce((n, v) => n + v, 0) - side.from * lengths[0] - (1 - side.to) * lengths.at(-1);
 /** The mesh boundary under one seam side: its segments' chains end to end, and where along them the sewn span starts and stops. */
-function sideChain(mesh, ref) {
+export function sideChain(mesh, ref) {
   const side = seamSide(ref), chain = [], cumulative = [], each = []; let run = 0;
   for (const id of side.segments) { const c = mesh?.segmentVertices?.[id]; if (!c) return null; const l = chainLengths(mesh, c); c.forEach((v, i) => { chain.push(v); cumulative.push(run + l.cumulative[i]); }); each.push(l.total); run += l.total; }
   if (!chain.length) return null;

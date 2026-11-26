@@ -5,10 +5,14 @@
 
 import { GraphError } from './errors.js';
 import { segmentLength } from './softgoods-export.js';
+import { seamSide, spanLength, sideChain } from './softgoods-seams.js';
 
 const finite = (v) => v != null && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v));
 const ID = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
 const uv = (at) => Array.isArray(at) && at.length === 2 && at.every(finite);
+// An elastic's line is two point ids, or the id of a straight internal line of its pattern (the internalLine edit makes one).
+const internal = (p, id) => (p.internalLines || []).find((l) => !Array.isArray(l) && l.id === id);
+const linePoints = (p, line) => (typeof line === 'string' ? [internal(p, line).a, internal(p, line).b] : line);
 
 function elastic(e, what) {
   if (!e || typeof e !== 'object' || !finite(e.ratio) || !(Number(e.ratio) > 0 && Number(e.ratio) <= 1)) throw new GraphError(`${what} needs a ratio above 0 and at most 1: its relaxed length as a share of the cloth it is sewn to`);
@@ -31,7 +35,8 @@ export function validatePhysics(d, patterns) {
     const p = patterns.get(e.pattern); if (!p) throw new GraphError(`Elastic '${e.id}' refers to missing pattern '${e.pattern}'`);
     if ((e.segment != null) === (e.line != null)) throw new GraphError(`Elastic '${e.id}' runs along one outline segment or one line between two points: give segment or line`);
     if (e.segment != null && !p.segments.has(e.segment)) throw new GraphError(`Elastic '${e.id}' refers to missing segment '${e.pattern}.${e.segment}'`);
-    if (e.line != null && !(Array.isArray(e.line) && e.line.length === 2 && e.line[0] !== e.line[1] && e.line.every((q) => p.points.has(q)))) throw new GraphError(`Elastic '${e.id}' line must be two different points of pattern '${e.pattern}'`);
+    if (typeof e.line === 'string') { const l = internal(p, e.line); if (!l) throw new GraphError(`Elastic '${e.id}' refers to missing internal line '${e.pattern}.${e.line}'`); if ((l.type || 'line') !== 'line') throw new GraphError(`Elastic '${e.id}' follows a straight line, and internal line '${e.line}' is curved (${l.type})`); }
+    else if (e.line != null && !(Array.isArray(e.line) && e.line.length === 2 && e.line[0] !== e.line[1] && e.line.every((q) => p.points.has(q)))) throw new GraphError(`Elastic '${e.id}' line must be two different points of pattern '${e.pattern}', or the id of one of its internal lines`);
     elastic(e, `Elastic '${e.id}'`);
   }
   for (const a of d.attachments) {
@@ -63,10 +68,12 @@ export function validateTack(a, patterns) {
 }
 
 // The straight lines the mesh of a pattern must follow, in a fixed order: creased folds, then elastics drawn between two points.
+// A pleat's lines fold one way and then the other, and every fold between its first and last turns twice as far: the cloth goes
+// up into the pleat, back on itself at each fold, and comes down level again. So angle 90 stands a pleat square to the cloth.
 function linesOf(d, p) {
   const at = (id) => { const q = p.points.find((x) => x.id === id); return [q.x, q.y]; }, out = [];
-  for (const a of d.annotations || []) if (a.pattern === p.id && a.angle != null && Number(a.angle) !== 0) a.lines.forEach((pair, k) => out.push({ id: a.id, a: at(pair[0]), b: at(pair[1]), angle: Number(a.angle) * (a.type === 'pleat' && k % 2 ? -1 : 1) }));
-  for (const e of d.elastics || []) if (e.pattern === p.id && e.line) out.push({ id: e.id, a: at(e.line[0]), b: at(e.line[1]), ratio: Number(e.ratio), stiffness: e.stiffness });
+  for (const a of d.annotations || []) if (a.pattern === p.id && a.angle != null && Number(a.angle) !== 0) a.lines.forEach((pair, k) => out.push({ id: a.id, a: at(pair[0]), b: at(pair[1]), angle: Number(a.angle) * (a.type === 'pleat' ? (k % 2 ? -1 : 1) * (k === 0 || k === a.lines.length - 1 ? 1 : 2) : 1) }));
+  for (const e of d.elastics || []) if (e.pattern === p.id && e.line) { const [a, b] = linePoints(p, e.line); out.push({ id: e.id, a: at(a), b: at(b), ratio: Number(e.ratio), stiffness: e.stiffness }); }
   return out;
 }
 /** meshPattern's \`lines\` for one pattern. */
@@ -75,12 +82,12 @@ export const conformLines = (d, p) => linesOf(d, p).map((l) => [l.a, l.b]);
 /** The simulation-only part of the solver's input, resolved onto the meshes. A design that uses none of it adds nothing. */
 export function physicsInput(d, meshes) {
   const byId = new Map(meshes.map((m) => [m.id, m])), elastics = [], folds = [];
-  const length = (m, chain) => chain.reduce((n, v, i) => i ? n + Math.hypot(m.uv[v * 2] - m.uv[chain[i - 1] * 2], m.uv[v * 2 + 1] - m.uv[chain[i - 1] * 2 + 1]) : 0, 0);
   for (const p of d.patterns) linesOf(d, p).forEach((l, k) => { const chain = byId.get(p.id)?.lineVertices?.[k]; if (!chain) return; if (l.angle != null) folds.push({ id: l.id, pattern: p.id, chain, angle: l.angle }); else elastics.push({ id: l.id, pattern: p.id, chain, ratio: l.ratio, stiffness: l.stiffness }); });
   for (const e of d.elastics || []) if (e.segment) elastics.push({ id: e.id, pattern: e.pattern, chain: byId.get(e.pattern).segmentVertices[e.segment], ratio: Number(e.ratio), stiffness: e.stiffness });
   // An elastic seam relaxes to ratio × its shorter side. Both sides gather to that; the spring is on one of them, the seam carries it to the other.
   for (const s of d.seams || []) if (s.elastic) {
-    const sides = [s.a, s.b].map((ref) => { const m = byId.get(ref.pattern), chain = m.segmentVertices[ref.segment]; return { pattern: ref.pattern, chain, length: length(m, chain) }; }), short = Math.min(sides[0].length, sides[1].length), spring = sides[0].length <= sides[1].length ? 0 : 1;
+    // A side may be part of an edge or several edges: the elastic lies on the mesh edges that are wholly inside the sewn span.
+    const sides = [s.a, s.b].map((ref) => { const c = sideChain(byId.get(ref.pattern), ref), chain = []; c.chain.forEach((v, i) => { if (c.cumulative[i] >= c.start - 1e-6 && c.cumulative[i] <= c.start + c.total + 1e-6 && chain.at(-1) !== v) chain.push(v); }); return { pattern: ref.pattern, chain, length: c.total }; }), short = Math.min(sides[0].length, sides[1].length), spring = sides[0].length <= sides[1].length ? 0 : 1;
     sides.forEach((side, k) => elastics.push({ id: s.id, pattern: side.pattern, chain: side.chain, ratio: Number(s.elastic.ratio) * short / side.length, stiffness: k === spring ? s.elastic.stiffness : 0 }));
   }
   return { ...(elastics.length ? { elastics } : {}), ...(folds.length ? { folds } : {}), ...(d.stuffing?.length ? { stuffing: d.stuffing } : {}) };
@@ -90,8 +97,9 @@ export function physicsInput(d, meshes) {
 export function checkPhysics(d) {
   const patterns = new Map(d.patterns.map((p) => [p.id, p])), out = [], seg = (pid, sid) => { const p = patterns.get(pid); return segmentLength(p, p.segments.find((s) => s.id === sid)); };
   const rate = (id, length, ratio) => out.push({ id, kind: 'elastic', length: +length.toFixed(2), relaxed: +(length * ratio).toFixed(2), ok: ratio >= 0.3, note: ratio >= 0.3 ? `cut the elastic ${(length * ratio).toFixed(0)} mm for ${length.toFixed(0)} mm of cloth` : `ratio ${ratio} gathers the cloth to under a third of its length: an elastic is usually 0.5 to 0.9` });
-  for (const e of d.elastics || []) { const p = patterns.get(e.pattern), q = (id) => p.points.find((x) => x.id === id); rate(e.id, e.segment ? seg(e.pattern, e.segment) : Math.hypot(q(e.line[0]).x - q(e.line[1]).x, q(e.line[0]).y - q(e.line[1]).y), Number(e.ratio)); }
-  for (const s of d.seams || []) if (s.elastic) rate(s.id, Math.min(seg(s.a.pattern, s.a.segment), seg(s.b.pattern, s.b.segment)), Number(s.elastic.ratio));
+  const sewn = (ref) => { const side = seamSide(ref); return spanLength(side, side.segments.map((sid) => seg(ref.pattern, sid))); };
+  for (const e of d.elastics || []) { const p = patterns.get(e.pattern), [a, b] = e.segment ? [] : linePoints(p, e.line).map((id) => p.points.find((x) => x.id === id)); rate(e.id, e.segment ? seg(e.pattern, e.segment) : Math.hypot(a.x - b.x, a.y - b.y), Number(e.ratio)); }
+  for (const s of d.seams || []) if (s.elastic) rate(s.id, Math.min(sewn(s.a), sewn(s.b)), Number(s.elastic.ratio));
   for (const s of d.stuffing || []) {
     // A piece of the group that no seam joins to the group (or, alone, to itself) leaves the volume open.
     const open = s.patterns.filter((id) => !(d.seams || []).some((m) => s.patterns.includes(m.a.pattern) && s.patterns.includes(m.b.pattern) && (m.a.pattern === id || m.b.pattern === id) && (s.patterns.length === 1 || m.a.pattern !== m.b.pattern)));

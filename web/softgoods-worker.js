@@ -164,7 +164,8 @@ function crease(c, dt) {
   const { x, give: inv } = state, [x1, x2, x3, x4] = c.i.map((i) => V(x, i)), N1 = cross3(sub3(x1, x3), sub3(x1, x4)), N2 = cross3(sub3(x2, x4), sub3(x2, x3)), E = sub3(x4, x3), e = Math.hypot(...E), a = dot3(N1, N1), b = dot3(N2, N2); if (e < 1e-9 || a < 1e-12 || b < 1e-12) return;
   const angle = Math.atan2(-dot3(cross3(N1, N2), E) / e, dot3(N1, N2)), p = dot3(sub3(x1, x4), E) / e / a, q = dot3(sub3(x2, x4), E) / e / b, r = -dot3(sub3(x1, x3), E) / e / a, s = -dot3(sub3(x2, x3), E) / e / b;
   const u = [N1.map((v) => v * e / a), N2.map((v) => v * e / b), N1.map((v, j) => v * p + N2[j] * q), N1.map((v, j) => v * r + N2[j] * s)]; let w = 0; for (let k = 0; k < 4; k++) w += inv[c.i[k]] * dot3(u[k], u[k]); if (!w) return;
-  const dl = -Math.max(-TURN, Math.min(TURN, angle - c.rest * Math.min(1, (state.step + 1) / FOLDING))) / (w + c.alpha / (dt * dt));
+  // How far off the fold is, the short way round: a fold near 180° that overshoots reads as nearly -180°, and must not be turned all the way back.
+  const off = angle - c.rest * Math.min(1, (state.step + 1) / FOLDING), dl = -Math.max(-TURN, Math.min(TURN, off - 2 * Math.PI * Math.round(off / (2 * Math.PI)))) / (w + c.alpha / (dt * dt));
   for (let k = 0; k < 4; k++) for (let j = 0; j < 3; j++) x[c.i[k] * 3 + j] += inv[c.i[k]] * dl * u[k][j];
 }
 // Stuffing pushes every triangle of a group outward with its pressure (Pa) times its area. With a target volume the pressure
