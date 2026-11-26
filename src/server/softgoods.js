@@ -1,11 +1,15 @@
 import express from 'express';
 import path from 'node:path';
+import fs from 'node:fs';
 import { GraphError } from '../core/errors.js';
-import { exportProduction } from '../core/softgoods-production.js';
+import { exportProduction, PRODUCTION_FORMATS } from '../core/softgoods-production.js';
 import { resolveMaterials } from '../core/softgoods-fabrics.js';
 import { meshPattern } from '../core/softgoods-mesh.js';
 import { resolveSeamCorrespondence } from '../core/softgoods-seams.js';
 import { arrangePatternsAroundAvatar, avatarBody } from '../core/softgoods-arrange.js';
+import { drapeDocumentAsync } from '../core/softgoods-drape.js';
+import { exportDrape, DRAPE_FORMATS } from '../core/softgoods-drape-export.js';
+import { measureDrape, fitReport } from '../core/softgoods-measure.js';
 import { checkDesign } from '../core/softgoods-operations.js';
 import { validateSoftgoodsDocument } from '../core/softgoods-document.js';
 
@@ -19,18 +23,35 @@ function arranged(value, avatar) {
   return d;
 }
 
+const EXPORT_FORMATS = [...PRODUCTION_FORMATS, ...DRAPE_FORMATS];
+
 export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcast = () => {} } = {}) {
   const r = express.Router();
   const fail = (res, e) => res.status(e instanceof GraphError ? 400 : 500).json({ error: e.message || String(e) });
   r.get('/simulation-input', (req, res) => { try { const d = doc.toJSON(), target = Math.max(5, Math.min(100, Number(req.query.target || 25))), meshes = d.patterns.map((p) => meshPattern(p, { target })), seams = resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 }); res.json({ revision: d.revision, meshes, seams, attachments: d.attachments || [], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain })), collisionBody: d.simulation?.avatar ? { ...d.simulation.avatar, ...avatarBody(d.simulation.avatar) } : null }); } catch (e) { fail(res, e); } });
   r.get('/document', (_req, res) => res.json(doc.toJSON()));
   r.put('/document', (req, res) => { try { res.json(doc.replace(arranged(req.body, req.body?.simulation?.avatar || doc.data.simulation?.avatar))); } catch (e) { fail(res, e); } });
-  r.get('/check', (_req, res) => { try { res.json(checkDesign(doc.toJSON())); } catch (e) { fail(res, e); } });
+  // ?fit=1 adds the fit report of the draped design. It costs a drape (seconds, on a thread of its own), so only when asked.
+  r.get('/check', async (req, res) => { try { const d = doc.toJSON(), check = checkDesign(d); res.json(req.query.fit ? { ...check, fit: fitReport(d, await drapeDocumentAsync(d, { target: req.query.target })) } : check); } catch (e) { fail(res, e); } });
+  // Measure the draped design: body {measures: [{type: distance|circumference|edge|seam|bounds, ...}], drape: {target, steps, tolerance}}.
+  r.post('/measure', async (req, res) => { try { const d = doc.toJSON(), drape = await drapeDocumentAsync(d, req.body?.drape); res.json({ revision: d.revision, drape: { settled: drape.settled, steps: drape.steps, residual: drape.residual, target: drape.options.target }, units: 'mm', results: measureDrape(d, drape, req.body?.measures || []) }); } catch (e) { fail(res, e); } });
   r.post('/patterns/rectangle', (req, res) => { try { res.json(doc.addRectangle(req.body || {})); } catch (e) { fail(res, e); } });
   r.patch('/patterns/:pattern/points/:point', (req, res) => { try { res.json(doc.updatePoint(req.params.pattern, req.params.point, req.body?.x, req.body?.y)); } catch (e) { fail(res, e); } });
   r.post('/seams', (req, res) => { try { res.json(doc.addSeam(req.body || {})); } catch (e) { fail(res, e); } });
   r.post('/arrange/avatar', (req, res) => { try { const d = arranged(doc.toJSON(), req.body || {}), result = { avatar: d.simulation.avatar, arrangement: d.arrangement.filter((a) => a.source === 'avatar') }; d.simulation = { ...(d.simulation || {}), avatar: result.avatar, status: 'not_run' }; res.json({ ...result, document: doc.replace(d) }); } catch (e) { fail(res, e); } });
-  r.post('/export', (req, res) => { try { res.json(exportProduction(doc.toJSON(), path.resolve(exportDir()), String(req.body?.name || 'softgoods'), req.body || {})); } catch (e) { fail(res, e); } });
+  // One export. The patterns and tech pack always; formats adds the production outputs ('marker', 'bom', 'print', 'svg', and dxf: 'astm-style')
+  // and the draped garment ('glb', 'obj' with its .mtl, 'fit': a fit report, also in the tech pack), any of them in one request.
+  // The drape runs first, on a thread of its own, so a design that cannot be draped or laid on its roll writes nothing.
+  r.post('/export', async (req, res) => { try {
+    const b = req.body || {}, d = doc.toJSON(), dir = path.resolve(exportDir()), name = String(b.name || 'softgoods'), formats = b.formats ?? [];
+    if (!Array.isArray(formats)) throw new GraphError('formats must be an array');
+    const unknown = formats.find((f) => !EXPORT_FORMATS.includes(f)); if (unknown !== undefined) throw new GraphError(`Unknown export format '${unknown}'. Known: ${EXPORT_FORMATS.join(', ')}`);
+    const draped = formats.filter((f) => DRAPE_FORMATS.includes(f)), drape = draped.length ? await drapeDocumentAsync(d, b.drape) : null, fit = draped.includes('fit') ? fitReport(d, drape) : null;
+    const result = exportProduction(d, dir, name, { ...b, formats: formats.filter((f) => PRODUCTION_FORMATS.includes(f)), fit });
+    if (drape) { const { files, ...stated } = exportDrape(d, drape, dir, name, { formats: draped, thickness: !!b.thickness, avatar: !!b.avatar, textureMm: b.textureMm ?? 1000 }); result.files.push(...files); result.drape = { settled: drape.settled, steps: drape.steps, residual: drape.residual, target: drape.options.target, ...stated }; }
+    if (fit) { const file = path.join(dir, `${name}_fit.json`); fs.writeFileSync(file, JSON.stringify(fit, null, 2)); result.files.push(file); result.fit = { ok: fit.ok, strain: fit.overall.strain, pressure: fit.overall.pressure, contact: fit.overall.contact, ease: fit.ease }; }
+    res.json(result);
+  } catch (e) { fail(res, e); } });
   r.patch('/arrangement/:pattern', (req, res) => { try { res.json(doc.updateArrangement(req.params.pattern, req.body || {})); } catch (e) { fail(res, e); } });
   doc.onChange(() => broadcast({ type: 'softgoods_changed', revision: doc.data.revision }));
   return r;

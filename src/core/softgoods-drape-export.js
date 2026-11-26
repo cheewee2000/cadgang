@@ -9,6 +9,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { GraphError } from './errors.js';
+import { resolveMaterials } from './softgoods-fabrics.js';
+
+export const DRAPE_FORMATS = ['glb', 'obj', 'fit'];
 
 const M = 0.001;
 const GREY = [0.8, 0.8, 0.8], BODY = [0.6, 0.6, 0.6];
@@ -58,10 +61,10 @@ function bodyPart(shape, around = 24, rings = 12) {
 /** The draped pieces, and the avatar's shapes if asked, as meshes in metres with +Y up, and the materials they use. */
 export function drapeScene(document, drape, { thickness = false, avatar = false, textureMm = 1000 } = {}) {
   if (!(Number(textureMm) > 0)) throw new GraphError('textureMm must be greater than zero');
-  const fabric = (name) => document.materials?.[name] || {};
+  const fabrics = resolveMaterials(document.materials), fabric = (name) => fabrics[name] || {};
   const parts = drape.pieces.map((p) => clothPart(p, thickness ? Number(fabric(p.material).thickness || fabric(p.material).thicknessMm || 0.6) : 0, Number(textureMm)));
   if (avatar) for (const s of drape.body?.shapes || []) parts.push(bodyPart(s));
-  const materials = [...new Set(parts.map((p) => p.material))].map((name) => ({ name, colour: name === 'body' && !document.materials?.body ? BODY : colourOf(fabric(name).color) || GREY }));
+  const materials = [...new Set(parts.map((p) => p.material))].map((name) => ({ name, colour: name === 'body' && !fabrics.body ? BODY : colourOf(fabric(name).color) || GREY }));
   return { parts, materials, units: 'm', up: '+Y', front: '+Z', uv: { mmPerUnit: Number(textureMm), obj: '(x, y) / mmPerUnit', gltf: '(x / mmPerUnit, 1 - y / mmPerUnit)' }, thickness: !!thickness, avatar: !!avatar && parts.some((p) => p.group === 'avatar') };
 }
 

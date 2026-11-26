@@ -4,6 +4,7 @@
 import { GraphError } from './errors.js';
 import { segmentLength } from './softgoods-export.js';
 import { resolveSeamCorrespondence } from './softgoods-seams.js';
+import { resolveMaterials } from './softgoods-fabrics.js';
 
 const round = (v, d = 2) => (Number.isFinite(v) ? +v.toFixed(d) : null);
 const pieceOf = (drape, id) => { const p = drape.pieces.find((q) => q.id === id); if (!p) throw new GraphError(`The drape has no piece '${id}'`); return p; };
@@ -204,8 +205,8 @@ function stats(rows, limit, pressureAvailable) {
 
 /** How the garment fits: stretch against each fabric's limit, pressure on the body, how much of the cloth touches it, and ease at the avatar's levels. */
 export function fitReport(document, drape) {
-  const all = [], pieces = drape.pieces.map((p) => {
-    const fabric = document.materials?.[p.material] || {}, limit = Number(fabric.strainLimit) > 0 ? { value: Number(fabric.strainLimit), source: 'material' } : { value: STRAIN_LIMIT, source: 'default' };
+  const all = [], fabrics = resolveMaterials(document.materials), pieces = drape.pieces.map((p) => {
+    const fabric = fabrics[p.material] || {}, limit = Number(fabric.strainLimit) > 0 ? { value: Number(fabric.strainLimit), source: 'material' } : { value: STRAIN_LIMIT, source: 'default' };
     const rows = Array.from({ length: p.count }, (_, i) => [p.strain[i], p.pressure[i], p.area[i], limit.value]); all.push(...rows);
     return { id: p.id, name: p.name, material: p.material, ...stats(rows, limit, drape.pressureAvailable) };
   });

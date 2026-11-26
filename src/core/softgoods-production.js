@@ -18,8 +18,10 @@ export const PRODUCTION_FORMATS = ['marker', 'bom', 'print', 'svg'];
  * 'svg' (one SVG per pattern and graded size). options.dxf: 'astm-style' ('aama-style' is taken as the same) adds one DXF per size with a block per
  * piece on the numbered ASTM D6673 layers. The rest are passed on: width, gap, turns, sizes, resolution to the marker
  * and the bill; threadMultiplier to the bill; paper, margin, overlap, orientation and sizes to the print.
+ * options.fit: a fit report of the draped design (src/core/softgoods-measure.js), for the tech pack. The drape's own formats
+ * ('glb', 'obj', 'fit') are not made here, since they need the cloth solver: the export route (src/server/softgoods.js) adds them.
  */
-export function exportProduction(document, dir, name, { formats = [], dxf, width, gap, turns, sizes, resolution, threadMultiplier, paper, margin, overlap, orientation } = {}) {
+export function exportProduction(document, dir, name, { formats = [], dxf, width, gap, turns, sizes, resolution, threadMultiplier, paper, margin, overlap, orientation, fit = null } = {}) {
   const unknown = formats.filter((f) => !PRODUCTION_FORMATS.includes(f));
   if (unknown.length) throw new GraphError(`Unknown export format '${unknown[0]}'. Known: ${PRODUCTION_FORMATS.join(', ')}`);
   const defined = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v != null)), lay = defined({ width, gap, turns, sizes, resolution });
@@ -39,7 +41,7 @@ export function exportProduction(document, dir, name, { formats = [], dxf, width
   }
   if (dxf != null && !['astm-style', 'aama-style'].includes(dxf)) throw new GraphError(`Unknown DXF flavour '${dxf}'. Known: astm-style`);
   if (dxf) { for (const s of sizeSet(document, ['base', ...(document.grades || []).map((g) => g.size)])) file(`astm-style${s.size === 'base' ? '' : `_${s.size.replace(/[^\w.-]+/g, '_')}`}.dxf`, astmStyleDXF(s.document, { name, size: s.size, annotations: document.annotations })); report.astmStyle = ASTM_STYLE; }
-  const result = exportSoftgoods(document, dir, name);
+  const result = exportSoftgoods(document, dir, name, { fit });
   for (const [f, text] of out) { fs.writeFileSync(f, text); result.files.push(f); }
   return { ...result, ...report };
 }
