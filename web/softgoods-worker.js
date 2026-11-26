@@ -170,6 +170,8 @@ function tick() {
 }
 /** The solver without a page: initialise, advance, return the frame. Tests and scripts call this. */
 export function simulate(input, steps = 0) { initialize(input); state.running = true; for (let i = 0; i < steps; i++) tick(); state.running = false; return snapshot(); }
+/** Carry on from where simulate (or an earlier advance) left the cloth: src/core/softgoods-drape.js steps until it settles. */
+export function advance(steps = 1) { state.running = true; for (let i = 0; i < steps; i++) tick(); state.running = false; return snapshot(); }
 function send() { const m = snapshot(); postMessage(m, [m.positions.buffer, m.strain.buffer, m.pressure.buffer]); }
 function snapshot() {
   const positions = Float32Array.from(state.x), strain = new Float32Array(state.inv.length), pressure = Float32Array.from(state.pressure), count = new Uint16Array(state.inv.length);
