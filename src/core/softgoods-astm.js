@@ -6,13 +6,13 @@
 // and a grade rule table are NOT
 // verified against the standard. Try it in the receiving CAD before relying on it.
 
-import { cutContours, patternDXF, dxfFile } from './softgoods-export.js';
+import { cutContours, capDarts, patternDXF, dxfFile } from './softgoods-export.js';
 import { dxfEntities } from './softgoods-marker.js';
 
 /** What goes where, returned with the export so nobody has to guess. */
 export const ASTM_STYLE = Object.freeze({
-  layers: { 1: 'piece boundary (the closed CUT contour) and piece system text', 4: 'notches (a line from the cut edge inward)', 7: 'grain line', 8: 'internal lines: darts, pleats, folds and any other mark', 11: 'internal cutouts (CUT contours of holes)', 14: 'sew lines (STITCH)', 15: 'annotation text' },
-  from: { CUT: '1 / 11', NOTCH: '4', GRAIN: '7', DART: '8', PLEAT: '8', FOLD: '8', STITCH: '14', TEXT: '15', ALLOWANCE: 'not written' },
+  layers: { 1: 'piece boundary (the closed CUT contour) and piece system text', 4: 'notches (a line from the cut edge inward)', 7: 'grain line', 8: 'internal lines: the piece\'s own internal lines, darts, pleats, folds and any other mark', 11: 'internal cutouts (CUT contours of holes)', 14: 'sew lines (STITCH)', 15: 'annotation text' },
+  from: { CUT: '1 / 11', NOTCH: '4', GRAIN: '7', INTERNAL: '8', DART: '8', PLEAT: '8', FOLD: '8', STITCH: '14', TEXT: '15', ALLOWANCE: 'not written' },
   verified: 'Layer numbers against a published summary of ASTM D6673-10. Text labels, notch entities and units and closure rules are not verified; layers 2, 3, 5 and the mandatory validation curves 84-87 are not written; the file is DXF R12 where the standard says R13.',
 });
 const LAYER = { NOTCH: 4, GRAIN: 7, STITCH: 14 };
@@ -25,7 +25,7 @@ const text = (at, value, layer, height = 5) => `0\nTEXT\n8\n${layer}\n10\n${at[0
 export function astmStyleDXF(document, { name = 'softgoods', size = 'base', annotations = document.annotations || [] } = {}) {
   const blocks = [], entities = [text([0, -20], `Style Name: ${name}`, 1), text([0, -30], 'Units: METRIC', 1)]; let x = 0;
   for (const p of document.patterns) {
-    const contours = cutContours(p), outer = contours.reduce((best, q) => (area(q) > area(best) ? q : best)), { lines, texts } = dxfEntities(patternDXF(p, annotations.filter((a) => a.pattern === p.id)));
+    const marks = annotations.filter((a) => a.pattern === p.id), contours = cutContours(capDarts(p, marks)), outer = contours.reduce((best, q) => (area(q) > area(best) ? q : best)), { lines, texts } = dxfEntities(patternDXF(p, marks));
     const xs = outer.map((q) => q[0]), ys = outer.map((q) => q[1]), minX = Math.min(...xs), minY = Math.min(...ys), body = [polyline(outer, 1, true), ...contours.filter((q) => q !== outer).map((q) => polyline(q, 11, true))];
     // Stitch lines end to end are one sew line; everything else stays the line it was, on its numbered layer.
     let chain = [];

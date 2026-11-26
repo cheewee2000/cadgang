@@ -2,6 +2,9 @@
 // it does to the seams and marks on the edges it changes, and, where it sews something, by draping it with the page's own solver.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import express from 'express';
 import { z } from 'zod';
 import { SoftgoodsDocument, validateSoftgoodsDocument, patternLoops } from '../src/core/softgoods-document.js';
@@ -13,6 +16,13 @@ import { checkDesign } from '../src/core/softgoods-operations.js';
 import { softgoodsRouter } from '../src/server/softgoods.js';
 import { registerSoftgoodsTools } from '../src/mcp/softgoods.js';
 import { simulate } from '../web/softgoods-worker.js';
+import { billOfMaterials } from '../src/core/softgoods-bom.js';
+import { makeMarkers } from '../src/core/softgoods-marker.js';
+import { astmStyleDXF } from '../src/core/softgoods-astm.js';
+import { patternSVG, printHTML } from '../src/core/softgoods-print.js';
+import { drapeDocument, simulationInput } from '../src/core/softgoods-drape.js';
+import { measureDrape } from '../src/core/softgoods-measure.js';
+import { exportProduction, PRODUCTION_FORMATS } from '../src/core/softgoods-production.js';
 
 const near = (a, b, eps = 1e-6, what = '') => assert.ok(Math.abs(a - b) <= eps, `${what} ${a} is not ${b}`);
 const pattern = (d, id) => d.patterns.find((p) => p.id === id), segment = (p, id) => p.segments.find((s) => s.id === id), point = (p, id) => p.points.find((q) => q.id === id);
@@ -335,6 +345,38 @@ test('edits keep a span seam whole where they can, and refuse to open the outlin
   const copy = seam(mirror(tube, { pattern: 'front' }), 'front_mirror_tube'); assert.deepEqual(copy.b.segments, ['front_mirror_top', 'front_mirror_right']); near(copy.b.from, 0.75); near(copy.a.from, 0.4); near(copy.a.to, 0.9);
 });
 
+test('the production exports read an edited design: the bill, the marker, the astm-style DXF and the print', () => {
+  let d = dart(panels(), { pattern: 'front', segment: 'front_top', width: 40, length: 120 });
+  d = internalLine(pleat(d, { pattern: 'back', segment: 'back_bottom', intake: 40 }), { pattern: 'front', id: 'pocket_top', a: [60, 250], b: [240, 250] });
+  // The bill totals seams by kind: the side seam, the dart's leg, and the 20 mm of edge a knife pleat is tacked across.
+  assert.deepEqual(billOfMaterials(d).seams.byKind.map((k) => [k.kind, k.count, k.lengthMm]), [['plain', 1, 400], ['dart', 1, 121.66], ['pleat', 1, 20]]);
+  // A seam cut in two is still as long as it was: the 400 mm side seam as 300 + 100, and the 300 mm cut. A span counts its own length.
+  assert.deepEqual(billOfMaterials(split(panels(), { pattern: 'front', from: { segment: 'front_left', at: 0.25 }, to: { segment: 'front_right', at: 0.75 } })).seams.byKind.map((k) => [k.kind, k.count, k.lengthMm]), [['plain', 3, 700]]);
+  assert.deepEqual(billOfMaterials(spans()).seams.byKind.map((k) => [k.kind, k.count, k.lengthMm]), [['plain', 2, 400]]);
+  // The marker nests both pieces by their cut contours: the darted front as the whole 320 x 420 it is cut as, the pleated back 40 mm wider.
+  const { markers: [marker] } = makeMarkers(d), placed = (id) => marker.placements.find((p) => p.pattern === id);
+  assert.equal(marker.pieces, 2); near(marker.pieceArea, 320 * 420 + 360 * 420, 1e-6); assert.ok(marker.length < 440, `both lie side by side across the roll: the marker is ${marker.length} mm long`);
+  assert.deepEqual([...new Set(placed('front').lines.map((l) => l.layer))].sort(), ['DART', 'GRAIN', 'INTERNAL']); assert.ok(placed('back').lines.some((l) => l.layer === 'PLEAT'));
+  // astm-style: the boundary on layer 1 runs across the dart's mouth (it has no vertex inside the piece), and the internal line and the dart legs are on layer 8.
+  const astm = astmStyleDXF(d), front = astm.split('\n0\nBLOCK\n').find((b) => b.includes('\n2\nfront\n')), boundary = [...front.matchAll(/0\nVERTEX\n8\n1\n10\n([^\n]+)\n20\n([^\n]+)\n/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  assert.ok(boundary.length >= 4 && boundary.every(([x, y]) => (Math.abs(y + 10) < 1e-6 || Math.abs(y - 410) < 1e-6) && x > -10.001 && x < 310.001), 'every boundary vertex is on the hem or the top cut line');
+  assert.match(front, /0\nLINE\n8\n8\n10\n60\n20\n250\n30\n0\n11\n240\n21\n250\n/); assert.match(front, /0\nLINE\n8\n8\n10\n170\n20\n400\n30\n0\n11\n150\n21\n280\n/);
+  // The print and the SVG draw the pattern's own DXF: the internal line, the dart legs and the capped cut are all there.
+  const p = pattern(d, 'front'), svg = patternSVG(p, d.annotations.filter((a) => a.pattern === 'front')); for (const layer of ['CUT', 'STITCH', 'INTERNAL', 'DART']) assert.match(svg, new RegExp(`<g id="${layer}"`));
+  // And the export route's own path writes every production format for it.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cadgang-soft-edit-')), written = exportProduction(d, dir, 'edited', { formats: PRODUCTION_FORMATS, dxf: 'astm-style' });
+  assert.ok(written.files.length >= 8 && written.files.every((f) => fs.statSync(f).size > 0), `${written.files.length} files`); assert.equal(written.check.ok, true); fs.rmSync(dir, { recursive: true });
+  const html = printHTML(d); assert.match(html, /class="ln INTERNAL"/); assert.match(html, /class="ln DART"/); assert.match(html, /class="ln PLEAT"/); assert.match(html, /DOTTED: INTERNAL LINES/);
+});
+
+test('the server drape sews span seams and measures both sides of them along their spans', () => {
+  const d = { ...spans(), arrangement: [['front', [0, 0, 505]], ['pocket', [100, -140, 505]], ['yoke', [0, 420, 505]]].map(([pattern, position]) => ({ pattern, position, rotation: [0, 0, 0], layer: 0 })) };
+  const input = simulationInput(d, 30); assert.deepEqual(input.seams.map((s) => [s.id, Math.round(s.lengthA), Math.round(s.lengthB)]), [['waist', 300, 300], ['pocket_top', 100, 100]]);
+  const drape = drapeDocument(d, { target: 30, steps: 120 }), [waist, pocket, missing] = measureDrape(d, drape, [{ type: 'seam', seam: 'waist' }, { type: 'seam', seam: 'pocket_top' }, { type: 'seam', seam: 'gone' }]);
+  assert.deepEqual([waist.b.segments, waist.b.flat, waist.a.segment, waist.a.flat], [['yoke_hem_a', 'yoke_hem_b'], 300, 'front_top', 300]); assert.ok(waist.gap < 3 && Math.abs(waist.b.stretch) < 0.03, `the waist is ${waist.gap} mm open, its span stretched ${waist.b.stretch}`);
+  near(pocket.b.flat, 100, 0.01); near(pocket.b.from, 1 / 3, 1e-9); assert.ok(pocket.gap < 3 && Math.abs(pocket.b.draped - 100) < 3, `the pocket's span of the hem is ${pocket.b.draped} mm in the drape`); assert.match(missing.error, /No seam 'gone'/);
+});
+
 test('edits compose, name what they changed, and an unknown one is refused', () => {
   const base = panels(); let d = base;
   for (const args of [{ op: 'dart', pattern: 'front', segment: 'front_top', at: 0.3, width: 30, length: 80 }, { op: 'pleat', pattern: 'front', segment: 'front_bottom', at: 0.6, intake: 40 }, { op: 'split', pattern: 'front', from: { segment: 'front_left', at: 0.3 }, to: { segment: 'front_right', at: 0.7 } }, { op: 'mirror', pattern: 'front_a' }, { op: 'autoNotch' }]) d = editSoftgoods(d, args);
@@ -355,6 +397,7 @@ test('POST /edit changes the stored design like a set: a new revision, a refresh
     assert.deepEqual(result.patterns, ['front_a', 'front_b', 'back']); assert.deepEqual(result.added.patterns, ['front_a', 'front_b']); assert.deepEqual(result.removed.patterns, ['front']); assert.equal(result.check.ok, true); assert.equal(result.check.seams.length, 2);
     const stored = (await call('/document'))[1]; assert.deepEqual(stored.arrangement.map((a) => a.pattern), ['front_a', 'front_b', 'back'], 'every piece has a place in the review');
     assert.equal((await call('/simulation-input?target=40'))[1].seams.length, 2, 'and the solver gets the cut as a seam');
+    assert.deepEqual((await call('/simulation-input?target=40'))[1], JSON.parse(JSON.stringify(simulationInput(doc.toJSON(), 40))), 'the server drape starts from what the page is given');
     const [bad, error] = await call('/edit', 'POST', { op: 'dart', pattern: 'back', segment: 'back_top', width: 400, length: 10 }); assert.equal(bad, 400); assert.match(error.error, /does not fit/); assert.equal(doc.data.revision, revision + 1, 'a refused edit changes nothing');
     // A piece standing on the avatar is mirrored to the other side of it, and an edit keeps the avatar.
     doc.replace({ ...panels(), patterns: panels().patterns.map((p, i) => ({ ...p, placement: { region: i ? 'back' : 'left' } })), simulation: { avatar: { height: 1700, chest: 900 } } });

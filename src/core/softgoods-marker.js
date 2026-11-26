@@ -10,7 +10,7 @@
 // nester reaches 80-90%. Swap `nest` for an NFP placer if yield starts to cost real money.
 
 import { GraphError } from './errors.js';
-import { cutContours, patternDXF, dxfFile, dxfLine, dxfText } from './softgoods-export.js';
+import { cutContours, capDarts, patternDXF, dxfFile, dxfLine, dxfText } from './softgoods-export.js';
 import { gradeDocument } from './softgoods-operations.js';
 import { resolveMaterial } from './softgoods-fabrics.js';
 
@@ -138,9 +138,10 @@ export function makeMarkers(document, { width, gap = 3, turns = 180, freeStep = 
   for (const { size, units: count, document: d } of set) for (const p of d.patterns) {
     const material = p.material || '';
     if (only != null && material !== only) continue;
-    const contours = cutContours(p), outer = contours.reduce((best, q) => (Math.abs(area(q)) > Math.abs(area(best)) ? q : best)), net = 2 * Math.abs(area(outer)) - contours.reduce((sum, q) => sum + Math.abs(area(q)), 0);
+    // The cloth of a sewn dart is laid and cut with the piece: the contour runs across its mouth, as in the pattern's own DXF.
+    const marks = (document.annotations || []).filter((a) => a.pattern === p.id), contours = cutContours(capDarts(p, marks)), outer = contours.reduce((best, q) => (Math.abs(area(q)) > Math.abs(area(best)) ? q : best)), net = 2 * Math.abs(area(outer)) - contours.reduce((sum, q) => sum + Math.abs(area(q)), 0);
     // What rides along on the marker: notches, grain and any marks. Stitch lines and allowance ticks are for the pattern, not the cutter; the cut contours are drawn closed from `contours`.
-    const lines = dxfEntities(patternDXF(p, (document.annotations || []).filter((a) => a.pattern === p.id))).lines.filter((l) => !['CUT', 'STITCH', 'ALLOWANCE'].includes(l.layer));
+    const lines = dxfEntities(patternDXF(p, marks)).lines.filter((l) => !['CUT', 'STITCH', 'ALLOWANCE'].includes(l.layer));
     const copies = (p.cut || 1) * count, shape = { pattern: p.id, name: p.name || p.id, size, grain: Number(p.grain?.angle ?? 90), contours, outer, area: net, lines };
     if (!byMaterial.has(material)) byMaterial.set(material, []);
     for (let copy = 0; copy < copies; copy++) byMaterial.get(material).push({ shape, copy: copy + 1, of: copies, mirrored: !!p.mirror && copy % 2 === 1 });
