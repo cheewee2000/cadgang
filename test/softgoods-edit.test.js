@@ -2,12 +2,16 @@
 // it does to the seams and marks on the edges it changes, and, where it sews something, by draping it with the page's own solver.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import express from 'express';
+import { z } from 'zod';
 import { SoftgoodsDocument, validateSoftgoodsDocument, patternLoops } from '../src/core/softgoods-document.js';
 import { editSoftgoods, editChanges, SOFTGOODS_EDITS, mirror, unfold, split, dart, pleat, slashSpread, internalLine, autoNotch } from '../src/core/softgoods-edit.js';
 import { sampleSegment, segmentLength, patternDXF, cutContours, capDarts } from '../src/core/softgoods-export.js';
 import { meshPattern } from '../src/core/softgoods-mesh.js';
 import { resolveSeamCorrespondence, seamFraction } from '../src/core/softgoods-seams.js';
 import { checkDesign } from '../src/core/softgoods-operations.js';
+import { softgoodsRouter } from '../src/server/softgoods.js';
+import { registerSoftgoodsTools } from '../src/mcp/softgoods.js';
 import { simulate } from '../web/softgoods-worker.js';
 
 const near = (a, b, eps = 1e-6, what = '') => assert.ok(Math.abs(a - b) <= eps, `${what} ${a} is not ${b}`);
@@ -287,4 +291,35 @@ test('edits compose, name what they changed, and an unknown one is refused', () 
   assert.deepEqual(changes, { added: { seams: ['side_2', 'front_right_dart'], annotations: ['front_right_dart'], segments: { front: ['front_right_2', 'front_right_dart_leg_a', 'front_right_dart_leg_b'], back: ['back_left_2'] }, points: { front: ['front_right_dart_b', 'front_right_dart_a', 'front_right_dart_apex'], back: ['back_left_split'] } }, removed: {} });
   assert.throws(() => editSoftgoods(base, { op: 'shred' }), /Unknown softgoods edit 'shred': use one of mirror, unfold, split, dart, pleat, slashSpread, internalLine, autoNotch/);
   assert.throws(() => editSoftgoods(base, { op: 'dart', pattern: 'gone', segment: 'x', width: 1, length: 1 }), /No pattern 'gone'/); assert.throws(() => editSoftgoods(base, { op: 'toString' }), /Unknown softgoods edit/);
+});
+
+test('POST /edit changes the stored design like a set: a new revision, a refresh for the page, and the check in the answer', async () => {
+  const doc = new SoftgoodsDocument(null), sent = [], app = express(); app.use(express.json()); app.use('/s', softgoodsRouter(doc, { broadcast: (m) => sent.push(m) })); doc.replace(panels());
+  const server = app.listen(0), call = async (p, method = 'GET', body) => { const r = await fetch(`http://127.0.0.1:${server.address().port}/s${p}`, { method, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) }); return [r.status, await r.json()]; };
+  try {
+    const revision = doc.data.revision, [status, result] = await call('/edit', 'POST', { op: 'split', pattern: 'front', from: 'front_bl', to: 'front_tr' });
+    assert.equal(status, 200); assert.equal(result.revision, revision + 1); assert.deepEqual(sent.at(-1), { type: 'softgoods_changed', revision: revision + 1 });
+    assert.deepEqual(result.patterns, ['front_a', 'front_b', 'back']); assert.deepEqual(result.added.patterns, ['front_a', 'front_b']); assert.deepEqual(result.removed.patterns, ['front']); assert.equal(result.check.ok, true); assert.equal(result.check.seams.length, 2);
+    const stored = (await call('/document'))[1]; assert.deepEqual(stored.arrangement.map((a) => a.pattern), ['front_a', 'front_b', 'back'], 'every piece has a place in the review');
+    assert.equal((await call('/simulation-input?target=40'))[1].seams.length, 2, 'and the solver gets the cut as a seam');
+    const [bad, error] = await call('/edit', 'POST', { op: 'dart', pattern: 'back', segment: 'back_top', width: 400, length: 10 }); assert.equal(bad, 400); assert.match(error.error, /does not fit/); assert.equal(doc.data.revision, revision + 1, 'a refused edit changes nothing');
+    // A piece standing on the avatar is mirrored to the other side of it, and an edit keeps the avatar.
+    doc.replace({ ...panels(), patterns: panels().patterns.map((p, i) => ({ ...p, placement: { region: i ? 'back' : 'left' } })), simulation: { avatar: { height: 1700, chest: 900 } } });
+    await call('/arrange/avatar', 'POST', { height: 1700, chest: 900 }); const [, mirrored] = await call('/edit', 'POST', { op: 'mirror', pattern: 'front', id: 'front_r' });
+    assert.deepEqual(mirrored.added.patterns, ['front_r']); const after = (await call('/document'))[1], row = (id) => after.arrangement.find((a) => a.pattern === id);
+    assert.equal(after.simulation.avatar.chest, 900); assert.equal(row('front_r').source, 'avatar'); assert.equal(row('front_r').position[0], -row('front').position[0]);
+  } finally { server.close(); }
+});
+
+test('the MCP edit tool takes every operation by name with typed arguments and posts it to the server', async () => {
+  const tools = {}, sent = [];
+  registerSoftgoodsTools({ registerTool: (name, spec, handler) => { tools[name] = { spec, handler }; } }, { call: async (p, opts) => { sent.push([p, opts]); return { revision: 7, check: { ok: true } }; }, ok: (v) => v, fail: (e) => { throw e; } });
+  const tool = tools.cadgang_softgoods_edit, schema = z.object(tool.spec.inputSchema);
+  assert.deepEqual(tool.spec.inputSchema.action.options, SOFTGOODS_EDITS); for (const op of SOFTGOODS_EDITS) assert.ok(tool.spec.description.includes(`- ${op} {`), `the guide explains ${op}`);
+  const args = schema.parse({ action: 'pleat', pattern: 'front', segment: 'front_top', at: 0.5, intake: 40, kind: 'box', to: { segment: 'front_bottom', at: 0.5 } });
+  assert.deepEqual(await tool.handler(args), { revision: 7, check: { ok: true } }); assert.deepEqual(sent[0], ['/softgoods/edit', { method: 'POST', body: { op: 'pleat', pattern: 'front', segment: 'front_top', at: 0.5, intake: 40, kind: 'box', to: { segment: 'front_bottom', at: 0.5 } } }]);
+  assert.ok(schema.safeParse({ action: 'internalLine', pattern: 'front', a: [1, 2], b: 'front_tr' }).success); assert.ok(!schema.safeParse({ action: 'dart', width: -1 }).success); assert.ok(!schema.safeParse({ action: 'shred' }).success);
+  // Every argument the tool accepts for a real edit reaches the operation: the schema drops nothing the operations read.
+  const d = editSoftgoods(panels(), (({ action, ...rest }) => ({ op: action, ...rest }))(schema.parse({ action: 'split', pattern: 'front', from: 'front_bl', to: { segment: 'front_top', at: 0.5 }, ids: ['front_low', 'front_high'], names: ['Low', 'High'], allowance: 6 })));
+  assert.deepEqual(d.patterns.slice(0, 2).map((p) => [p.id, p.name, p.allowances.front_cut]), [['front_low', 'Low', 6], ['front_high', 'High', 6]]);
 });
