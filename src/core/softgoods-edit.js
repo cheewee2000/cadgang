@@ -140,6 +140,13 @@ function splitAt(d, pid, sid, f, ctx, ids = {}) {
   const key = `${pid}/${sid}`; need(!ctx.stack.includes(key), `The seams on '${pid}.${sid}' lead back to it; it cannot be split`);
   const point = fresh(idsOf(p.points), ids.point || `${sid}_split`), second = fresh(idsOf(p.segments), `${sid}_2`);
   splitGeom(d, p, sid, f, point, second); ctx.log.push({ pattern: pid, segment: sid, f, second });
+  // Trims on the cut edge run over both parts now, and a mark at a fraction of it sits on one of them. Each part is an entry of its
+  // own: a pleat or a dart may put cloth between the two, which a seam-like span of segments that follow one another could not cross.
+  const parts = (ref) => { const side = seamSide(ref), last = side.segments.length - 1; return side.segments.map((id, k) => sideOf(side.pattern, [id], k ? 0 : side.from, k < last ? 1 : side.to)); };
+  for (const t of d.trims || []) {
+    for (const key of ['along', 'mate']) if (Array.isArray(t[key])) t[key] = t[key].flatMap((ref) => (sideHas(ref, pid, sid) ? parts(respan(ref, sid, f, second)) : [ref]));
+    for (const key of ['at', 'mate']) { const a = t[key]; if (a && !Array.isArray(a) && a.pattern === pid && a.segment === sid) { const u = a.t ?? 0.5; Object.assign(a, u <= f ? { t: +(u / f).toFixed(9) } : { segment: second, t: +((u - f) / (1 - f)).toFixed(9) }); } }
+  }
   ctx.stack.push(key); reseam(d, pid, sid, f, sid, second, ctx); ctx.stack.pop();
   return { point, first: sid, second };
 }
@@ -308,6 +315,12 @@ const OPS = {
     }
     for (const g of d.grades) g.rules = g.rules.flatMap((r) => (r.pattern !== pid ? [r] : pieces.filter((piece) => piece.points.some((q) => q.id === r.point)).map((piece) => ({ ...r, pattern: piece.id }))));
     for (const a of d.attachments) if (a.pattern === pid) a.pattern = pieces[inA(a.at) ? 0 : 1].id;
+    // A trim goes with the half that has its edge, its point or its place. One that needs the whole piece (its contour, edges on both halves) no longer validates: re-place it first.
+    for (const t of d.trims || []) for (const ref of [t.at, t.path, ...[t.along, t.mate].flat()]) {
+      if (!ref || ref.pattern !== pid || ref.contour != null) continue;
+      const first = ref.segment ?? ref.segments?.[0] ?? null, point = ref.point ?? (typeof ref.points?.[0] === 'string' ? ref.points[0] : null), xyOf = ref.u != null ? [ref.u, ref.v] : ref.points?.[0];
+      ref.pattern = first != null ? home('segments', first) : point != null ? home('points', point) : ref.line != null ? pieces[pieces[0].internalLines.some((l) => l.id === ref.line) ? 0 : 1].id : pieces[inA(xyOf) ? 0 : 1].id;
+    }
     d.arrangement = d.arrangement.flatMap((a) => { if (a.pattern !== pid) return [a]; const { source, ...row } = a; return pieces.map((piece) => ({ ...clone(row), pattern: piece.id })); });
     d.patterns.splice(d.patterns.indexOf(p), 1, ...pieces);
     // In one piece the cut runs from y to x and in the other from x to y, so the same places meet when the seam is flipped.

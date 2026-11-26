@@ -1,6 +1,7 @@
 // Deterministic measurement and grading operations for authoritative 2D patterns.
 import { GraphError } from './errors.js';
 import { segmentLength } from './softgoods-export.js';
+import { checkTrims } from './softgoods-trims.js';
 import { seamSide, spanLength } from './softgoods-seams.js';
 import { checkPhysics } from './softgoods-physics.js';
 
@@ -67,7 +68,8 @@ export function seamLengths(document) {
 
 /** What a pattern maker checks before cutting: named measurements against their targets and both sides of every seam, at the base size and at every graded size. */
 export function checkDesign(document) {
-  const one = (d) => { const constraints = evaluateMeasurementConstraints(d), seams = seamLengths(d); return { ok: constraints.every((c) => c.withinTolerance) && seams.every((s) => s.ok), constraints, seams }; };
+  // With trims: trims (a zipper whose two sides differ fails the design) and warnings (an allowance too small for its seam type or a zipper tape: to look at, not a failure).
+  const one = (d) => { const constraints = evaluateMeasurementConstraints(d), seams = seamLengths(d), t = checkTrims(d); return { ok: constraints.every((c) => c.withinTolerance) && seams.every((s) => s.ok) && t.trims.every((q) => q.ok), constraints, seams, ...(t.trims.length ? { trims: t.trims } : {}), ...(t.warnings.length ? { warnings: t.warnings } : {}) }; };
   const base = one(document), sizes = (document.grades || []).map((g) => ({ size: g.size, ...one(gradeDocument(document, g)) }));
   // Elastic, stuffing, tacks and shrinkage are checked once, at the base size; a design with none of them reports no physics.
   const physics = checkPhysics(document);

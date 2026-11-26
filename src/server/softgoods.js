@@ -12,6 +12,7 @@ import { exportDrape, DRAPE_FORMATS } from '../core/softgoods-drape-export.js';
 import { measureDrape, fitReport } from '../core/softgoods-measure.js';
 import { checkDesign } from '../core/softgoods-operations.js';
 import { validateSoftgoodsDocument } from '../core/softgoods-document.js';
+import { listTrims, trimsInput } from '../core/softgoods-trims.js';
 import { editSoftgoods, editChanges } from '../core/softgoods-edit.js';
 import { conformLines, physicsInput } from '../core/softgoods-physics.js';
 
@@ -30,7 +31,7 @@ const EXPORT_FORMATS = [...PRODUCTION_FORMATS, ...DRAPE_FORMATS];
 export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcast = () => {} } = {}) {
   const r = express.Router();
   const fail = (res, e) => res.status(e instanceof GraphError ? 400 : 500).json({ error: e.message || String(e) });
-  r.get('/simulation-input', (req, res) => { try { const d = doc.toJSON(), target = Math.max(5, Math.min(100, Number(req.query.target || 25))), meshes = d.patterns.map((p) => meshPattern(p, { target, lines: conformLines(d, p) })), seams = resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 }); res.json({ revision: d.revision, meshes, seams, attachments: d.attachments || [], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain, shrink: p.shrink, freeze: p.freeze, strengthen: p.strengthen })), ...physicsInput(d, meshes), collisionBody: d.simulation?.avatar ? { ...d.simulation.avatar, ...avatarBody(d.simulation.avatar) } : null }); } catch (e) { fail(res, e); } });
+  r.get('/simulation-input', (req, res) => { try { const d = doc.toJSON(), target = Math.max(5, Math.min(100, Number(req.query.target || 25))), meshes = d.patterns.map((p) => meshPattern(p, { target, lines: conformLines(d, p) })), seams = resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 }); res.json({ revision: d.revision, meshes, seams, attachments: d.attachments || [], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain, shrink: p.shrink, freeze: p.freeze, strengthen: p.strengthen })), ...physicsInput(d, meshes), ...trimsInput(d, { spacing: target / 2 }), collisionBody: d.simulation?.avatar ? { ...d.simulation.avatar, ...avatarBody(d.simulation.avatar) } : null }); } catch (e) { fail(res, e); } });
   r.get('/document', (_req, res) => res.json(doc.toJSON()));
   r.put('/document', (req, res) => { try { res.json(doc.replace(arranged(req.body, req.body?.simulation?.avatar || doc.data.simulation?.avatar))); } catch (e) { fail(res, e); } });
   // One pattern-making operation ({ op, ...args }, see src/core/softgoods-edit.js) on the stored design: a new revision, like a set.
@@ -42,6 +43,12 @@ export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcas
   r.post('/patterns/rectangle', (req, res) => { try { res.json(doc.addRectangle(req.body || {})); } catch (e) { fail(res, e); } });
   r.patch('/patterns/:pattern/points/:point', (req, res) => { try { res.json(doc.updatePoint(req.params.pattern, req.params.point, req.body?.x, req.body?.y)); } catch (e) { fail(res, e); } });
   r.post('/seams', (req, res) => { try { res.json(doc.addSeam(req.body || {})); } catch (e) { fail(res, e); } });
+  // Trims and hardware: every answer is the whole list with its derived geometry and check, so a prompt sees what its change did.
+  const trims = (extra) => ({ ...extra, ...listTrims(doc.toJSON()) });
+  r.get('/trims', (_req, res) => { try { res.json(trims()); } catch (e) { fail(res, e); } });
+  r.post('/trims', (req, res) => { try { res.json(trims({ added: doc.addTrim(req.body || {}).id })); } catch (e) { fail(res, e); } });
+  r.patch('/trims/:id', (req, res) => { try { res.json(trims({ updated: doc.updateTrim(req.params.id, req.body || {}).id })); } catch (e) { fail(res, e); } });
+  r.delete('/trims/:id', (req, res) => { try { res.json(trims({ removed: doc.removeTrim(req.params.id).id })); } catch (e) { fail(res, e); } });
   r.post('/arrange/avatar', (req, res) => { try { const d = arranged(doc.toJSON(), req.body || {}), result = { avatar: d.simulation.avatar, arrangement: d.arrangement.filter((a) => a.source === 'avatar') }; d.simulation = { ...(d.simulation || {}), avatar: result.avatar, status: 'not_run' }; res.json({ ...result, document: doc.replace(d) }); } catch (e) { fail(res, e); } });
   // One export. The patterns and tech pack always; formats adds the production outputs ('marker', 'bom', 'print', 'svg', and dxf: 'astm-style')
   // and the draped garment ('glb', 'obj' with its .mtl, 'fit': a fit report, also in the tech pack), any of them in one request.
