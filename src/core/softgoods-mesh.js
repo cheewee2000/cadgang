@@ -153,6 +153,18 @@ function conform(vertices, triangles, ends) {
   throw new GraphError('A simulation mesh could not follow a fold or elastic line');
 }
 
+/** meshPattern for the cloth preview. A piece that meshes as asked comes back exactly as meshPattern makes it. One that
+ *  does not (curves sampled at the mesh size turn a small round piece or hole into a polygon that crosses itself:
+ *  "a simulation mesh point fell outside its pattern") is meshed again with its curves sampled finer, 5 mm then less. */
+export function meshPatternFine(pattern, options = {}) {
+  let first;
+  for (const curveStep of [null, 5, 2, 1, 0.5]) {
+    if (curveStep != null && !(curveStep < (options.curveStep ?? options.target ?? 25))) continue;
+    try { return meshPattern(pattern, curveStep == null ? options : { ...options, curveStep }); } catch (e) { if (!(e instanceof GraphError)) throw e; first ||= e; }
+  }
+  throw first;
+}
+
 export function meshPattern(pattern, { target = 25, curveStep = target, lines = [] } = {}) {
   if (!(target > 0 && curveStep > 0)) throw new GraphError('Simulation mesh spacing must be positive');
   const { vertices, segmentVertices: coarse, segmentLengths, holes, loops } = boundariesOf(pattern, curveStep);
