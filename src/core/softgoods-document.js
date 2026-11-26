@@ -12,6 +12,7 @@ import { insideLoop, segmentDistance } from './softgoods-mesh.js';
 import { seamSide } from './softgoods-seams.js';
 import { validatePhysics, validateTack } from './softgoods-physics.js';
 import { validateTrims, elasticEntry } from './softgoods-trims.js';
+import { validateBodies } from './softgoods-bodies.js';
 
 const ID = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
 const TYPES = new Set(['line', 'arc', 'bezier']);
@@ -89,7 +90,6 @@ export function validateSoftgoodsDocument(value) {
       const ends = sampleSegment(raw, l, 24), along = l.type === 'line' ? Array.from({ length: 9 }, (_, i) => [ends[0][0] + (ends[1][0] - ends[0][0]) * i / 8, ends[0][1] + (ends[1][1] - ends[0][1]) * i / 8]) : ends;
       if (along.some((q) => !inMaterial(loops, q))) throw new GraphError(`${what} leaves the outline`);
     }
-    if (raw.placement != null && !['front', 'back', 'left', 'right'].includes(raw.placement.region)) throw new GraphError(`Pattern '${id}' placement region '${raw.placement.region}' must be front, back, left or right`);
     patterns.set(id, { ...raw, points, segments });
   }
   const seamIds = new Set();
@@ -163,6 +163,8 @@ export function validateSoftgoodsDocument(value) {
   // Trims and hardware are placed on the patterns above; softgoods-trims.js owns their schema and derives their geometry.
   if (!Array.isArray(d.trims)) throw new GraphError('trims must be an array');
   validateTrims(d);
+  // Bodies (CAD solids the cloth drapes on), where each placed piece goes (an avatar region or a body), and the floor.
+  validateBodies(d);
   return d;
 }
 

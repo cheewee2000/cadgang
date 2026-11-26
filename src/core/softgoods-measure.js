@@ -172,10 +172,12 @@ export function boundsOf(drape) {
   return { type: 'bounds', min: min.map((v) => round(v)), max: max.map((v) => round(v)), size: min.map((v, k) => round(max[k] - v)) };
 }
 
-/** The tape-measure length round the body at a height: the hull of where the plane cuts its shapes. */
-export function bodyCircumference(body, height) {
+/** The tape-measure length round the body at a height: the hull of where the plane cuts its shapes (all of them, or only those named). */
+export function bodyCircumference(body, height, only = null) {
   const points = [];
   for (const s of body?.shapes || []) {
+    if (only && !only.includes(s.name)) continue;
+    if (s.type === 'mesh') { const P = s.positions; for (let t = 0; t < s.indices.length; t += 3) for (let k = 0; k < 3; k++) { const a = s.indices[t + k] * 3, b = s.indices[t + (k + 1) % 3] * 3; if ((P[a + 2] >= height) !== (P[b + 2] >= height)) { const f = (height - P[a + 2]) / (P[b + 2] - P[a + 2]); points.push([P[a] + (P[b] - P[a]) * f, P[a + 1] + (P[b + 1] - P[a + 1]) * f]); } } continue; }
     if (s.type === 'ellipsoid') { const q = (height - s.c[2]) / s.r[2]; if (Math.abs(q) < 1) { const k = Math.sqrt(1 - q * q); for (let i = 0; i < 96; i++) points.push([s.c[0] + s.r[0] * k * Math.cos(i * Math.PI / 48), s.c[1] + s.r[1] * k * Math.sin(i * Math.PI / 48)]); } }
     else for (let j = 0; j <= 24; j++) { const c = mix(s.a, s.b, j / 24), d = height - c[2]; if (Math.abs(d) < s.r) { const k = Math.sqrt(s.r * s.r - d * d); for (let i = 0; i < 32; i++) points.push([c[0] + k * Math.cos(i * Math.PI / 16), c[1] + k * Math.sin(i * Math.PI / 16)]); } }
   }
@@ -226,11 +228,19 @@ export function fitReport(document, drape) {
     const rows = Array.from({ length: p.count }, (_, i) => [p.strain[i], p.pressure[i], p.area[i], limit.value]); all.push(...rows);
     return { id: p.id, name: p.name, material: p.material, ...stats(rows, limit, drape.pressureAvailable) };
   });
-  const ease = Object.entries(drape.body?.levels || {}).filter(([level]) => level !== 'shoulder').map(([level, height]) => {
+  // The full avatar says where a tape goes (src/core/softgoods-avatar.js girths): round the torso at chest, waist and hip, and square across each upper arm and thigh.
+  // Each is measured in a frame turned so that its plane is level: the body's own shapes there, and the cloth that goes round the same point.
+  const girths = drape.body?.girths, ease = girths ? girths.map((g) => {
+    const n = g.normal, e1 = Math.abs(n[2]) > 0.999 ? [1, 0, 0] : (() => { const l = Math.hypot(n[1], n[0]); return [-n[1] / l, n[0] / l, 0]; })(), e2 = [n[1] * e1[2] - n[2] * e1[1], n[2] * e1[0] - n[0] * e1[2], n[0] * e1[1] - n[1] * e1[0]];
+    const turn = (a) => { const out = new Float32Array(a.length); for (let i = 0; i < a.length; i += 3) { out[i] = a[i] * e1[0] + a[i + 1] * e1[1] + a[i + 2] * e1[2]; out[i + 1] = a[i] * e2[0] + a[i + 1] * e2[1] + a[i + 2] * e2[2]; out[i + 2] = a[i] * n[0] + a[i + 1] * n[1] + a[i + 2] * n[2]; } return out; }, [cx, cy, height] = turn(g.at);
+    const turned = { shapes: drape.body.shapes.filter((s) => g.shapes.includes(s.name)).map((s) => (s.type === 'mesh' ? { ...s, positions: turn(s.positions) } : s.type === 'capsule' ? { ...s, a: [...turn(s.a)], b: [...turn(s.b)] } : s)) };
+    const cut = circumference({ pieces: drape.pieces.map((p) => ({ ...p, positions: turn(p.positions) })) }, height, { centre: [cx, cy] }), loop = cut.loops.find((l) => l.closed && l.encloses), body = bodyCircumference(turned, height), garment = loop?.length ?? null;
+    return { level: g.level, height: round(g.at[2]), garment, body: round(body), stated: g.stated, ease: garment != null && body != null ? round(garment - body) : null, gap: garment != null && body != null ? round((garment - body) / (2 * Math.PI)) : null, closed: !!loop };
+  }) : Object.entries(drape.body?.levels || {}).filter(([level]) => level !== 'shoulder').map(([level, height]) => {
     const cut = circumference(drape, height), loop = cut.loops.find((l) => l.closed && l.encloses), body = bodyCircumference(drape.body, height), garment = loop?.length ?? null;
     return { level, height: round(height), garment, body: round(body), ease: garment != null && body != null ? round(garment - body) : null, gap: garment != null && body != null ? round((garment - body) / (2 * Math.PI)) : null, closed: !!loop, ...(level === 'chest' && drape.body?.chest ? { stated: drape.body.chest } : {}) };
   });
   const overall = stats(all, null, drape.pressureAvailable);
   return { schema: 'cadgang.softgoods-fit.v1', revision: drape.revision, drape: { settled: drape.settled, steps: drape.steps, residual: round(drape.residual, 4), target: drape.options.target }, ok: drape.settled && overall.strain.ok, overall, pieces, ease, bounds: boundsOf(drape),
-    notes: ['Lengths mm, strain %, pressure kPa.', `overLimit is the share of the cloth's area stretched past its fabric's strainLimit (${STRAIN_LIMIT * 100}% for a fabric that gives none); the stretch is ok while that is at most ${OVER_SHARE * 100}%.`, 'ease is the garment\'s circumference less the body\'s at that height; gap is that ease as a mean distance from the body. A level the garment does not close around has no ease.', 'body is measured round the avatar the cloth collides with, which is narrower than the stated chest.', 'An XPBD preview: it points at tight places and is not a fit guarantee.'] };
+    notes: ['Lengths mm, strain %, pressure kPa.', `overLimit is the share of the cloth's area stretched past its fabric's strainLimit (${STRAIN_LIMIT * 100}% for a fabric that gives none); the stretch is ok while that is at most ${OVER_SHARE * 100}%.`, 'ease is the garment\'s circumference less the body\'s at that height; gap is that ease as a mean distance from the body. A level the garment does not close around has no ease.', girths ? 'body is measured round the avatar the cloth collides with, whose torso, upper arms and thighs are built to the stated girths; an arm or a thigh is measured square across the limb, a third of the way down it.' : 'body is measured round the avatar the cloth collides with, which is narrower than the stated chest.', 'An XPBD preview: it points at tight places and is not a fit guarantee.'] };
 }

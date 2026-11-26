@@ -45,8 +45,9 @@ function clothPart(piece, thicknessMm, textureMm) {
   return { ...part, positions, normals, uv: twice(uv, 2), indices: Uint32Array.from(indices), strain: twice(part.strain, 1), pressure: twice(part.pressure, 1) };
 }
 
-/** One of the avatar's shapes as a mesh: an ellipsoid, or a capsule (a sphere pulled apart along its axis). */
+/** One of the body's shapes as a mesh: an ellipsoid, a capsule (a sphere pulled apart along its axis), or the triangles of a mesh shape (a CAD part, the full avatar's torso). */
 function bodyPart(shape, around = 24, rings = 12) {
+  if (shape.type === 'mesh') { const positions = new Float32Array(shape.positions.length), ix = Uint32Array.from(shape.indices); for (let i = 0; i < positions.length; i += 3) { positions[i] = shape.positions[i] * M; positions[i + 1] = shape.positions[i + 2] * M; positions[i + 2] = -shape.positions[i + 1] * M; } return { name: shape.name || shape.type, material: 'body', group: 'avatar', positions, normals: normalsOf(positions, ix), uv: null, indices: ix }; }
   const capsule = shape.type === 'capsule', norm = (v) => { const l = Math.hypot(...v) || 1; return v.map((x) => x / l); };
   const w = capsule ? norm([0, 1, 2].map((k) => shape.b[k] - shape.a[k])) : [0, 0, 1], seed = Math.abs(w[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
   const u = norm([seed[1] * w[2] - seed[2] * w[1], seed[2] * w[0] - seed[0] * w[2], seed[0] * w[1] - seed[1] * w[0]]), v = [w[1] * u[2] - w[2] * u[1], w[2] * u[0] - w[0] * u[2], w[0] * u[1] - w[1] * u[0]];
