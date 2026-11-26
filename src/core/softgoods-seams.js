@@ -59,7 +59,10 @@ export function resolveSeamCorrespondence(seams, meshes, { spacing = 10 } = {}) 
     if (!la || !lb) throw new GraphError(`Seam '${seam.id}' has no simulation boundary chain`);
     const ca = la.chain, cb = lb.chain;
     if (!(la.total > 0 && lb.total > 0)) throw new GraphError(`Seam '${seam.id}' has a collapsed boundary chain`);
-    const mismatch = Math.abs(la.total - lb.total) / Math.max(la.total, lb.total), allowed = Number(seam.ease || 0);
+    // Judged on the pattern's own lengths where the mesh carries them: a curve meshed in a few chords reads short, which is not a sewing mismatch.
+    const sewn = (mesh, ref, chords) => { const side = seamSide(ref), each = side.segments.map((id) => mesh.segmentLengths?.[id]); return each.every((v) => v > 0) ? spanLength(side, each) : chords; };
+    const trueA = sewn(ma, seam.a, la.total), trueB = sewn(mb, seam.b, lb.total);
+    const mismatch = Math.abs(trueA - trueB) / Math.max(trueA, trueB), allowed = Number(seam.ease || 0);
     const gather = seam.kind === 'gather' || seam.kind === 'elastic';
     if (!gather && mismatch > allowed + 1e-9) throw new GraphError(`Seam '${seam.id}' length mismatch ${(mismatch * 100).toFixed(2)}% exceeds ease ${(allowed * 100).toFixed(2)}%`);
     const count = Math.max(2, Math.ceil(Math.max(la.total, lb.total) / spacing) + 1), pairs = [];
