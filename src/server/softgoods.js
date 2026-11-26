@@ -6,7 +6,7 @@ import { exportProduction, PRODUCTION_FORMATS } from '../core/softgoods-producti
 import { resolveMaterials } from '../core/softgoods-fabrics.js';
 import { meshPatternFine } from '../core/softgoods-mesh.js';
 import { resolveSeamCorrespondence } from '../core/softgoods-seams.js';
-import { arrangePatternsAroundAvatar, avatarBody } from '../core/softgoods-arrange.js';
+import { arrangeDesign, collisionBody, loadBodies } from '../core/softgoods-bodies.js';
 import { drapeDocumentAsync } from '../core/softgoods-drape.js';
 import { exportDrape, DRAPE_FORMATS } from '../core/softgoods-drape-export.js';
 import { measureDrape, fitReport } from '../core/softgoods-measure.js';
@@ -50,11 +50,12 @@ async function sourceMesh(req) {
   return { source: { cell: cell || 'output' }, mesh: unpackMesh(Buffer.from(await r.arrayBuffer())) };
 }
 
-// Where every piece starts in 3D. A piece with placement stands at its region of the avatar; one without keeps the row it was given,
-// or is laid flat beside the others. A design set again keeps the avatar it had, so re-prompting a pattern does not lose the body.
+// Where every piece starts in 3D. A piece with placement stands at its region of the avatar, or on the body it names; one without keeps the row it was given
+// (a piece flattened from a 3D surface arrives with the row it was flattened from), or is laid flat beside the others. A design set again keeps the avatar it had, so re-prompting a pattern does not lose the body.
 function arranged(value, avatar) {
   const d = validateSoftgoodsDocument(value), rows = new Map(d.arrangement.map((a) => [a.pattern, a]));
-  if (avatar) { const result = arrangePatternsAroundAvatar(d.patterns, avatar); for (const a of result.arrangement) rows.set(a.pattern, a); d.simulation = { ...(d.simulation || {}), avatar: result.avatar, status: 'not_run' }; }
+  const result = arrangeDesign(d, avatar); for (const a of result.arrangement) rows.set(a.pattern, a);
+  if (avatar) d.simulation = { ...(d.simulation || {}), avatar: result.avatar, status: 'not_run' };
   let x = 0;
   d.arrangement = d.patterns.map((p) => { const xs = p.points.map((q) => q.x), row = rows.get(p.id) || { pattern: p.id, position: [x - Math.min(...xs, 0), 0, 0], rotation: [0, 0, 0], layer: 0 }; if (!rows.has(p.id)) x += (xs.length ? Math.max(...xs) - Math.min(...xs) : 0) + 40; return row; });
   return d;
@@ -62,18 +63,24 @@ function arranged(value, avatar) {
 
 const EXPORT_FORMATS = [...PRODUCTION_FORMATS, ...DRAPE_FORMATS];
 
-export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcast = () => {} } = {}) {
+// model(): the file the viewer has open ('a.step', or several joined by '|'); live(file): the pack of a project's live cells. A design's bodies may name either.
+export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcast = () => {}, model = () => null, live = null } = {}) {
   const r = express.Router();
+  // A body read from a file is read (once, then kept) before anything is arranged on it, simulated or checked; only this computer may name a path.
+  const bodies = (req) => ({ local: mayReadLocal(req), live }), ready = (req, d) => (d.bodies?.length ? loadBodies(d, bodies(req)) : d);
+  // source {model: true} is the model open now: the design keeps which file that was. avatar: null takes the avatar away (a bag has no wearer); no word of one keeps the design's.
+  const pinned = (body) => { for (const b of Array.isArray(body?.bodies) ? body.bodies : []) if (b?.source?.model === true) { const open = model(); if (!open) throw new GraphError(`Body '${b.id}' names the model open in CADgang, and none is: open the part, or name its file with source.step`); b.source = { ...b.source, model: String(open) }; } return body; };
+  const avatarOf = (body) => (body?.simulation && 'avatar' in body.simulation && !body.simulation.avatar ? null : body?.simulation?.avatar || doc.data.simulation?.avatar);
   const fail = (res, e) => res.status(e instanceof GraphError ? 400 : 500).json({ error: e.message || String(e) });
-  r.get('/simulation-input', (req, res) => { try { const d = doc.toJSON(), target = Math.max(5, Math.min(100, Number(req.query.target || 25))), meshes = d.patterns.map((p) => meshPatternFine(p, { target, lines: conformLines(d, p) })), shut = closures(d, meshes, { spacing: target / 2 }), seams = [...resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 }), ...shut.seams]; res.json({ revision: d.revision, meshes, seams, attachments: [...(d.attachments || []), ...shut.attachments], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain, shrink: p.shrink, freeze: p.freeze, strengthen: p.strengthen, source: p.source })), ...physicsInput(d, meshes), ...trimsInput(d, { spacing: target / 2 }), collisionBody: d.simulation?.avatar ? { ...d.simulation.avatar, ...avatarBody(d.simulation.avatar) } : null }); } catch (e) { fail(res, e); } });
+  r.get('/simulation-input', async (req, res) => { try { const d = await ready(req, doc.toJSON()), target = Math.max(5, Math.min(100, Number(req.query.target || 25))), meshes = d.patterns.map((p) => meshPatternFine(p, { target, lines: conformLines(d, p) })), shut = closures(d, meshes, { spacing: target / 2 }), seams = [...resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 }), ...shut.seams]; res.json({ revision: d.revision, meshes, seams, attachments: [...(d.attachments || []), ...shut.attachments], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain, shrink: p.shrink, freeze: p.freeze, strengthen: p.strengthen, source: p.source })), ...physicsInput(d, meshes), ...trimsInput(d, { spacing: target / 2 }), collisionBody: d.simulation?.avatar || d.bodies?.length ? collisionBody(d) : null }); } catch (e) { fail(res, e); } });
   r.get('/document', (_req, res) => res.json(doc.toJSON()));
-  r.put('/document', (req, res) => { try { res.json(doc.replace(arranged(req.body, req.body?.simulation?.avatar || doc.data.simulation?.avatar))); } catch (e) { fail(res, e); } });
+  r.put('/document', async (req, res) => { try { const body = pinned(req.body); await ready(req, validateSoftgoodsDocument(body)); res.json(doc.replace(arranged(body, avatarOf(body)))); } catch (e) { fail(res, e); } });
   // One pattern-making operation ({ op, ...args }, see src/core/softgoods-edit.js) on the stored design: a new revision, like a set.
-  r.post('/edit', (req, res) => { try { const before = doc.toJSON(), d = doc.replace(arranged(editSoftgoods(before, req.body || {}), doc.data.simulation?.avatar)); res.json({ revision: d.revision, patterns: d.patterns.map((p) => p.id), ...editChanges(before, d), check: checkDesign(d) }); } catch (e) { fail(res, e); } });
+  r.post('/edit', async (req, res) => { try { const before = await ready(req, doc.toJSON()), d = doc.replace(arranged(editSoftgoods(before, req.body || {}), doc.data.simulation?.avatar)); res.json({ revision: d.revision, patterns: d.patterns.map((p) => p.id), ...editChanges(before, d), check: checkDesign(d) }); } catch (e) { fail(res, e); } });
   // ?fit=1 adds the fit report of the draped design. It costs a drape (seconds, on a thread of its own), so only when asked.
-  r.get('/check', async (req, res) => { try { const d = doc.toJSON(), check = checkDesign(d); res.json(req.query.fit ? { ...check, fit: fitReport(d, await drapeDocumentAsync(d, { target: req.query.target })) } : check); } catch (e) { fail(res, e); } });
+  r.get('/check', async (req, res) => { try { const d = await ready(req, doc.toJSON()), check = checkDesign(d); res.json(req.query.fit ? { ...check, fit: fitReport(d, await drapeDocumentAsync(d, { target: req.query.target }, bodies(req))) } : check); } catch (e) { fail(res, e); } });
   // Measure the draped design: body {measures: [{type: distance|circumference|edge|seam|bounds, ...}], drape: {target, steps, tolerance}}.
-  r.post('/measure', async (req, res) => { try { const d = doc.toJSON(), drape = await drapeDocumentAsync(d, req.body?.drape); res.json({ revision: d.revision, drape: { settled: drape.settled, steps: drape.steps, residual: drape.residual, target: drape.options.target }, units: 'mm', results: measureDrape(d, drape, req.body?.measures || []) }); } catch (e) { fail(res, e); } });
+  r.post('/measure', async (req, res) => { try { const d = doc.toJSON(), drape = await drapeDocumentAsync(d, req.body?.drape, bodies(req)); res.json({ revision: d.revision, drape: { settled: drape.settled, steps: drape.steps, residual: drape.residual, target: drape.options.target }, units: 'mm', results: measureDrape(d, drape, req.body?.measures || []) }); } catch (e) { fail(res, e); } });
   r.post('/patterns/rectangle', (req, res) => { try { res.json(doc.addRectangle(req.body || {})); } catch (e) { fail(res, e); } });
   r.patch('/patterns/:pattern/points/:point', (req, res) => { try { res.json(doc.updatePoint(req.params.pattern, req.params.point, req.body?.x, req.body?.y)); } catch (e) { fail(res, e); } });
   r.post('/seams', (req, res) => { try { res.json(doc.addSeam(req.body || {})); } catch (e) { fail(res, e); } });
@@ -83,7 +90,7 @@ export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcas
   r.post('/trims', (req, res) => { try { res.json(trims({ added: doc.addTrim(req.body || {}).id })); } catch (e) { fail(res, e); } });
   r.patch('/trims/:id', (req, res) => { try { res.json(trims({ updated: doc.updateTrim(req.params.id, req.body || {}).id })); } catch (e) { fail(res, e); } });
   r.delete('/trims/:id', (req, res) => { try { res.json(trims({ removed: doc.removeTrim(req.params.id).id })); } catch (e) { fail(res, e); } });
-  r.post('/arrange/avatar', (req, res) => { try { const d = arranged(doc.toJSON(), req.body || {}), result = { avatar: d.simulation.avatar, arrangement: d.arrangement.filter((a) => a.source === 'avatar') }; d.simulation = { ...(d.simulation || {}), avatar: result.avatar, status: 'not_run' }; res.json({ ...result, document: doc.replace(d) }); } catch (e) { fail(res, e); } });
+  r.post('/arrange/avatar', async (req, res) => { try { const d = arranged(await ready(req, doc.toJSON()), req.body || {}), result = { avatar: d.simulation.avatar, arrangement: d.arrangement.filter((a) => a.source === 'avatar') }; d.simulation = { ...(d.simulation || {}), avatar: result.avatar, status: 'not_run' }; res.json({ ...result, document: doc.replace(d) }); } catch (e) { fail(res, e); } });
   // Faces of a hard part as pattern pieces with their seams (core/softgoods-flatten.js). mode: append | replace write
   // the document; preview returns the same result and writes nothing; list names the bodies and faces to choose from.
   // ponytail: flattens on the server's own thread (a second for 10k triangles of dome); a worker if big bodies make the window wait
@@ -93,7 +100,7 @@ export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcas
       if (!['append', 'replace', 'preview', 'list'].includes(mode)) throw new GraphError("mode must be 'append', 'replace', 'preview' or 'list'");
       const { mesh, source } = await sourceMesh(req);
       if (mode === 'list') return res.json({ source, ...describeFaces(mesh, options) });
-      const current = doc.toJSON(), flat = flattenMesh(mesh, { ...options, source, avoid: mode === 'append' ? [...current.patterns.map((p) => p.id), ...current.seams.map((s) => s.id)] : [] });
+      const current = await ready(req, doc.toJSON()), flat = flattenMesh(mesh, { ...options, source, avoid: mode === 'append' ? [...current.patterns.map((p) => p.id), ...current.seams.map((s) => s.id)] : [] });
       const written = mode === 'preview' ? null : doc.replace(arranged(mergeFlattened(current, flat, mode), current.simulation?.avatar));
       res.json({ mode, source: { ...source, body: flat.body }, revision: (written || current).revision, ...flat.report, ...(mode === 'preview' && { patterns: flat.patterns }) });
     } catch (e) { fail(res, e); }
@@ -102,10 +109,10 @@ export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcas
   // and the draped garment ('glb', 'obj' with its .mtl, 'fit': a fit report, also in the tech pack), any of them in one request.
   // The drape runs first, on a thread of its own, so a design that cannot be draped or laid on its roll writes nothing.
   r.post('/export', async (req, res) => { try {
-    const b = req.body || {}, d = doc.toJSON(), dir = path.resolve(exportDir()), name = String(b.name || 'softgoods'), formats = b.formats ?? [];
+    const b = req.body || {}, d = await ready(req, doc.toJSON()), dir = path.resolve(exportDir()), name = String(b.name || 'softgoods'), formats = b.formats ?? [];
     if (!Array.isArray(formats)) throw new GraphError('formats must be an array');
     const unknown = formats.find((f) => !EXPORT_FORMATS.includes(f)); if (unknown !== undefined) throw new GraphError(`Unknown export format '${unknown}'. Known: ${EXPORT_FORMATS.join(', ')}`);
-    const draped = formats.filter((f) => DRAPE_FORMATS.includes(f)), drape = draped.length ? await drapeDocumentAsync(d, b.drape) : null, fit = draped.includes('fit') ? fitReport(d, drape) : null;
+    const draped = formats.filter((f) => DRAPE_FORMATS.includes(f)), drape = draped.length ? await drapeDocumentAsync(d, b.drape, bodies(req)) : null, fit = draped.includes('fit') ? fitReport(d, drape) : null;
     const result = exportProduction(d, dir, name, { ...b, formats: formats.filter((f) => PRODUCTION_FORMATS.includes(f)), fit });
     if (drape) { const { files, ...stated } = exportDrape(d, drape, dir, name, { formats: draped, thickness: !!b.thickness, avatar: !!b.avatar, textureMm: b.textureMm ?? 1000 }); result.files.push(...files); result.drape = { settled: drape.settled, steps: drape.steps, residual: drape.residual, target: drape.options.target, ...stated }; }
     if (fit) { const file = path.join(dir, `${name}_fit.json`); fs.writeFileSync(file, JSON.stringify(fit, null, 2)); result.files.push(file); result.fit = { ok: fit.ok, strain: fit.overall.strain, pressure: fit.overall.pressure, contact: fit.overall.contact, ease: fit.ease }; }

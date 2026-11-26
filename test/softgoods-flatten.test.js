@@ -355,8 +355,9 @@ test('the cut that opens a tube names its seam, and a zipper put there closes th
   const r = flattenMesh(body('can', [side(30, 30, 80), disc(30, 80, 1), disc(30, 0, -1)])), [cut] = r.report.cuts;
   assert.deepEqual(cut.seams, ['sew_can_wrap_can_wrap']); assert.ok(!('keys' in cut));
   const seam = r.seams.find((s) => s.id === cut.seams[0]); assert.equal(seam.a.pattern, 'can_wrap'); assert.equal(seam.b.pattern, 'can_wrap');
-  // The plain seam comes out and a zipper goes along its two sides.
-  const zipped = (closed) => validateSoftgoodsDocument({ ...mergeFlattened(new SoftgoodsDocument(null).toJSON(), r), seams: r.seams.filter((s) => s !== seam), trims: [{ id: 'side_zip', kind: 'zipper', spec: { chain: '#5' }, along: [seam.a], mate: [seam.b], flip: seam.flip, closed }] });
+  // The plain seam comes out and a zipper goes along its two sides. The side starts flat (not wrapped round the can, as flattening starts it), so the zipper does the closing.
+  const flatStart = { ...r, arrangement: r.arrangement.map(({ wrap, ...row }) => row) };
+  const zipped = (closed) => validateSoftgoodsDocument({ ...mergeFlattened(new SoftgoodsDocument(null).toJSON(), flatStart), seams: r.seams.filter((s) => s !== seam), trims: [{ id: 'side_zip', kind: 'zipper', spec: { chain: '#5' }, along: [seam.a], mate: [seam.b], flip: seam.flip, closed }] });
   // How far apart the two cut edges of the side are at their widest, after the drape.
   const gape = (d) => {
     const w = drapeDocument(d, { target: 30, steps: 120 }).pieces.find((p) => p.id === 'can_wrap'), n = w.uv.length / 2, width = Math.max(...Array.from({ length: n }, (_, i) => w.uv[2 * i])); let widest = 0;

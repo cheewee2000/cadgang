@@ -97,7 +97,10 @@ async function pointed(file, body, point) {
   } finally { k.inflight--; }
 }
 app.use('/api/view', viewRouter({ dataDir: DATA, broadcast, pointed }));
-app.use('/api/softgoods', softgoodsRouter(softgoods, { exportDir: () => project.dir || process.cwd(), broadcast }));
+// A softgoods design may drape on the model the viewer has open: the focused window's file, or a project's live cells, asked of this server as a window would.
+const openModel = () => tabs().find((t) => t.active)?.subject ?? tabs()[0]?.subject ?? null;
+const liveModel = async (file) => { const dir = path.dirname(path.dirname(file)), r = await fetch(`http://127.0.0.1:${PORT}/api/cells/live${dir === project.dir ? '' : `?session=${sessionFor(dir).key}`}`); if (!r.ok) throw new Error(`The live model of ${dir} did not build: ${(await r.json().catch(() => ({}))).error || r.status}`); return Buffer.from(await r.arrayBuffer()); };
+app.use('/api/softgoods', softgoodsRouter(softgoods, { exportDir: () => project.dir || process.cwd(), broadcast, model: openModel, live: liveModel }));
 // The kernels: one process per cell document (kernel.js), so a build in one project blocks neither
 // this server nor another project's build, and a kernel whose heap fills is replaced on its own —
 // the app, its pages and its sessions stay up. The OCCT WASM heap only ever grows, so it exits 75

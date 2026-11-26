@@ -8,7 +8,7 @@ import { Worker, isMainThread, parentPort, workerData } from 'node:worker_thread
 import { GraphError } from './errors.js';
 import { meshPatternFine } from './softgoods-mesh.js';
 import { resolveSeamCorrespondence } from './softgoods-seams.js';
-import { avatarBody } from './softgoods-arrange.js';
+import { collisionBody, loadBodies, loadedBodies, primeBodies, bodyStamps } from './softgoods-bodies.js';
 import { resolveMaterials } from './softgoods-fabrics.js';
 import { closures, trimsInput } from './softgoods-trims.js';
 import { conformLines, physicsInput } from './softgoods-physics.js';
@@ -19,7 +19,7 @@ import { simulate, advance, FOLDING } from '../../web/softgoods-worker.js';
 export function simulationInput(d, target = 25) {
   target = Math.max(5, Math.min(100, Number(target) || 25));
   const meshes = d.patterns.map((p) => meshPatternFine(p, { target, lines: conformLines(d, p) })), shut = closures(d, meshes, { spacing: target / 2 }), seams = [...resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 }), ...shut.seams];
-  return { revision: d.revision, meshes, seams, attachments: [...(d.attachments || []), ...shut.attachments], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain, shrink: p.shrink, freeze: p.freeze, strengthen: p.strengthen, source: p.source })), ...physicsInput(d, meshes), ...trimsInput(d, { spacing: target / 2 }), collisionBody: d.simulation?.avatar ? { ...d.simulation.avatar, ...avatarBody(d.simulation.avatar) } : null };
+  return { revision: d.revision, meshes, seams, attachments: [...(d.attachments || []), ...shut.attachments], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain, shrink: p.shrink, freeze: p.freeze, strengthen: p.strengthen, source: p.source })), ...physicsInput(d, meshes), ...trimsInput(d, { spacing: target / 2 }), collisionBody: d.simulation?.avatar || d.bodies?.length ? collisionBody(d) : null };
 }
 
 // The cloth is stepped CHUNK steps at a time and has settled when its vertices moved, root mean square, less than
@@ -28,7 +28,8 @@ export function simulationInput(d, target = 25) {
 const CHUNK = 20;
 const DEFAULTS = { target: 25, steps: 600, tolerance: 0.02, damping: 0.05 };
 const optionsOf = (o) => { const n = (k, lo, hi) => { const v = Number(o?.[k] ?? DEFAULTS[k]); return Math.max(lo, Math.min(hi, Number.isFinite(v) ? v : DEFAULTS[k])); }; return { target: n('target', 5, 100), steps: Math.round(n('steps', 1, 5000)), tolerance: n('tolerance', 1e-6, 100), damping: n('damping', 0, 1) }; };
-const keyOf = (document, options) => crypto.createHash('sha1').update(JSON.stringify([document, options])).digest('hex');
+// A body read from a file is part of what was draped: its stamp changes when the file does.
+const keyOf = (document, options) => crypto.createHash('sha1').update(JSON.stringify(document.bodies?.length ? [document, options, bodyStamps(document)] : [document, options])).digest('hex');
 
 function run(document, options) {
   if (!document.patterns?.length) throw new GraphError('No softgoods patterns to drape');
@@ -61,12 +62,14 @@ export function drapeDocument(document, options) {
   return remember(key, results.get(key) || run(document, o));
 }
 
-/** The same, on a thread of its own: a drape takes seconds and the server has pages to answer meanwhile. Two requests for one drape share it. */
-export function drapeDocumentAsync(document, options) {
+/** The same, on a thread of its own: a drape takes seconds and the server has pages to answer meanwhile. Two requests for one drape share it.
+ *  bodies: who may read the design's body files and how (loadBodies); they are read here first, and handed to the thread. */
+export async function drapeDocumentAsync(document, options, bodies) {
+  if (document.bodies?.length) await loadBodies(document, bodies);
   const o = optionsOf(options), key = keyOf(document, o);
   if (results.has(key)) return Promise.resolve(remember(key, results.get(key)));
   if (!pending.has(key)) pending.set(key, new Promise((resolve, reject) => {
-    const thread = new Worker(new URL(import.meta.url), { workerData: { softgoodsDrape: { document, options: o } } });
+    const thread = new Worker(new URL(import.meta.url), { workerData: { softgoodsDrape: { document, options: o, bodies: loadedBodies(document) } } });
     thread.once('message', (m) => (m.error ? reject(m.graph ? new GraphError(m.error) : new Error(m.error)) : resolve(remember(key, m.result))));
     thread.once('error', reject);
     thread.once('exit', (code) => { if (code) reject(new Error(`The drape thread stopped with code ${code}`)); });
@@ -75,6 +78,6 @@ export function drapeDocumentAsync(document, options) {
 }
 
 if (!isMainThread && workerData?.softgoodsDrape) {
-  try { parentPort.postMessage({ result: run(workerData.softgoodsDrape.document, workerData.softgoodsDrape.options) }); }
+  try { primeBodies(workerData.softgoodsDrape.bodies); parentPort.postMessage({ result: run(workerData.softgoodsDrape.document, workerData.softgoodsDrape.options) }); }
   catch (e) { parentPort.postMessage({ error: e.message || String(e), graph: e instanceof GraphError }); }
 }

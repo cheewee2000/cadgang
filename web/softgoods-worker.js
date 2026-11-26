@@ -5,12 +5,15 @@
 // creased folds, shrinkage, frozen and strengthened pieces, and layers that keep their order. A design with none of them runs as before.
 // Units: mm, g, s. A force is g·mm/s² (1e-6 N), so a pressure is g/(mm·s²), which is the pascal.
 
+import { meshField } from './softgoods-sdf.js';
+
 let state = null, timer = null;
 const V = (a, i) => [a[i * 3], a[i * 3 + 1], a[i * 3 + 2]];
 const set = (a, i, p) => { a[i * 3] = p[0]; a[i * 3 + 1] = p[1]; a[i * 3 + 2] = p[2]; };
 // An arrangement turns a flat piece about x, then y, then z (degrees) and moves it: [90,0,0] stands it up facing -y.
 // src/core/softgoods-arrange.js centres pieces with the same convention.
-const transform = (u, v, a = {}) => { const [rx, ry, rz] = (a.rotation || [0, 0, 0]).map((x) => x * Math.PI / 180), p = a.position || [0, 0, 0]; let x = u, y = v * Math.cos(rx), z = v * Math.sin(rx); [x, z] = [x * Math.cos(ry) + z * Math.sin(ry), -x * Math.sin(ry) + z * Math.cos(ry)]; [x, y] = [x * Math.cos(rz) - y * Math.sin(rz), x * Math.sin(rz) + y * Math.cos(rz)]; return [p[0] + x, p[1] + y, p[2] + z]; };
+// wrap {radius, centre} first bends the flat piece into a tube about a line parallel to its v axis, `radius` behind its face at u = centre: a sleeve round an arm.
+const transform = (u, v, a = {}) => { const [rx, ry, rz] = (a.rotation || [0, 0, 0]).map((x) => x * Math.PI / 180), p = a.position || [0, 0, 0]; let x = u, y = v * Math.cos(rx), z = v * Math.sin(rx); if (a.wrap) { const t = (u - a.wrap.centre) / a.wrap.radius, w = a.wrap.radius * (Math.cos(t) - 1); x = a.wrap.centre + a.wrap.radius * Math.sin(t); y -= w * Math.sin(rx); z += w * Math.cos(rx); } [x, z] = [x * Math.cos(ry) + z * Math.sin(ry), -x * Math.sin(ry) + z * Math.cos(ry)]; [x, y] = [x * Math.cos(rz) - y * Math.sin(rz), x * Math.sin(rz) + y * Math.cos(rz)]; return [p[0] + x, p[1] + y, p[2] + z]; };
 
 const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 // Elastic. The cloth beside an elastic gathers in folds finer than the mesh, so within GATHER_DEPTH of the line it may shorten
@@ -119,7 +122,7 @@ function initialize(input) {
   const give = springs.length || gathered.length || creases.length ? Float64Array.from(inv) : inv; if (give !== inv) for (const c of constraints) if (c.kind === 'attachment' && !c.alpha) give[c.a] = 0;
   // Layers: a piece on a higher layer stays on the face side of every piece on a lower one. face is each triangle's winding in its flat pattern.
   const layerOf = pieces.map((p) => Number(arrangements.get(p.id)?.layer || 0)), layered = layerOf.some((l) => l !== layerOf[0]), face = layered ? Int8Array.from({ length: tris.length / 3 }, (_, t) => { const [a, b, c] = [0, 1, 2].map((k) => tris[t * 3 + k]); return (uvAll[b * 2] - uvAll[a * 2]) * (uvAll[c * 2 + 1] - uvAll[a * 2 + 1]) - (uvAll[b * 2 + 1] - uvAll[a * 2 + 1]) * (uvAll[c * 2] - uvAll[a * 2]) < 0 ? -1 : 1; }) : null;
-  state = { input, pieces, x, prev, inv, radius, area, density, friction, bend, total, uvAll, pieceAt, tris: Int32Array.from(tris), cell: edgeCount ? edgeSum / edgeCount : 25, push: new Float64Array(total), contact: new Float64Array(total), substeps: substepsFor(stuffed), materialAt, constraints, springs, gathered, creases, give, pulled: new Float64Array(springs.length ? total * 3 : 0), pulls: [...new Set(springs.flatMap((c) => [c.a, c.b]))], frozen, stuffed, layerOf, face, excluded, velocities: new Float64Array(total * 3), pressure: new Float32Array(total), running: false, step: 0, collision: input.collisionBody ? 'avatar+self' : 'self', pressureAvailable: !!input.collisionBody };
+  state = { input, pieces, x, prev, inv, radius, area, density, friction, bend, total, uvAll, pieceAt, tris: Int32Array.from(tris), cell: edgeCount ? edgeSum / edgeCount : 25, push: new Float64Array(total), contact: new Float64Array(total), substeps: substepsFor(stuffed), reach: radius.reduce((m, r) => Math.max(m, r), 0) + 1, materialAt, constraints, springs, gathered, creases, give, pulled: new Float64Array(springs.length ? total * 3 : 0), pulls: [...new Set(springs.flatMap((c) => [c.a, c.b]))], frozen, stuffed, layerOf, face, excluded, velocities: new Float64Array(total * 3), pressure: new Float32Array(total), running: false, step: 0, collision: input.collisionBody ? 'avatar+self' : 'self', pressureAvailable: !!input.collisionBody };
 }
 
 function project(c, dt) {
@@ -223,13 +226,19 @@ function collideSelf() {
   }
 }
 // The body is a few ellipsoids and capsules (src/core/softgoods-arrange.js avatarBody) standing on a floor at z = 0.
+// A shape {type: 'mesh', positions, indices, clearance, friction} is a CAD part or a lofted torso (src/core/softgoods-bodies.js):
+// the cloth keeps its clearance off the mesh's signed distance field (web/softgoods-sdf.js), built once per shape. A body that
+// gives a friction uses it in place of the fabric's. floor moves the floor (mm), and floor: false takes it away.
+const fields = new WeakMap(), fieldOf = (s, reach) => { let f = fields.get(s); if (!f || f.reach < reach) { f = meshField(s.positions, s.indices, { reach }); f.reach = reach; fields.set(s, f); } return f; };
 // A vertex inside one is put back on its surface; how far it was pushed is the contact force, and cloth in contact drags.
 // drag false: only put the cloth back outside, after the layers moved it (friction has had this substep's slide already).
 function collideAvatar(drag = true) {
-  const b = state.input.collisionBody; if (!b) return; const { x, prev, radius, push, friction } = state;
+  const b = state.input.collisionBody; if (!b) return; const { x, prev, radius, push, friction } = state, floor = b.floor === false ? -Infinity : Number(b.floor ?? 0), out = [0, 0, 0], shapes = b.shapes || [], field = shapes.map((s) => (s.type === 'mesh' ? fieldOf(s, state.reach + Number(s.clearance ?? 0)) : null));
   for (let i = 0; i < state.inv.length; i++) {
-    const p = [x[i * 3], x[i * 3 + 1], x[i * 3 + 2]]; let n = null, depth = 0;
-    for (const s of b.shapes || []) {
+    const p = [x[i * 3], x[i * 3 + 1], x[i * 3 + 2]]; let n = null, depth = 0, by = null, byDepth = 0;
+    for (let k = 0; k < shapes.length; k++) {
+      const s = shapes[k];
+      if (field[k]) { const dist = radius[i] + Number(s.clearance ?? 0) - field[k].at(p[0], p[1], p[2], out); if (dist > depth) { depth = dist; n = [out[0], out[1], out[2]]; by = s; byDepth = dist; } continue; }
       if (s.type === 'ellipsoid') {
         const r = s.r.map((v) => v + radius[i]), d = [0, 1, 2].map((k) => (p[k] - s.c[k]) / r[k]), q = Math.hypot(...d); if (q >= 1 || q < 1e-9) continue;
         // Out along the surface normal at the point the centre ray meets: the gradient of the ellipsoid's own equation.
@@ -239,13 +248,13 @@ function collideAvatar(drag = true) {
         if (dist > depth && q > 1e-9) { depth = dist; n = d.map((v) => v / q); }
       }
     }
-    if (p[2] < radius[i]) { x[i * 3 + 2] = radius[i]; p[2] = radius[i]; }
+    if (p[2] < floor + radius[i]) { x[i * 3 + 2] = floor + radius[i]; p[2] = floor + radius[i]; }
     if (!n) continue;
     for (let k = 0; k < 3; k++) x[i * 3 + k] = p[k] + n[k] * depth;
     push[i] += depth; if (!drag) continue;
     // Friction: of this step's slide along the surface, the contact holds back up to friction × the push.
     const d = [0, 1, 2].map((k) => x[i * 3 + k] - prev[i * 3 + k]), dn = d[0] * n[0] + d[1] * n[1] + d[2] * n[2], slide = d.map((v, k) => v - dn * n[k]), sl = Math.hypot(...slide);
-    if (sl > 1e-9) { const hold = Math.min(1, friction[i] * depth / sl); for (let k = 0; k < 3; k++) x[i * 3 + k] -= slide[k] * hold; }
+    if (sl > 1e-9) { const hold = Math.min(1, (by && depth === byDepth && by.friction != null ? by.friction : friction[i]) * depth / sl); for (let k = 0; k < 3; k++) x[i * 3 + k] -= slide[k] * hold; }
   }
 }
 // Seams close from wherever the pieces were arranged: without a speed limit the first steps would fling the cloth.
@@ -315,6 +324,6 @@ function snapshot() {
   for (const c of state.gathered) { const a = V(state.x, c.a), b = V(state.x, c.b), e = Math.max(0, (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) - c.rest) / c.rest); strain[c.a] += e; strain[c.b] += e; count[c.a]++; count[c.b]++; }
   let minStrain = Infinity, maxStrain = -Infinity, maxPressure = 0;
   for (let i = 0; i < strain.length; i++) { strain[i] = count[i] ? strain[i] / count[i] : 0; minStrain = Math.min(minStrain, strain[i]); maxStrain = Math.max(maxStrain, strain[i]); maxPressure=Math.max(maxPressure,pressure[i]); }
-  return { type: 'frame', step: state.step, ms: state.ms ?? 0, body: state.input.collisionBody?.shapes || [], collision: state.collision, diagnostics: { strain: { unit: 'ratio', min: minStrain, max: maxStrain }, pressure: { available: state.pressureAvailable, unit: 'Pa', min: 0, max: maxPressure, reason: state.pressureAvailable ? null : 'No collision body is present in this preview' } }, ...(state.stuffed.length ? { stuffing: state.stuffed.map((g) => ({ id: g.id, volume: g.volume / 1e6, pressure: g.now })) } : {}), positions, strain, pressure, pieces: state.pieces.map((p) => ({ id: p.id, off: p.off, count: p.uv.length / 2, triangles: p.triangles })) };
+  return { type: 'frame', step: state.step, ms: state.ms ?? 0, body: (state.input.collisionBody?.shapes || []).map((s) => (s.type === 'mesh' ? { type: s.type, name: s.name, id: s.id } : s)), collision: state.collision, diagnostics: { strain: { unit: 'ratio', min: minStrain, max: maxStrain }, pressure: { available: state.pressureAvailable, unit: 'Pa', min: 0, max: maxPressure, reason: state.pressureAvailable ? null : 'No collision body is present in this preview' } }, ...(state.stuffed.length ? { stuffing: state.stuffed.map((g) => ({ id: g.id, volume: g.volume / 1e6, pressure: g.now })) } : {}), positions, strain, pressure, pieces: state.pieces.map((p) => ({ id: p.id, off: p.off, count: p.uv.length / 2, triangles: p.triangles })) };
 }
 globalThis.onmessage = (e) => { const m = e.data; if (m.type === 'init') { initialize(m.input); send(); } else if (m.type === 'run') { state.running = true; clearInterval(timer); timer = setInterval(tick, 1000 / 60); } else if (m.type === 'pause') state.running = false; else if (m.type === 'reset') { initialize(state.input); send(); } };

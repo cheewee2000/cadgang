@@ -4,6 +4,7 @@ import { segmentLength } from './softgoods-export.js';
 import { checkTrims } from './softgoods-trims.js';
 import { seamSide, spanLength } from './softgoods-seams.js';
 import { checkPhysics } from './softgoods-physics.js';
+import { checkBodies } from './softgoods-bodies.js';
 
 const finite = (v) => Number.isFinite(Number(v));
 
@@ -73,5 +74,7 @@ export function checkDesign(document) {
   const base = one(document), sizes = (document.grades || []).map((g) => ({ size: g.size, ...one(gradeDocument(document, g)) }));
   // Elastic, stuffing, tacks and shrinkage are checked once, at the base size; a design with none of them reports no physics.
   const physics = checkPhysics(document);
-  return { ...base, ok: base.ok && sizes.every((s) => s.ok) && physics.every((p) => p.ok), sizes, ...(physics.length ? { physics } : {}) };
+  // What the cloth drapes on: a piece that starts inside the avatar or a body is a warning, and does not fail the check.
+  const bodies = document.simulation?.avatar || document.bodies?.length ? checkBodies(document) : [];
+  return { ...base, ok: base.ok && sizes.every((s) => s.ok) && physics.every((p) => p.ok), sizes, ...(physics.length ? { physics } : {}), ...(bodies.length ? { bodies } : {}) };
 }
