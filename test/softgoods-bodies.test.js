@@ -60,7 +60,9 @@ test('a design with no body and only the old avatar fields is arranged, simulate
   };
   for (const [name, w] of Object.entries(was)) {
     const { input, check, document } = await served(w.design, 30), got = sums(simulate(input, 60));
-    assert.equal(sha(input), w.input, `${name}: the simulation input`); assert.equal(sha(document.arrangement), w.arrangement, `${name}: the arrangement`); assert.equal(sha(check), w.check, `${name}: the check`);
+    // Flattening (a branch below this one) added each mesh's true segment lengths to the input; everything else is as it was at 9ffd7d0.
+    const pinned = JSON.parse(JSON.stringify(input)); for (const m of pinned.meshes) delete m.segmentLengths;
+    assert.equal(sha(pinned), w.input, `${name}: the simulation input`); assert.equal(sha(document.arrangement), w.arrangement, `${name}: the arrangement`); { const { warnings, ...was9 } = check; assert.equal(sha(was9), w.check, `${name}: the check (trims, below, adds allowance warnings)`); }
     assert.equal(got[0], w.sums[0]); assert.ok(Math.abs(got[1] - w.sums[1]) < 1e-3 && Math.abs(got[2] - w.sums[2]) < 1e-1, `${name} moved: ${got} against ${w.sums}`);
     assert.deepEqual(input, JSON.parse(JSON.stringify(simulationInput(document, 30))), `${name}: the server drapes what the page is given`);
     if (name === 'tunic') { assert.equal(isFullAvatar(document.simulation.avatar), false); assert.equal(input.collisionBody.shapes.length, 4); assert.equal(sha(fitReport(document, drapeDocument(document, { target: 60, steps: 200 }))), 'b200c0e352a079f9140c57468a5f3e856e400787', 'the fit report'); }
