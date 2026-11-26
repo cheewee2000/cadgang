@@ -105,6 +105,39 @@ class JointData(unittest.TestCase):
         self.assertGreater(float(np.ptp(xa[:, 5:], axis=0).min()), 2 * float(np.ptp(xa[:, :3], axis=0).min()))
         self.assertLessEqual(float(np.abs(xb[:, 5:]).max()), 2.0)
 
+    def test_surface_cache_sees_contact_that_vertices_miss(self):
+        try:
+            import open3d  # noqa: F401
+        except ImportError:
+            self.skipTest('open3d is not installed: the surface cache is not checked')
+        from joints.data import PairDataset, build_index, load_index
+        from joints.surface import build_cache
+        # a 10 mm plate lying 0.5 mm under the middle of a 40 mm one: no vertex of either is near the other
+        A = np.array([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]], np.float32)
+        B = np.array([[-15, -15, .5], [25, -15, .5], [25, 25, .5], [-15, 25, .5]], np.float32)
+        with tempfile.TemporaryDirectory() as t:
+            os.makedirs(f'{t}/dump'), os.makedirs(f'{t}/tris')
+            np.concatenate([A, B]).tofile(f'{t}/dump/a1.f32')
+            asm = _asm([_p(0, [0, 0, 0, 10, 10, 0], 0, 4), _p(1, [-15, -15, .5, 25, 25, .5], 4, 4)],
+                       [dict(type='PLANAR', occs=[0, 1], axis=[0, 0, 1], origin=[0, 0, 0], dot=0, together=False)])
+            Path(f'{t}/dump/a1.json').write_text(json.dumps(asm))
+            np.array([0, 1, 2, 0, 2, 3] * 2, '<u4').tofile(f'{t}/tris/a1.u32')
+            Path(f'{t}/tris/a1.tri.json').write_text(json.dumps(dict(id='a1', parts=[[0, 0, 6], [1, 6, 6]])))
+            build_index(f'{t}/dump', f'{t}/idx', log=lambda *a: None)
+            info = build_cache(f'{t}/idx', f'{t}/dump', f'{t}/tris', f'{t}/surf', log=lambda *a: None)
+            self.assertEqual((info['pairs'], info['with_surface']), (1, 1))
+            idx, _ = load_index(f'{t}/idx')
+            verts = PairDataset(idx, f'{t}/dump', n_points=64)[0]
+            self.assertEqual(float(verts['pa'][:, 3].sum()), 0, 'vertex clouds show no contact here')
+            it = PairDataset(idx, f'{t}/dump', n_points=64, surface=f'{t}/surf', normals=True)[0]
+            self.assertEqual(it['pa'].shape, (64, 8))
+            self.assertTrue(np.all(it['pa'][:, 3] == 1), 'every point of the small plate is 0.5 mm from the large one')
+            np.testing.assert_allclose(np.abs(it['pa'][:, 5:]), [[0, 0, 1]] * 64, atol=1e-6)
+            share = float(it['pb'][:, 3].mean())
+            self.assertTrue(0 < share < 0.3, 'only the large plate\'s middle touches')
+            more = PairDataset(idx, f'{t}/dump', n_points=64, surface=f'{t}/surf', focus=0.5)[0]
+            self.assertGreater(float(more['pb'][:, 3].mean()), share)
+
     def test_index_split_by_assembly_and_dataset(self):
         from joints.data import LABEL_ID, LABELS, PairDataset, build_index, load_index, train_rows_for_epoch
         from joints.synth import write_dump
@@ -243,12 +276,12 @@ class JointTraining(unittest.TestCase):
         self.assertLess(rep['ort_max_abs_diff'], 0.1, 'onnxruntime must follow PyTorch through the neighbour ties')
         # the static graph ranks neighbours on input xyz only; with the contact focus and the local frame it trains,
         # evaluates and exports with three more channels
-        T.train(self._args(f'{self.t}/static', *edge, '--edge-graph', 'static', '--focus', '0.5', '--local-frame'))
+        T.train(self._args(f'{self.t}/static', *edge, '--edge-graph', 'static', '--focus', '0.5', '--local-frame', '--normals'))
         T.evaluate(build_parser().parse_args(['eval', '--index', f'{self.t}/idx', '--ckpt', f'{self.t}/static/best.pt',
                                               '--report', f'{self.t}/static-rep', '--device', 'cpu', '--workers', '0']))
         T.export(build_parser().parse_args(['export', '--ckpt', f'{self.t}/static/best.pt', '--out', f'{self.t}/static.onnx']))
         rep = json.loads(Path(f'{self.t}/static.onnx.json').read_text())
-        self.assertEqual(rep['contract']['local_frame'], True)
+        self.assertEqual((rep['contract']['local_frame'], rep['contract']['normals']), (True, True))
         self.assertLess(rep['ort_max_abs_diff'], 1e-3, 'the static graph must export exactly')
 
     def test_xyz_pretrain_transfer_preserves_joint_channels(self):

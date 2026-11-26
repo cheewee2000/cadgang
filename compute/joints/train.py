@@ -165,7 +165,7 @@ def write_report(m, meta, info, base):
 def dataset_for(index, dump, d, **kw):
     """The PairDataset a checkpoint's data config describes (older checkpoints have no focus or local frame)."""
     return PairDataset(index, dump, d['n_points'], d['contact_mm'], d['seed'], focus=d.get('focus', 0.0),
-                       local=d.get('local', False), **kw)
+                       local=d.get('local', False), surface=d.get('surface'), normals=d.get('normals', False), **kw)
 
 
 def train(args, on_step=None):
@@ -176,7 +176,8 @@ def train(args, on_step=None):
     arch = arch_of(args)
     data = dict(n_points=args.points, contact_mm=args.contact_mm, gap_mm=meta['gap_mm'], index=str(args.index),
                 seed=args.seed, n_ch=arch['in_ch'], n_extra=N_EXTRA, focus=float(getattr(args, 'focus', 0.0)),
-                local=bool(getattr(args, 'local_frame', False)))
+                local=bool(getattr(args, 'local_frame', False)), surface=getattr(args, 'surface', None),
+                normals=bool(getattr(args, 'normals', False)))
     ds = dataset_for(index, dump, data, train=True, augment=args.augment)
     ev = dataset_for(index, dump, data, train=False)
     rows_fn = lambda e: train_rows_for_epoch(index, e, args.seed, args.none_ratio, args.max_train_rows)
@@ -325,7 +326,8 @@ def export(args):
     rep['checkpoint'] = str(args.ckpt)
     rep['contract'] = dict(
         labels=list(LABELS), axial=list(AXIAL), n_points=n, contact_mm=d['contact_mm'], focus=d.get('focus', 0.0),
-        local_frame=d.get('local', False),   # True: three more channels, see joints/data.py make_pair
+        local_frame=d.get('local', False), normals=d.get('normals', False), surface_points=bool(d.get('surface')),
+        # local_frame and normals each add three channels, in that order: see joints/data.py pair_channels
         inputs=dict(pa='(B, N, 5) smaller part (by bbox diagonal): xyz centred on the union bbox of both parts and divided by '
                        'its diagonal; contact flag (within contact_mm of a vertex of the other part); inside the other '
                        "part's bbox grown by contact_mm. Points: N vertices sampled from the part's world-space mesh (mm).",

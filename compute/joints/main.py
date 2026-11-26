@@ -67,6 +67,8 @@ def build_parser():
     p.add_argument('--focal-gamma', type=float, default=0.0, help='0 = cross entropy; >0 focal type loss')
     p.add_argument('--focus', type=float, default=0.0, help='share of each part\'s points drawn from the contact region (default 0)')
     p.add_argument('--local-frame', action='store_true', help='three more channels: xyz in the smaller part\'s own frame')
+    p.add_argument('--surface', help='surface cache from `surface`: points on the faces with exact contact, not mesh vertices')
+    p.add_argument('--normals', action='store_true', help='three more channels: the surface normal (needs --surface to be more than zeros)')
     p.add_argument('--edge-graph', choices=('dynamic', 'static'), default='dynamic',
                    help='EdgeConv neighbours from each block\'s features (dynamic) or once from the input xyz (static)')
     p.add_argument('--teachers', nargs='*', help='checkpoints to distil from: their averaged type probabilities join the loss')
@@ -109,6 +111,13 @@ def build_parser():
     p.add_argument('--target-mb', type=float, default=10.0)
     p.add_argument('--opset', type=int, default=17)
 
+    p = sub.add_parser('surface', help='surface cache for --surface: needs the triangles dump and open3d')
+    p.add_argument('--index', required=True)
+    p.add_argument('--dump')
+    p.add_argument('--tris', required=True, help='directory of <id>.u32 + <id>.tri.json from explode.automate.mjs --tris')
+    p.add_argument('--out', required=True)
+    p.add_argument('--workers', type=int, default=1)
+
     p = sub.add_parser('synth', help='write a tiny synthetic dump (for trying the pipeline, not for results)')
     p.add_argument('--out', required=True)
     p.add_argument('--assemblies', type=int, default=12)
@@ -123,6 +132,10 @@ def main(argv=None):
         ids = [l.strip() for l in open(args.ids, encoding='utf-8') if l.strip()] if args.ids else None
         build_index(args.dump, args.out, args.gap_mm, args.seed, args.val, args.test, ids, args.workers,
                     log=lambda *a: print(*a, file=sys.stderr, flush=True))
+        return 0
+    if args.cmd == 'surface':
+        from joints.surface import build_cache
+        build_cache(args.index, args.dump, args.tris, args.out, args.workers, log=lambda *a: print(*a, file=sys.stderr, flush=True))
         return 0
     if args.cmd == 'synth':
         from joints.synth import write_dump

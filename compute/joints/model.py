@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from cadnn.pointnet import PointNetEncoder, mlp
-from joints.data import AXIAL_IDS, LABELS, N_CH, N_EXTRA, N_LOCAL
+from joints.data import AXIAL_IDS, LABELS, N_CH, N_EXTRA, N_LOCAL, N_NORMAL
 
 
 @torch.no_grad()
@@ -130,7 +130,8 @@ def arch_of(args):
                 edge_k=int(args.edge_k), attn_width=int(args.attn_width), attn_heads=int(args.attn_heads),
                 attn_tokens=int(args.attn_tokens), attn_layers=int(args.attn_layers),
                 edge_graph=getattr(args, 'edge_graph', 'dynamic'),
-                in_ch=N_CH + (N_LOCAL if getattr(args, 'local_frame', False) else 0),
+                in_ch=N_CH + (N_LOCAL if getattr(args, 'local_frame', False) else 0)
+                + (N_NORMAL if getattr(args, 'normals', False) else 0),
                 extra_dim=N_EXTRA, n_types=len(LABELS))
 
 
