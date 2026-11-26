@@ -3,7 +3,7 @@
 
 import { GraphError } from './errors.js';
 import { segmentLength } from './softgoods-export.js';
-import { resolveSeamCorrespondence } from './softgoods-seams.js';
+import { resolveSeamCorrespondence, seamSide } from './softgoods-seams.js';
 import { resolveMaterials } from './softgoods-fabrics.js';
 
 const round = (v, d = 2) => (Number.isFinite(v) ? +v.toFixed(d) : null);
@@ -142,11 +142,27 @@ export function edgeLength(document, drape, patternId, segmentId) {
   return { type: 'edge', pattern: patternId, segment: segmentId, draped: round(draped), flat: round(flat), stretch: round(draped / flat - 1, 5) };
 }
 
+/** One side of a seam in the drape. A whole segment is measured as an edge; a span (part of a segment, or several in a row) is measured
+ *  along its boundary chain, in the flat pattern and in the drape, between where it starts and where it stops. */
+function sideLength(document, drape, ref) {
+  const side = seamSide(ref); if (side.segments.length === 1 && side.from === 0 && side.to === 1) return edgeLength(document, drape, side.pattern, side.segments[0]);
+  const piece = pieceOf(drape, side.pattern), flatAt = [0], drapedAt = [0], each = [];
+  for (const id of side.segments) {
+    const chain = piece.segmentVertices?.[id], base = flatAt.at(-1); if (!chain) throw new GraphError(`No segment '${side.pattern}.${id}' on a contour`);
+    for (let k = 1; k < chain.length; k++) { const i = chain[k - 1], j = chain[k]; flatAt.push(flatAt.at(-1) + Math.hypot(piece.uv[j * 2] - piece.uv[i * 2], piece.uv[j * 2 + 1] - piece.uv[i * 2 + 1])); drapedAt.push(drapedAt.at(-1) + dist(at(piece, j), at(piece, i))); }
+    each.push(flatAt.at(-1) - base);
+  }
+  const start = side.from * each[0], end = flatAt.at(-1) - (1 - side.to) * each.at(-1), flat = end - start;
+  const along = (want) => { let k = 1; while (k < flatAt.length - 1 && flatAt[k] < want) k++; return drapedAt[k - 1] + (flatAt[k] > flatAt[k - 1] ? (want - flatAt[k - 1]) / (flatAt[k] - flatAt[k - 1]) : 0) * (drapedAt[k] - drapedAt[k - 1]); };
+  const draped = along(end) - along(start);
+  return { type: 'edge', pattern: side.pattern, segments: side.segments, from: side.from, to: side.to, draped: round(draped), flat: round(flat), stretch: round(draped / flat - 1, 5) };
+}
+
 /** Both sides of a seam in the drape, and how far apart the sewn points still are. */
 export function seamLength(document, drape, seamId) {
   const seam = (drape.seams || []).find((s) => s.id === seamId); if (!seam) throw new GraphError(`No seam '${seamId}'`);
   const A = pieceOf(drape, seam.a.pattern), B = pieceOf(drape, seam.b.pattern), point = (piece, side) => mix(at(piece, side.vertices[0]), at(piece, side.vertices[1]), side.weights[1]);
-  return { type: 'seam', seam: seamId, a: edgeLength(document, drape, seam.a.pattern, seam.a.segment), b: edgeLength(document, drape, seam.b.pattern, seam.b.segment), gap: round(Math.max(0, ...seam.pairs.map((pair) => dist(point(A, pair.a), point(B, pair.b))))) };
+  return { type: 'seam', seam: seamId, a: sideLength(document, drape, seam.a), b: sideLength(document, drape, seam.b), gap: round(Math.max(0, ...seam.pairs.map((pair) => dist(point(A, pair.a), point(B, pair.b))))) };
 }
 
 /** The box round the draped cloth. size is [across x, front to back y, top to bottom z]. */

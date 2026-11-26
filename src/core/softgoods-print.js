@@ -69,6 +69,7 @@ text{font-family:${FONT};font-weight:400;font-style:normal;fill:#000000}
 .STITCH{stroke-dasharray:3 1.5}
 .GRAIN{stroke-width:.3}
 .DART,.PLEAT,.FOLD{stroke-dasharray:6 1.5 1 1.5}
+.INTERNAL{stroke-dasharray:1 1}
 .frame{fill:none;stroke:#000000;stroke-width:.15}
 .join{fill:none;stroke:#000000;stroke-width:.15;stroke-dasharray:1 2}
 .mark{fill:none;stroke:#000000;stroke-width:.2}
@@ -112,7 +113,7 @@ export function printHTML(document, { name = 'softgoods', sizes, ...options } = 
     `<rect class="frame scale-4in" x="${inch[0]}" y="${inch[1]}" width="101.6" height="101.6"/><text x="${inch[0] + 3}" y="${inch[1] + 7}" font-size="4">4 IN</text>`,
     `<text x="${right}" y="${listTop + 3}" font-size="2.6">PIECE · ROWS × COLS · PAGES</text>`,
     ...listed.map((line, i) => `<text x="${right}" y="${n(listTop + 3 + (i + 1) * 4.5)}" font-size="2.6">${esc(line.toUpperCase())}</text>`),
-    `<text x="${margin}" y="${n(page[1] - margin - 8)}" font-size="2.6">SOLID HEAVY: CUT · DASHED: STITCH · ARROWS: GRAIN · SHORT HEAVY TICKS: NOTCHES · DASH-DOT: DART, PLEAT, FOLD</text>`,
+    `<text x="${margin}" y="${n(page[1] - margin - 8)}" font-size="2.6">SOLID HEAVY: CUT · DASHED: STITCH · ARROWS: GRAIN · SHORT HEAVY TICKS: NOTCHES · DASH-DOT: DART, PLEAT, FOLD · DOTTED: INTERNAL LINES</text>`,
     `<text x="${margin}" y="${n(page[1] - margin - 3)}" font-size="2.6">PAGE 1 OF ${total}</text>`,
   ];
   const pages = [svg(cover.join(''))];

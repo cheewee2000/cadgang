@@ -12,6 +12,7 @@ import { exportDrape, DRAPE_FORMATS } from '../core/softgoods-drape-export.js';
 import { measureDrape, fitReport } from '../core/softgoods-measure.js';
 import { checkDesign } from '../core/softgoods-operations.js';
 import { validateSoftgoodsDocument } from '../core/softgoods-document.js';
+import { editSoftgoods, editChanges } from '../core/softgoods-edit.js';
 
 // Where every piece starts in 3D. A piece with placement stands at its region of the avatar; one without keeps the row it was given,
 // or is laid flat beside the others. A design set again keeps the avatar it had, so re-prompting a pattern does not lose the body.
@@ -31,6 +32,8 @@ export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcas
   r.get('/simulation-input', (req, res) => { try { const d = doc.toJSON(), target = Math.max(5, Math.min(100, Number(req.query.target || 25))), meshes = d.patterns.map((p) => meshPattern(p, { target })), seams = resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 }); res.json({ revision: d.revision, meshes, seams, attachments: d.attachments || [], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain })), collisionBody: d.simulation?.avatar ? { ...d.simulation.avatar, ...avatarBody(d.simulation.avatar) } : null }); } catch (e) { fail(res, e); } });
   r.get('/document', (_req, res) => res.json(doc.toJSON()));
   r.put('/document', (req, res) => { try { res.json(doc.replace(arranged(req.body, req.body?.simulation?.avatar || doc.data.simulation?.avatar))); } catch (e) { fail(res, e); } });
+  // One pattern-making operation ({ op, ...args }, see src/core/softgoods-edit.js) on the stored design: a new revision, like a set.
+  r.post('/edit', (req, res) => { try { const before = doc.toJSON(), d = doc.replace(arranged(editSoftgoods(before, req.body || {}), doc.data.simulation?.avatar)); res.json({ revision: d.revision, patterns: d.patterns.map((p) => p.id), ...editChanges(before, d), check: checkDesign(d) }); } catch (e) { fail(res, e); } });
   // ?fit=1 adds the fit report of the draped design. It costs a drape (seconds, on a thread of its own), so only when asked.
   r.get('/check', async (req, res) => { try { const d = doc.toJSON(), check = checkDesign(d); res.json(req.query.fit ? { ...check, fit: fitReport(d, await drapeDocumentAsync(d, { target: req.query.target })) } : check); } catch (e) { fail(res, e); } });
   // Measure the draped design: body {measures: [{type: distance|circumference|edge|seam|bounds, ...}], drape: {target, steps, tolerance}}.

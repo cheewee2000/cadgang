@@ -4,8 +4,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { GraphError } from './errors.js';
-import { checkDesign, gradePattern } from './softgoods-operations.js';
+import { checkDesign, gradePattern, seamLengths } from './softgoods-operations.js';
 import { billOfMaterials, bomHTML } from './softgoods-bom.js';
+import { seamSideLabel } from './softgoods-seams.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const pointMap = (p) => new Map(p.points.map((q) => [q.id, q]));
@@ -88,11 +89,27 @@ export function cutContours(pattern, { curveStep = 2, miterLimit = 4 } = {}) {
 
 function stitchAt(pattern, segment, at) { const q = sampleSegment(pattern, segment, 128), f = Math.max(0, Math.min(1, Number(at ?? .5))) * (q.length - 1), i = Math.min(q.length - 2, Math.floor(f)), t = f - i; return { p: [q[i][0] + (q[i + 1][0] - q[i][0]) * t, q[i][1] + (q[i + 1][1] - q[i][1]) * t], d: sub2(q[i + 1], q[i]) }; }
 
+/** A sewn dart keeps its cloth: where a dart annotation's two lines are two consecutive outline segments (its legs), the cut runs straight
+ *  across the dart's mouth at the first leg's allowance, and the legs are only stitched. */
+export function capDarts(pattern, annotations = []) {
+  let p = pattern;
+  for (const a of annotations) {
+    if (a.type !== 'dart' || a.lines?.length !== 2) continue;
+    const legs = a.lines.map(([u, v]) => p.segments.find((s) => s.type === 'line' && ((s.a === u && s.b === v) || (s.a === v && s.b === u)))); if (!legs[0] || !legs[1]) continue;
+    for (const loop of p.contours) {
+      const i = loop.indexOf(legs[0].id), j = loop.indexOf(legs[1].id), n = loop.length; if (i < 0 || j < 0 || (j !== (i + 1) % n && i !== (j + 1) % n)) continue;
+      const [first, second] = j === (i + 1) % n ? legs : [legs[1], legs[0]];
+      p = { ...p, segments: p.segments.filter((s) => s !== second).map((s) => (s === first ? { ...s, b: second.b } : s)), contours: p.contours.map((l) => (l === loop ? l.filter((id) => id !== second.id) : l)) }; break;
+    }
+  }
+  return p;
+}
+
 /** R12 DXF with exact STITCH geometry and a closed manufacturing CUT contour. */
 export function patternDXF(pattern, annotations = []) {
   const entities = [];
   for (const loop of pattern.contours) for (const id of loop) { const q = sampleSegment(pattern, pattern.segments.find((s) => s.id === id)); for (let i = 1; i < q.length; i++) entities.push(line(q[i - 1], q[i], 'STITCH')); }
-  for (const q of cutContours(pattern)) for (let i = 0; i < q.length; i++) entities.push(line(q[i], q[(i + 1) % q.length], 'CUT'));
+  for (const q of cutContours(capDarts(pattern, annotations))) for (let i = 0; i < q.length; i++) entities.push(line(q[i], q[(i + 1) % q.length], 'CUT'));
   for (const s of pattern.segments) {
     const { p: a, d } = stitchAt(pattern, s, .5), l = Math.hypot(...d) || 1, mm = Number(pattern.allowances?.[s.id] ?? 0), loop = pattern.contours.find((x) => x.includes(s.id)), outer = signedArea(loopPolyline(pattern, loop)) >= 0 ? [d[1] / l, -d[0] / l] : [-d[1] / l, d[0] / l];
     if (mm) entities.push(line(a, add2(a, mul2(outer, mm)), 'ALLOWANCE'));
@@ -102,6 +119,7 @@ export function patternDXF(pattern, annotations = []) {
     const { p, d } = stitchAt(pattern, s, n.at), l = Math.hypot(...d) || 1, loop = pattern.contours.find((x) => x.includes(s.id)), outward = signedArea(loopPolyline(pattern, loop)) >= 0 ? [d[1] / l, -d[0] / l] : [-d[1] / l, d[0] / l], allowance = Number(pattern.allowances?.[s.id] ?? 0), cut = add2(p, mul2(outward, allowance));
     entities.push(line(cut, add2(cut, mul2(outward, -Number(n.depth ?? 4))), 'NOTCH'));
   }
+  for (const l of pattern.internalLines || []) { const q = sampleSegment(pattern, Array.isArray(l) ? { type: 'line', a: l[0], b: l[1] } : l); for (let i = 1; i < q.length; i++) entities.push(line(q[i - 1], q[i], 'INTERNAL')); }
   for (const annotation of annotations) {
     const points = pointMap(pattern), layer = ({ dart: 'DART', pleat: 'PLEAT', fold_line: 'FOLD' })[annotation.type];
     for (const [aId, bId] of annotation.lines || []) {
@@ -113,14 +131,14 @@ export function patternDXF(pattern, annotations = []) {
   const b = bounds(pattern), c = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2], ang = Number(pattern.grain?.angle ?? 90) * Math.PI / 180, span = Math.max(20, Math.min(b.max[0] - b.min[0], b.max[1] - b.min[1]) * 0.35), d = [Math.cos(ang) * span, Math.sin(ang) * span];
   entities.push(line([c[0] - d[0], c[1] - d[1]], [c[0] + d[0], c[1] + d[1]], 'GRAIN'));
   entities.push(text([c[0], c[1]], `${pattern.name || pattern.id}  CUT ${pattern.cut || 1}  ${pattern.material || ''}`, Math.max(3, span / 12)));
-  const layerNames = ['STITCH', 'CUT', 'ALLOWANCE', 'NOTCH', 'GRAIN', 'TEXT', 'DART', 'PLEAT', 'FOLD'];
-  const layers = layerNames.map((n, i) => `0\nLAYER\n2\n${n}\n70\n0\n62\n${[3,7,2,6,4,7,1,5,6][i]}\n6\nCONTINUOUS`).join('\n');
+  const layerNames = ['STITCH', 'CUT', 'ALLOWANCE', 'NOTCH', 'GRAIN', 'TEXT', 'DART', 'PLEAT', 'FOLD', 'INTERNAL'];
+  const layers = layerNames.map((n, i) => `0\nLAYER\n2\n${n}\n70\n0\n62\n${[3,7,2,6,4,7,1,5,6,8][i]}\n6\nCONTINUOUS`).join('\n');
   return `0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n${layerNames.length}\n${layers}\n0\nENDTAB\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n${entities.join('\n')}\n0\nENDSEC\n0\nEOF\n`;
 }
 
 export function techPack(document, name = 'softgoods', { fit = null } = {}) {
   const patterns = document.patterns.map((p) => ({ id: p.id, name: p.name || p.id, material: p.material || '', cut: p.cut || 1, grain: p.grain || null, allowances: p.allowances || {}, notches: p.notches || [], annotations: (document.annotations || []).filter((a) => a.pattern === p.id), segments: p.segments.map((s) => ({ id: s.id, type: s.type, lengthMm: +segmentLength(p, s).toFixed(2) })) }));
-  const seams = document.seams.map((s) => { const pa = document.patterns.find((p) => p.id === s.a.pattern), pb = document.patterns.find((p) => p.id === s.b.pattern), a = pa?.segments.find((q) => q.id === s.a.segment), b = pb?.segments.find((q) => q.id === s.b.segment); return { ...s, lengthAmm: a ? +segmentLength(pa, a).toFixed(2) : null, lengthBmm: b ? +segmentLength(pb, b).toFixed(2) : null }; });
+  const measured = new Map(seamLengths(document).map((q) => [q.id, q])), seams = document.seams.map((s) => ({ ...s, lengthAmm: measured.get(s.id).lengthA, lengthBmm: measured.get(s.id).lengthB }));
   return { schema: 'cadgang.softgoods-tech-pack.v1', name, generatedAt: new Date().toISOString(), revision: document.revision, materials: document.materials || {}, patterns, seams, constraints: document.constraints || [], annotations: document.annotations || [], sizes: (document.grades || []).map((g) => g.size), check: checkDesign(document), bom: billOfMaterials(document), notes: ['All dimensions mm.', 'DXF STITCH geometry is authoritative.', 'DXF CUT geometry is the closed seam-allowance cutting boundary; ALLOWANCE records the per-edge schedule.'], ...(fit ? { fit } : {}) };
 }
 
@@ -133,7 +151,7 @@ function fitHTML(fit) {
 
 export function techPackHTML(pack) {
   const rows = pack.patterns.map((p) => `<tr><td>${esc(p.name)}</td><td>${esc(p.material)}</td><td>${p.cut}</td><td>${esc(Object.entries(p.allowances).map(([k, v]) => `${k}: ${v} mm`).join('; '))}</td><td>${esc(p.notches.length)}</td><td>${esc(p.annotations.map((a) => `${a.type}: ${a.label || a.id}`).join('; '))}</td></tr>`).join('');
-  const seams = pack.seams.map((s) => `<tr><td>${esc(s.id)}</td><td>${esc(`${s.a.pattern}.${s.a.segment}`)}</td><td>${esc(`${s.b.pattern}.${s.b.segment}`)}</td><td>${s.lengthAmm ?? ''}</td><td>${s.lengthBmm ?? ''}</td><td>${esc(s.kind || 'plain')}</td><td>${flag(pack.check?.seams.find((q) => q.id === s.id))}</td></tr>`).join('');
+  const seams = pack.seams.map((s) => `<tr><td>${esc(s.id)}</td><td>${esc(seamSideLabel(s.a))}</td><td>${esc(seamSideLabel(s.b))}</td><td>${s.lengthAmm ?? ''}</td><td>${s.lengthBmm ?? ''}</td><td>${esc(s.kind || 'plain')}</td><td>${flag(pack.check?.seams.find((q) => q.id === s.id))}</td></tr>`).join('');
   const measured = (list) => list.map((c) => `<li>${esc(c.name || c.id)} · ${esc(c.type)} · target ${c.target} mm · measured ${c.measured} mm · ${c.withinTolerance ? 'OK' : `OUT BY ${c.delta} mm`}</li>`).join('');
   const sizes = (pack.check?.sizes || []).map((z) => `<tr><td>${esc(z.size)}</td><td>${z.ok ? 'OK' : 'CHECK'}</td><td>${esc(z.seams.filter((q) => !q.ok).map((q) => `${q.id}: ${q.lengthA} / ${q.lengthB} mm`).join('; '))}</td><td>${esc(z.constraints.filter((c) => !c.withinTolerance).map((c) => `${c.name || c.id}: ${c.measured} mm`).join('; '))}</td></tr>`).join('');
   return `<!doctype html><meta charset="utf-8"><title>${esc(pack.name)} tech pack</title><style>body{font:13px monospace;margin:32px;color:#111}h1{font-size:22px}h2{margin-top:32px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:6px;text-align:left}small{color:#666}@media print{body{margin:12mm}}</style><h1>${esc(pack.name)} · TECH PACK</h1><small>Revision ${pack.revision} · ${esc(pack.generatedAt)}</small><h2>PATTERN SCHEDULE</h2><table><tr><th>Pattern</th><th>Material</th><th>Cut</th><th>Allowances</th><th>Notches</th><th>Annotations</th></tr>${rows}</table><h2>SEAM SCHEDULE</h2><table><tr><th>Seam</th><th>A</th><th>B</th><th>A mm</th><th>B mm</th><th>Type</th><th>Lengths</th></tr>${seams}</table><h2>MEASUREMENT CONSTRAINTS</h2><ul>${measured(pack.check?.constraints || [])}</ul>${sizes ? `<h2>GRADED SIZES</h2><table><tr><th>Size</th><th>Check</th><th>Seams that no longer match</th><th>Measurements out of tolerance</th></tr>${sizes}</table>` : ''}${pack.bom ? bomHTML(pack.bom) : ''}${pack.fit ? fitHTML(pack.fit) : ''}<h2>NOTES</h2><ol>${pack.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ol>`;
