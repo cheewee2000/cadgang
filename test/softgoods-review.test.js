@@ -61,16 +61,41 @@ test('a tunic stood around the avatar closes its seams over the shoulders and ha
   const input = { meshes, seams, attachments: [], arrangement: placed.arrangement, materials: d.materials, patterns: d.patterns, collisionBody: { ...placed.avatar, ...body } };
   const start = simulate(input, 0), offsets = Object.fromEntries(start.pieces.map((p) => [p.id, p.off]));
   assert.ok(P(start, offsets.front).every(Number.isFinite) && Math.abs(P(start, offsets.front)[1] + 146) < 1e-6, 'the front panel stands in front of the body before the first step');
-  const frame = simulate(input, 240); let top = -Infinity, low = Infinity, hanging = 0;
+  const frame = simulate(input, 240); let low = Infinity, hanging = 0;
   assert.ok(frame.positions.every(Number.isFinite));
-  for (let i = 0; i < frame.positions.length / 3; i++) { top = Math.max(top, P(frame, i)[2]); low = Math.min(low, P(frame, i)[2]); }
-  assert.ok(Math.abs(top - body.levels.shoulder) < 25, `the shoulder seam rests at the shoulder line: ${top.toFixed(0)} against ${body.levels.shoulder}`);
+  for (let i = 0; i < frame.positions.length / 3; i++) low = Math.min(low, P(frame, i)[2]);
   assert.ok(low > body.levels.shoulder - 760, `the hem is ${low.toFixed(0)} mm up: the tunic has not slid off`);
-  for (const s of seams) for (const pair of s.pairs) { const at = (side, off) => side.vertices.reduce((q, v, k) => P(frame, off + v).map((x, j) => q[j] + x * side.weights[k]), [0, 0, 0]), a = at(pair.a, offsets.front), b = at(pair.b, offsets.back); assert.ok(Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 5, `seam ${s.id} is closed: its sides started 292 mm apart`); }
+  for (const s of seams) for (const pair of s.pairs) { const at = (side, off) => side.vertices.reduce((q, v, k) => P(frame, off + v).map((x, j) => q[j] + x * side.weights[k]), [0, 0, 0]), a = at(pair.a, offsets.front), b = at(pair.b, offsets.back);
+    assert.ok(Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 5, `seam ${s.id} is closed: its sides started 292 mm apart`);
+    if (s.id.startsWith('shoulder') && Math.abs(a[0]) < 150) assert.ok(Math.abs(a[2] - body.levels.shoulder) < 10, `the shoulder seam rests on the shoulder: ${a[2].toFixed(0)} against ${body.levels.shoulder}`); }
   // Below the armholes the cloth only hangs: it must not read as stretched.
   const front = meshes[0]; for (let i = 0; i < front.uv.length / 2; i++) if (front.uv[i * 2 + 1] < 400) hanging = Math.max(hanging, Math.abs(frame.strain[offsets.front + i]));
   assert.ok(hanging < 0.02, `hanging cloth shows ${(hanging * 100).toFixed(2)}% strain`);
   assert.ok(frame.diagnostics.pressure.available && frame.diagnostics.pressure.max > 1 && frame.body.length === 4);
+});
+
+test('a fabric with a measured rigidity droops as a cantilever beam does, whatever the mesh; without one it hangs', () => {
+  const strip = rect('strip', 160, 40), free = 100, tip = (rigidity, target) => {
+    // Clamped over its first 60 mm, 500 mm up, with nothing under it.
+    const mesh = meshPattern(strip, { target }), attachments = []; for (let i = 0; i < mesh.uv.length / 2; i++) if (mesh.uv[i * 2] <= 160 - free + 1e-6) attachments.push({ id: `clamp_${i}`, pattern: 'strip', at: [mesh.uv[i * 2], mesh.uv[i * 2 + 1]], to: [mesh.uv[i * 2], mesh.uv[i * 2 + 1], 500] });
+    const frame = simulate({ meshes: [mesh], seams: [], attachments, arrangement: [{ pattern: 'strip', position: [0, 0, 500], rotation: [0, 0, 0] }], materials: { canvas: { arealDensity: 340, thickness: 0.6, damping: 0.05, ...(rigidity ? { rigidity } : {}) } }, patterns: [strip], collisionBody: null }, 480);
+    let z = 0, n = 0; for (let i = 0; i < mesh.uv.length / 2; i++) if (mesh.uv[i * 2] > 160 - 1e-6) { z += P(frame, i)[2]; n++; } return 500 - z / n;
+  };
+  // Self weight w per length on a cantilever of stiffness D per width: the tip drops w L⁴ / 8D.
+  const D = 4, beam = 0.340 * 9.81e-6 * free ** 4 / (8 * D);
+  for (const target of [10, 20]) { const drop = tip(D, target); assert.ok(Math.abs(drop - beam) < 0.15 * beam, `at ${target} mm the tip drops ${drop.toFixed(1)} mm, a beam of ${D} N·mm drops ${beam.toFixed(1)} mm`); }
+  assert.ok(tip(D * 4, 10) < 0.4 * tip(D, 10), 'four times the rigidity droops about a quarter as far');
+  const limp = tip(0, 10); assert.ok(limp > 80, `without a rigidity the strip hangs: its tip is ${limp.toFixed(0)} mm down`);
+});
+
+test('cloth laid on cloth rests on it, a thickness apart, and does not pass through', () => {
+  const lower = rect('lower', 200, 200), upper = rect('upper', 150, 150), meshes = [meshPattern(lower, { target: 25 }), meshPattern(upper, { target: 25 })];
+  const frame = simulate({ meshes, seams: [], attachments: [], arrangement: [{ pattern: 'lower', position: [-100, -100, 600.5], rotation: [0, 0, 0] }, { pattern: 'upper', position: [-62, -81, 606], rotation: [0, 0, 0] }], materials: { canvas: { arealDensity: 340, thickness: 0.6 } }, patterns: [lower, upper],
+    collisionBody: { shapes: [{ type: 'ellipsoid', c: [0, 0, 500], r: [5000, 5000, 100] }] } }, 240);
+  const z = (piece) => { const pc = frame.pieces.find((q) => q.id === piece), out = []; for (let i = 0; i < pc.count; i++) out.push(P(frame, pc.off + i)[2]); return out; };
+  const under = Math.max(...z('lower')), over = z('upper');
+  assert.ok(Math.min(...over) > under + 0.3, `the upper sheet is ${(Math.min(...over) - under).toFixed(2)} mm above the lower one at its closest`);
+  assert.ok(Math.max(...over) < under + 1.5, `and it has landed: ${(Math.max(...over) - under).toFixed(2)} mm at its farthest`);
 });
 
 const graded = () => ({ version: 1, patterns: [rect('front', 300, 400), rect('back', 300, 400)], seams: [{ id: 'side', a: { pattern: 'front', segment: 'front_right' }, b: { pattern: 'back', segment: 'back_left' }, flip: true }],
