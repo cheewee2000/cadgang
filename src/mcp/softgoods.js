@@ -67,6 +67,7 @@ export function registerSoftgoodsTools(server, { call, ok, fail }) {
     inputSchema: {
       name: z.string().regex(/^[\w.-]+$/),
       formats: z.array(z.enum(['marker', 'bom', 'print', 'svg'])).optional(),
+      dxf: z.literal('aama-style').optional().describe('Also write one DXF per size with every piece as a block on the numbered ASTM D6673 / AAMA layers (1 boundary, 4 notches, 7 grain, 8 internal lines, 11 cutouts, 14 sew lines, 15 annotation). The layer numbers follow a published summary of the standard; the text labels are not checked against it. The result lists the mapping.'),
       width: z.union([z.number().positive(), z.record(z.number().positive())]).optional().describe('Usable roll width mm, for every material or {material: mm}. Default: the material\'s rollWidth, else 1500.'),
       gap: z.number().nonnegative().optional().describe('Clear distance between pieces on the marker, mm. Default 3.'),
       turns: z.union([z.literal(180), z.literal(0), z.literal(90), z.literal('free')]).optional().describe('180 (default): grain along the roll, either way up. 0: napped cloth, one way only. 90: quarter turns too. free: any angle, for cloth with no direction.'),

@@ -126,6 +126,8 @@ Softgoods are prompt-authored through `cadgang_softgoods_get` / `cadgang_softgoo
 - `print`: one self-contained HTML of 1:1 tiled pages (`paper: 'a4' | 'letter'`, `margin`, `overlap`, `orientation`). Print at 100%; page 1 has 100 mm and 4 inch check squares, every tile has its row and column, and registration diamonds on the joins.
 - `svg`: one 1:1 SVG per pattern and graded size, a group per DXF layer.
 
+`dxf: 'aama-style'` also writes one DXF per size with every piece as a block on the numbered ASTM D6673 / AAMA layers (1 boundary, 4 notches, 7 grain, 8 internal lines, 11 cutouts, 14 sew lines, 15 annotation). The layer numbers follow a published summary of the standard; the text labels and notch entities are not verified against it, so try it in the receiving CAD first.
+
 **Fabric library.** A material may start from a preset, `{ "preset": "nylon-500d", "rollWidth": 1500 }`, and put its own fields over it (`src/core/softgoods-fabrics.js`: ripstop, 500D and 1000D nylon, laminate, waxed canvas, denim, jersey, neoprene, foam, spacer mesh, webbing, elastic). These values are typical, **not measured**: each says `source: 'typical, not measured'`, and a figure nobody could vouch for is left out. Put the supplier's numbers over them before trusting a weight or a drape.
 
 ## REST
