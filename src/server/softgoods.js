@@ -12,7 +12,7 @@ import { exportDrape, DRAPE_FORMATS } from '../core/softgoods-drape-export.js';
 import { measureDrape, fitReport } from '../core/softgoods-measure.js';
 import { checkDesign } from '../core/softgoods-operations.js';
 import { validateSoftgoodsDocument } from '../core/softgoods-document.js';
-import { closures, listTrims, trimsInput } from '../core/softgoods-trims.js';
+import { closures, listTrims, trimsInput, trimMarks } from '../core/softgoods-trims.js';
 import { editSoftgoods, editChanges } from '../core/softgoods-edit.js';
 import { conformLines, physicsInput } from '../core/softgoods-physics.js';
 import { flattenMesh, describeFaces, mergeFlattened } from '../core/softgoods-flatten.js';
@@ -84,6 +84,8 @@ export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcas
   r.post('/measure', async (req, res) => { try { const d = doc.toJSON(), drape = await drapeDocumentAsync(d, req.body?.drape, bodies(req)); res.json({ revision: d.revision, drape: { settled: drape.settled, steps: drape.steps, residual: drape.residual, target: drape.options.target }, units: 'mm', results: measureDrape(d, drape, req.body?.measures || []) }); } catch (e) { fail(res, e); } });
   // The cut line of every pattern, as the DXF carries it, for the page's 2D drawing. A pattern whose allowance cannot be offset has none.
   r.get('/cut', (_req, res) => { const out = {}; for (const p of doc.toJSON().patterns) { try { out[p.id] = cutContours(p); } catch { out[p.id] = []; } } res.json(out); });
+  // Each pattern's trim marks as the tech pack draws them (lines by layer TRIM, TOPSTITCH, DRILL; drills), one entry per trim so the page can pick one out.
+  r.get('/trim-marks', (_req, res) => { const d = doc.toJSON(), out = {}; for (const p of d.patterns) out[p.id] = (d.trims || []).flatMap((t) => { try { const m = trimMarks({ ...d, trims: [t] }, p.id); return m ? [{ trim: t.id, kind: t.kind, ...m }] : []; } catch { return []; } }); res.json(out); });
   r.post('/patterns/rectangle', (req, res) => { try { res.json(doc.addRectangle(req.body || {})); } catch (e) { fail(res, e); } });
   r.patch('/patterns/:pattern/points/:point', (req, res) => { try { res.json(doc.updatePoint(req.params.pattern, req.params.point, req.body?.x, req.body?.y)); } catch (e) { fail(res, e); } });
   r.post('/seams', (req, res) => { try { res.json(doc.addSeam(req.body || {})); } catch (e) { fail(res, e); } });

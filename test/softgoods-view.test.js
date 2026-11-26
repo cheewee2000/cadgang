@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import express from 'express';
 import { SoftgoodsDocument } from '../src/core/softgoods-document.js';
 import { softgoodsRouter } from '../src/server/softgoods.js';
-import { strainRGB, pressureRGB, css, materialHue, materialCss, seamCss, seamSide, sideLabel, cutLine } from '../web/softgoods-view.js';
+import { strainRGB, pressureRGB, css, materialHue, materialCss, seamCss, seamSide, sideLabel, cutLine, isCadBody, floorOf, nearestVertex, trimShapes } from '../web/softgoods-view.js';
 
 const read = (name) => fs.readFileSync(new URL(`../web/${name}`, import.meta.url), 'utf8');
 const near = (a, b) => a.every((v, k) => Math.abs(v - b[k]) < 1e-6);
@@ -85,4 +85,48 @@ test('the page shows what the physics adds, for review: sewn spans, elastics, cr
   // Every toggle is drawn inverted while it is on; the exports are actions.
   assert.match(page, /\$\('#map'\)\.classList\.toggle\('on',mapMode!=='off'\)/); assert.match(page, /\$\('#wire'\)\.classList\.toggle\('on'\)/); assert.match(page, /\$\('#simulate'\)\.classList\.toggle\('on',running\)/);
   assert.match(html, /id="exportDrape"/); assert.match(page, /\$\('#exportDrape'\)\.onclick=exportAs\(\['glb','obj','fit'\]\)/);
+});
+
+test('bodies: a CAD mesh is told from the avatar\'s torso, the floor is where the solver puts it, and frames reuse the input\'s meshes', () => {
+  assert.equal(isCadBody({ type: 'mesh', id: 'can', name: 'can' }), true); assert.equal(isCadBody({ type: 'mesh', name: 'torso' }), false); assert.equal(isCadBody({ type: 'capsule', name: 'left-forearm', id: 'x' }), false);
+  assert.equal(floorOf({}), 0); assert.equal(floorOf({ floor: 12.5 }), 12.5); assert.equal(floorOf({ floor: false }), null);
+  const view = read('softgoods-view.js'), page = read('softgoods.js');
+  assert.match(view, /s\.type === 'mesh' && s\.positions\?\.length && s\.indices\?\.length/, 'a mesh shape is built from the input, once');
+  assert.match(view, /isCadBody\(s\) \? cadMat : bodyMat/, 'a CAD body in its own grey, the avatar\'s torso as the body');
+  assert.match(view, /else if \(s\.a && s\.b && s\.r > 0\)/, 'every capsule, the neck and the limbs among them, is drawn');
+  assert.match(view, /function setInput\(next\) \{[^\n]*setBody\(next\?\.collisionBody\?\.shapes\)/, 'bodies come from the input, never from a frame');
+  assert.match(view, /ground\.visible = floor != null/, 'floor: false draws no floor'); assert.match(view, /floor != null && box\.min\.z - floor </);
+  assert.match(page, /\(frame\.body\|\|\[\]\)\.filter\(s=>s\.type!=='mesh'\)/, 'the painter\'s view skips a frame\'s bare mesh entries');
+});
+
+test('trims: spots become discs on both pieces, runs become lines filled in along their edge, and a spot finds its nearest vertex', () => {
+  const uv = [0, 0, 10, 0, 10, 10, 0, 10, 5, 5];
+  assert.equal(nearestVertex(uv, 6, 4), 4); assert.equal(nearestVertex(uv, 6, 4, [0, 1, 2, 3]), 1, 'held to the edge vertices it is given'); assert.equal(nearestVertex([], 0, 0), -1);
+  const { discs, runs } = trimShapes([
+    { id: 'rivet', type: 'point', points: [{ pattern: 'front', x: 4, y: 5 }] },
+    { id: 'buttons', type: 'tack', attachments: [{ pattern: 'front', at: [1, 2], to: { pattern: 'back', at: [3, 4] } }] },
+    { id: 'zip', type: 'seam', pairs: [{ a: { pattern: 'front', x: 0, y: 0 }, b: { pattern: 'back', x: 0, y: 20 } }, { a: { pattern: 'front', x: 0, y: 20 }, b: { pattern: 'back', x: 0, y: 0 } }] },
+    { id: 'binding', type: 'strip', paths: [{ pattern: 'front', points: [[0, 0], [12, 0]] }] },
+  ]);
+  assert.deepEqual(discs, [{ trim: 'rivet', pattern: 'front', at: [4, 5] }, { trim: 'buttons', pattern: 'front', at: [1, 2] }, { trim: 'buttons', pattern: 'back', at: [3, 4] }]);
+  assert.deepEqual(runs.map((r) => [r.trim, r.pattern, r.points.length]), [['zip', 'front', 5], ['zip', 'back', 5], ['binding', 'front', 4]]);
+  assert.deepEqual(runs[2].points, [[0, 0], [4, 0], [8, 0], [12, 0]]); assert.deepEqual(trimShapes(undefined), { discs: [], runs: [] });
+  const view = read('softgoods-view.js'), page = read('softgoods.js'), html = read('softgoods.html');
+  assert.match(view, /shapes = trimShapes\(next\?\.trims\)/); assert.match(view, /vertexAt\(r\.pattern, q, true\)/, 'a run keeps to the edge');
+  assert.match(view, /for \(const set of \[outline, seamLines, elasticEdge, elasticCore, foldLines, trimLines\]\) set\.write\(P\)/);
+  assert.match(page, /l\.layer==='TOPSTITCH'\?\{dash:\[4,3\],color\}/, 'topstitch rows dashed in 2D'); assert.match(page, /api\('\/trim-marks'\)/);
+  assert.match(html, /<div id="seams"><\/div><div id="trims"><\/div>/, 'the TRIMS schedule sits under the seams'); assert.match(page, /el\.innerHTML='<b>TRIMS<\/b>'/);
+  assert.match(page, /select\(trimPattern\(t\)\|\|selectedPattern,t\.id===selectedTrim\?null:t\.id\)/, 'a click picks a trim out, a second click lets it go');
+});
+
+test('the page gets each pattern\'s trim marks, one entry per trim, and a flattened piece says where it came from', async () => {
+  const doc = new SoftgoodsDocument(null), app = express(); app.use(express.json()); app.use('/s', softgoodsRouter(doc));
+  doc.addRectangle({ id: 'panel', width: 300, height: 400, allowance: 12 }); doc.addTrim({ id: 'rivet', kind: 'rivet', spec: { diameter: 9 }, at: { pattern: 'panel', u: 50, v: 60 } });
+  const server = app.listen(0);
+  try {
+    const marks = await (await fetch(`http://127.0.0.1:${server.address().port}/s/trim-marks`)).json();
+    assert.equal(marks.panel.length, 1); assert.equal(marks.panel[0].trim, 'rivet'); assert.deepEqual(marks.panel[0].drills[0].at, [50, 60]); assert.ok(marks.panel[0].lines.every((l) => l.layer === 'DRILL'));
+  } finally { server.close(); }
+  const page = read('softgoods.js');
+  assert.match(page, /flattened from \$\{esc\(q\.body\|\|'a body'\)\}/); assert.match(page, /'lies flat':`does not lie flat: strain \$\{\(\(q\.distortion\?\.maxStrain\|\|0\)\*100\)\.toFixed\(1\)\}%`/);
 });
