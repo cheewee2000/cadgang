@@ -22,6 +22,11 @@ function mapFraction(t, correspondence) {
   for (let i = 1; i < stops.length; i++) if (t <= stops[i].a) { const p = stops[i - 1], q = stops[i], f = q.a > p.a ? (t - p.a) / (q.a - p.a) : 0; return p.b + f * (q.b - p.b); }
   return 1;
 }
+/** Where a fraction of one side's length lands on the other side: through the correspondence stops, then the flip. fromB maps side b back to side a. */
+export function seamFraction(seam, t, fromB = false) {
+  if (fromB) return mapFraction(seam.flip ? 1 - t : t, (seam.correspondence || []).map((q) => ({ a: q.b, b: q.a })));
+  const mapped = mapFraction(t, seam.correspondence); return seam.flip ? 1 - mapped : mapped;
+}
 function validateStops(seam) {
   let a = 0, b = 0;
   for (const q of seam.correspondence || []) {
@@ -45,7 +50,7 @@ export function resolveSeamCorrespondence(seams, meshes, { spacing = 10 } = {}) 
     if (!gather && mismatch > allowed + 1e-9) throw new GraphError(`Seam '${seam.id}' length mismatch ${(mismatch * 100).toFixed(2)}% exceeds ease ${(allowed * 100).toFixed(2)}%`);
     const count = Math.max(2, Math.ceil(Math.max(la.total, lb.total) / spacing) + 1), pairs = [];
     for (let i = 0; i < count; i++) {
-      const ta = i / (count - 1), mapped = mapFraction(ta, seam.correspondence), tb = seam.flip ? 1 - mapped : mapped;
+      const ta = i / (count - 1), tb = seamFraction(seam, ta);
       pairs.push({ a: atFraction(ma, ca, la, ta), b: atFraction(mb, cb, lb, tb) });
     }
     resolved.push({ id: seam.id, a: seam.a, b: seam.b, flip: !!seam.flip, kind: seam.kind || 'plain', lengthA: la.total, lengthB: lb.total, mismatch, gatherRatio: la.total / lb.total, pairs });

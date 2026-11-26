@@ -88,11 +88,27 @@ export function cutContours(pattern, { curveStep = 2, miterLimit = 4 } = {}) {
 
 function stitchAt(pattern, segment, at) { const q = sampleSegment(pattern, segment, 128), f = Math.max(0, Math.min(1, Number(at ?? .5))) * (q.length - 1), i = Math.min(q.length - 2, Math.floor(f)), t = f - i; return { p: [q[i][0] + (q[i + 1][0] - q[i][0]) * t, q[i][1] + (q[i + 1][1] - q[i][1]) * t], d: sub2(q[i + 1], q[i]) }; }
 
+/** A sewn dart keeps its cloth: where a dart annotation's two lines are two consecutive outline segments (its legs), the cut runs straight
+ *  across the dart's mouth at the first leg's allowance, and the legs are only stitched. */
+export function capDarts(pattern, annotations = []) {
+  let p = pattern;
+  for (const a of annotations) {
+    if (a.type !== 'dart' || a.lines?.length !== 2) continue;
+    const legs = a.lines.map(([u, v]) => p.segments.find((s) => s.type === 'line' && ((s.a === u && s.b === v) || (s.a === v && s.b === u)))); if (!legs[0] || !legs[1]) continue;
+    for (const loop of p.contours) {
+      const i = loop.indexOf(legs[0].id), j = loop.indexOf(legs[1].id), n = loop.length; if (i < 0 || j < 0 || (j !== (i + 1) % n && i !== (j + 1) % n)) continue;
+      const [first, second] = j === (i + 1) % n ? legs : [legs[1], legs[0]];
+      p = { ...p, segments: p.segments.filter((s) => s !== second).map((s) => (s === first ? { ...s, b: second.b } : s)), contours: p.contours.map((l) => (l === loop ? l.filter((id) => id !== second.id) : l)) }; break;
+    }
+  }
+  return p;
+}
+
 /** R12 DXF with exact STITCH geometry and a closed manufacturing CUT contour. */
 export function patternDXF(pattern, annotations = []) {
   const entities = [];
   for (const loop of pattern.contours) for (const id of loop) { const q = sampleSegment(pattern, pattern.segments.find((s) => s.id === id)); for (let i = 1; i < q.length; i++) entities.push(line(q[i - 1], q[i], 'STITCH')); }
-  for (const q of cutContours(pattern)) for (let i = 0; i < q.length; i++) entities.push(line(q[i], q[(i + 1) % q.length], 'CUT'));
+  for (const q of cutContours(capDarts(pattern, annotations))) for (let i = 0; i < q.length; i++) entities.push(line(q[i], q[(i + 1) % q.length], 'CUT'));
   for (const s of pattern.segments) {
     const { p: a, d } = stitchAt(pattern, s, .5), l = Math.hypot(...d) || 1, mm = Number(pattern.allowances?.[s.id] ?? 0), loop = pattern.contours.find((x) => x.includes(s.id)), outer = signedArea(loopPolyline(pattern, loop)) >= 0 ? [d[1] / l, -d[0] / l] : [-d[1] / l, d[0] / l];
     if (mm) entities.push(line(a, add2(a, mul2(outer, mm)), 'ALLOWANCE'));
@@ -102,6 +118,7 @@ export function patternDXF(pattern, annotations = []) {
     const { p, d } = stitchAt(pattern, s, n.at), l = Math.hypot(...d) || 1, loop = pattern.contours.find((x) => x.includes(s.id)), outward = signedArea(loopPolyline(pattern, loop)) >= 0 ? [d[1] / l, -d[0] / l] : [-d[1] / l, d[0] / l], allowance = Number(pattern.allowances?.[s.id] ?? 0), cut = add2(p, mul2(outward, allowance));
     entities.push(line(cut, add2(cut, mul2(outward, -Number(n.depth ?? 4))), 'NOTCH'));
   }
+  for (const l of pattern.internalLines || []) { const q = sampleSegment(pattern, Array.isArray(l) ? { type: 'line', a: l[0], b: l[1] } : l); for (let i = 1; i < q.length; i++) entities.push(line(q[i - 1], q[i], 'INTERNAL')); }
   for (const annotation of annotations) {
     const points = pointMap(pattern), layer = ({ dart: 'DART', pleat: 'PLEAT', fold_line: 'FOLD' })[annotation.type];
     for (const [aId, bId] of annotation.lines || []) {
@@ -113,8 +130,8 @@ export function patternDXF(pattern, annotations = []) {
   const b = bounds(pattern), c = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2], ang = Number(pattern.grain?.angle ?? 90) * Math.PI / 180, span = Math.max(20, Math.min(b.max[0] - b.min[0], b.max[1] - b.min[1]) * 0.35), d = [Math.cos(ang) * span, Math.sin(ang) * span];
   entities.push(line([c[0] - d[0], c[1] - d[1]], [c[0] + d[0], c[1] + d[1]], 'GRAIN'));
   entities.push(text([c[0], c[1]], `${pattern.name || pattern.id}  CUT ${pattern.cut || 1}  ${pattern.material || ''}`, Math.max(3, span / 12)));
-  const layerNames = ['STITCH', 'CUT', 'ALLOWANCE', 'NOTCH', 'GRAIN', 'TEXT', 'DART', 'PLEAT', 'FOLD'];
-  const layers = layerNames.map((n, i) => `0\nLAYER\n2\n${n}\n70\n0\n62\n${[3,7,2,6,4,7,1,5,6][i]}\n6\nCONTINUOUS`).join('\n');
+  const layerNames = ['STITCH', 'CUT', 'ALLOWANCE', 'NOTCH', 'GRAIN', 'TEXT', 'DART', 'PLEAT', 'FOLD', 'INTERNAL'];
+  const layers = layerNames.map((n, i) => `0\nLAYER\n2\n${n}\n70\n0\n62\n${[3,7,2,6,4,7,1,5,6,8][i]}\n6\nCONTINUOUS`).join('\n');
   return `0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n${layerNames.length}\n${layers}\n0\nENDTAB\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n${entities.join('\n')}\n0\nENDSEC\n0\nEOF\n`;
 }
 

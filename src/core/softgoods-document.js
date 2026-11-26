@@ -7,6 +7,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { GraphError } from './errors.js';
 import { resolveMaterial } from './softgoods-fabrics.js';
+import { sampleSegment } from './softgoods-export.js';
+import { insideLoop, segmentDistance } from './softgoods-mesh.js';
 
 const ID = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
 const TYPES = new Set(['line', 'arc', 'bezier']);
@@ -26,6 +28,19 @@ function vec3(v, what) {
   if (!Array.isArray(v) || v.length !== 3 || !v.every(finite)) throw new GraphError(`${what} must be three finite numbers`);
   return v.map(Number);
 }
+
+/** A pattern's contours as sampled closed polygons, largest first: the first is the outer edge of the material, the rest are holes in it. */
+export function patternLoops(pattern, steps = 48) {
+  const area = (q) => Math.abs(q.reduce((n, a, i) => { const b = q[(i + 1) % q.length]; return n + a[0] * b[1] - b[0] * a[1]; }, 0));
+  return (pattern.contours || []).map((loop) => loop.flatMap((id) => { const s = pattern.segments.find((q) => q.id === id); return sampleSegment(pattern, s, s.type === 'line' ? 1 : steps).slice(0, -1); })).sort((a, b) => area(b) - area(a));
+}
+/** Is a point in the material: inside the outer edge and outside every hole, or within tolerance (mm) of an edge. */
+export function inMaterial(loops, p, tolerance = 0.5) {
+  if (tolerance > 0 && loops.some((l) => l.some((a, i) => segmentDistance(p, a, l[(i + 1) % l.length]) <= tolerance))) return true;
+  return loops.length > 0 && insideLoop(loops[0], p) && !loops.slice(1).some((l) => insideLoop(l, p));
+}
+/** An internal line is a point pair [a, b] or a segment-shaped {id, type, a, b, ...}; either way, read it as a segment. */
+export const internalSegment = (l) => (Array.isArray(l) ? { type: 'line', a: l[0], b: l[1] } : l);
 const defaults = () => ({ version: 1, revision: 0, materials: {}, patterns: [], seams: [], attachments: [], arrangement: [], constraints: [], annotations: [], grades: [], simulation: { status: 'not_run' } });
 
 export function validateSoftgoodsDocument(value) {
@@ -60,6 +75,17 @@ export function validateSoftgoodsDocument(value) {
     }
     const allowances = raw.allowances || {};
     for (const [sid, mm] of Object.entries(allowances)) if (!segments.has(sid) || !finite(mm) || Number(mm) < 0) throw new GraphError(`Pattern '${id}' has an invalid allowance on '${sid}'`);
+    // Internal lines (stitch lines, pocket placements, folds drawn on the piece) use the pattern's own points and stay on the material.
+    if (raw.internalLines != null && !Array.isArray(raw.internalLines)) throw new GraphError(`Pattern '${id}' internalLines must be an array`);
+    const loops = raw.internalLines?.length ? patternLoops(raw) : [], lineIds = new Set();
+    for (const item of raw.internalLines || []) {
+      const l = internalSegment(item), what = `Pattern '${id}' internal line '${l?.id ?? [l?.a, l?.b].join('-')}'`;
+      if (!l || !TYPES.has(l.type) || (Array.isArray(item) && item.length !== 2)) throw new GraphError(`${what} must be a point pair or a line, arc or bezier`);
+      if (l.id != null) { identifier(l.id, what); if (lineIds.has(l.id)) throw new GraphError(`Pattern '${id}' has two internal lines named '${l.id}'`); lineIds.add(l.id); }
+      for (const key of ['a', 'b', ...(l.type === 'arc' ? ['c'] : l.type === 'bezier' ? ['c1', 'c2'] : [])]) if (!points.has(l[key])) throw new GraphError(`${what} refers to missing point '${l[key]}'`);
+      const ends = sampleSegment(raw, l, 24), along = l.type === 'line' ? Array.from({ length: 9 }, (_, i) => [ends[0][0] + (ends[1][0] - ends[0][0]) * i / 8, ends[0][1] + (ends[1][1] - ends[0][1]) * i / 8]) : ends;
+      if (along.some((q) => !inMaterial(loops, q))) throw new GraphError(`${what} leaves the outline`);
+    }
     if (raw.placement != null && !['front', 'back', 'left', 'right'].includes(raw.placement.region)) throw new GraphError(`Pattern '${id}' placement region '${raw.placement.region}' must be front, back, left or right`);
     patterns.set(id, { ...raw, points, segments });
   }
