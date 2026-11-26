@@ -273,9 +273,9 @@ test('POST /flatten lists, previews, appends and replaces through the document, 
     assert.equal(doc.data.patterns[0].source.file, file); assert.deepEqual(doc.data.arrangement.map((a) => a.source), ['flatten', 'flatten', 'flatten']);
     const input = await call('/simulation-input?target=60');
     assert.equal(input.status, 200); assert.equal(input.meshes.length, 3); assert.equal(input.seams.length, 1); assert.deepEqual(input.arrangement[0].position, doc.data.arrangement[0].position);
-    doc.data.materials = { canvas: { arealDensity: 340 } };
+    doc.data.materials = { canvas: { arealDensity: 340 } }; doc.data.trims = [{ id: 'gone', type: 'button', pattern: 'cube_top_2', at: [10, 10] }];   // names a pattern the replace removes
     const all = await call('/flatten', 'POST', { path: file, mode: 'replace' });
-    assert.equal(all.pieces.length, 6); assert.equal(all.seams.length, 12); assert.equal(doc.data.patterns.length, 6); assert.equal(doc.data.seams.length, 12); assert.deepEqual(doc.data.materials, { canvas: { arealDensity: 340 } });
+    assert.equal(all.pieces.length, 6); assert.equal(all.seams.length, 12); assert.equal(doc.data.patterns.length, 6); assert.equal(doc.data.seams.length, 12); assert.deepEqual(doc.data.materials, { canvas: { arealDensity: 340 } }); assert.deepEqual(doc.data.trims, []);
     assert.equal((await call('/check')).ok, true);
     assert.equal((await call('/flatten', 'POST', { path: file, faces: [17] })).status, 400);
     assert.match((await call('/flatten', 'POST', { path: 'cube.stp' })).error, /absolute path/);

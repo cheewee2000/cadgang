@@ -762,10 +762,10 @@ export function describeFaces(mesh, { body } = {}) {
   return { bodies, body: M.body, faces: rows.map(({ index, triangles, area, c, n }) => { const l = Math.hypot(...n); return { index, triangles, area: r3(area), centre: c.map((x) => r3(x / (area || 1))), normal: l ? n.map((x) => r4(x / l)) : null, kind: l > 0.9999 * area ? 'flat' : 'curved' }; }) };
 }
 
-/** The document with the flattened pieces added (mode 'append') or in place of its patterns ('replace'; materials and the avatar stay). */
+/** The document with the flattened pieces added (mode 'append') or in place of its design ('replace'): then only the
+ *  materials and the avatar stay, since everything else a document holds (seams, trims, elastics, grades…) names the patterns that went. */
 export function mergeFlattened(document, flat, mode = 'append') {
-  const d = structuredClone(document);
-  if (mode === 'replace') Object.assign(d, { patterns: [], seams: [], arrangement: [], attachments: [], constraints: [], annotations: [], grades: [] });
+  const all = structuredClone(document), d = mode === 'replace' ? { version: all.version, revision: all.revision, materials: all.materials, simulation: { status: 'not_run', ...(all.simulation?.avatar && { avatar: all.simulation.avatar }) } } : all;
   d.patterns = [...(d.patterns || []), ...flat.patterns]; d.seams = [...(d.seams || []), ...flat.seams]; d.arrangement = [...(d.arrangement || []), ...flat.arrangement];
   return d;
 }
