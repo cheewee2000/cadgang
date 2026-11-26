@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import express from 'express';
 import { SoftgoodsDocument } from '../src/core/softgoods-document.js';
 import { softgoodsRouter } from '../src/server/softgoods.js';
-import { strainRGB, pressureRGB, css, materialHue, materialCss, seamCss } from '../web/softgoods-view.js';
+import { strainRGB, pressureRGB, css, materialHue, materialCss, seamCss, seamSide, sideLabel, cutLine } from '../web/softgoods-view.js';
 
 const read = (name) => fs.readFileSync(new URL(`../web/${name}`, import.meta.url), 'utf8');
 const near = (a, b) => a.every((v, k) => Math.abs(v - b[k]) < 1e-6);
@@ -63,4 +63,26 @@ test('the page gets each pattern\'s cut line from the server: the contour the DX
     const cut = await (await fetch(`http://127.0.0.1:${server.address().port}/s/cut`)).json(), xs = cut.panel[0].map((q) => q[0]), ys = cut.panel[0].map((q) => q[1]);
     assert.deepEqual([Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)], [-12, 312, -12, 412]);
   } finally { server.close(); }
+});
+
+test('a seam side is read as a span: one edge, part of one, or several in a row, and only the sewn part of its line is taken', () => {
+  assert.deepEqual(seamSide({ pattern: 'front', segment: 'hem' }), { pattern: 'front', segments: ['hem'], from: 0, to: 1 });
+  assert.deepEqual(seamSide({ pattern: 'front', segments: ['hem', 'side'], from: 0.25 }), { pattern: 'front', segments: ['hem', 'side'], from: 0.25, to: 1 });
+  assert.equal(sideLabel({ pattern: 'front', segment: 'hem' }), 'front.hem'); assert.equal(sideLabel({ pattern: 'front', segments: ['hem', 'side'], from: 0.25, to: 0.5 }), 'front.hem+side 0.25-0.5');
+  // An L of 100 mm then 100 mm: from a quarter to three quarters of its length is 50 mm of each leg, through the corner.
+  const corner = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }];
+  assert.deepEqual(cutLine(corner, 0.25, 0.75), [{ x: 50, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 50 }]); assert.deepEqual(cutLine(corner, 0, 1), corner);
+  assert.deepEqual(cutLine(corner, 0.6, 0.9), [{ x: 100, y: 20 }, { x: 100, y: 80 }]); assert.deepEqual(cutLine([], 0, 1), []);
+});
+
+test('the page shows what the physics adds, for review: sewn spans, elastics, creased folds, stuffing, frozen pieces, and both exports', () => {
+  const page = read('softgoods.js'), view = read('softgoods-view.js'), html = read('softgoods.html');
+  assert.match(page, /path\(spanLine\(p,seg,side\),\{width:5,color:seamCss\(i\)\}\)/, 'the 2D pattern colours the sewn span, not the whole edge');
+  assert.match(view, /between\(pairs\[k - 1\]\.a, A\.off\), b: between\(pairs\[k\]\.a, A\.off\)/, 'and the 3D seam line runs through the seam\'s own pairs');
+  assert.match(view, /runs\(input\?\.elastics, BLACK\)/); assert.match(view, /runs\(input\?\.folds, BLACK\)/); assert.match(page, /for\(const e of doc\.elastics\|\|\[\]\)/); assert.match(page, /if\(s\.elastic\)for\(const side of\[s\.a,s\.b\]\)/);
+  assert.match(page, /a\.angle!=null\?` \$\{a\.angle\}°`/); assert.match(page, /\(frame\.stuffing\|\|\[\]\)\.map\(g=>` · stuffing \$\{g\.id\} \$\{Number\(g\.volume\)\.toFixed\(2\)\} L at/);
+  assert.match(page, /p\.freeze\?' · FROZEN':''/); assert.match(page, /doc\.materials\[p\.material\]\.preset/); assert.match(page, /check\.physics\|\|\[\]/);
+  // Every toggle is drawn inverted while it is on; the exports are actions.
+  assert.match(page, /\$\('#map'\)\.classList\.toggle\('on',mapMode!=='off'\)/); assert.match(page, /\$\('#wire'\)\.classList\.toggle\('on'\)/); assert.match(page, /\$\('#simulate'\)\.classList\.toggle\('on',running\)/);
+  assert.match(html, /id="exportDrape"/); assert.match(page, /\$\('#exportDrape'\)\.onclick=exportAs\(\['glb','obj','fit'\]\)/);
 });

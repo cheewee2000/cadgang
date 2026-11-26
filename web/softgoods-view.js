@@ -1,5 +1,5 @@
-// The softgoods review in 3D: the draped pieces as lit cloth, the avatar as a neutral body, each seam drawn on the cloth
-// and a thread across every seam pair that has not closed yet. The solver (web/softgoods-worker.js) owns the positions;
+// The softgoods review in 3D: the draped pieces as lit cloth, the avatar as a neutral body, each seam drawn on the cloth along
+// the span it sews, a thread across every seam pair that has not closed yet, and the elastics and creased folds of the design. The solver (web/softgoods-worker.js) owns the positions;
 // this only draws them. z is up, the body faces -y, units are mm.
 import * as THREE from 'three';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
@@ -28,6 +28,17 @@ export function materialCss(materials, name) {
 }
 /** Seams are told apart by colour, in schedule order: the seam line, its thread and its row in the schedule share it. */
 export const seamCss = (i) => `hsl(${((Math.max(0, i) * 137.508 + 12) % 360).toFixed(1)},85%,45%)`;
+
+/** A seam side is one segment, part of one (from and to: fractions of the first and the last segment's length) or several in a
+ *  row, read as seamSide() in src/core/softgoods-seams.js reads it. */
+export const seamSide = (ref) => ({ pattern: ref?.pattern, segments: Array.isArray(ref?.segments) ? ref.segments : ref?.segment != null ? [ref.segment] : [], from: Number(ref?.from ?? 0), to: Number(ref?.to ?? 1) });
+export const sideLabel = (ref) => { const s = seamSide(ref); return `${s.pattern}.${s.segments.join('+')}${s.from > 0 || s.to < 1 ? ` ${+s.from.toFixed(3)}-${+s.to.toFixed(3)}` : ''}`; };
+/** The part of a line of {x, y} points between two fractions of its length. */
+export function cutLine(q, f0, f1) {
+  const cum = [0]; for (let i = 1; i < q.length; i++) cum.push(cum[i - 1] + Math.hypot(q[i].x - q[i - 1].x, q[i].y - q[i - 1].y));
+  const at = (d) => { let i = 1; while (i < q.length - 1 && cum[i] < d) i++; const t = cum[i] > cum[i - 1] ? (d - cum[i - 1]) / (cum[i] - cum[i - 1]) : 0; return { x: q[i - 1].x + (q[i].x - q[i - 1].x) * t, y: q[i - 1].y + (q[i].y - q[i - 1].y) * t }; };
+  const a = f0 * cum.at(-1), b = f1 * cum.at(-1); return q.length < 2 ? [] : [at(a), ...q.filter((_, i) => cum[i] > a && cum[i] < b), at(b)];
+}
 
 // ---- the view
 
@@ -62,19 +73,43 @@ export function createClothView({ host, scheme = () => 'trackpad', onSelect = ()
   ground.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(Array.from({ length: 96 }, (_, i) => new THREE.Vector3(Math.cos(i / 48 * Math.PI), Math.sin(i / 48 * Math.PI), 0))), new THREE.LineBasicMaterial({ color: 0xc4c4c4 })));
   scene.add(ground, body, cloth);
 
-  // Lines a few pixels wide whose ends follow the cloth. size() allocates, once per mesh or selection; a frame only writes into what is there.
+  // Lines a few pixels wide whose ends follow the cloth. An end is a point on the cloth: two vertices and their weights (a seam
+  // pair lies between two boundary vertices; a mesh vertex is itself, weight 1). load() allocates, once per mesh or selection;
+  // write() only fills what is there, leaving out any segment shorter than `min` and packing the rest to the front.
   const tint = new THREE.Color(), linear = (style) => { tint.setStyle(style); return [tint.r, tint.g, tint.b]; };
   function lineSet(linewidth) {
-    const obj = new LineSegments2(new LineSegmentsGeometry(), new LineMaterial({ linewidth, vertexColors: true })); obj.frustumCulled = false; obj.visible = false; obj.renderOrder = scene.children.length; scene.add(obj);
-    const set = { pos: null, col: null,
-      size(n) { obj.geometry.dispose(); obj.geometry = new LineSegmentsGeometry(); obj.visible = false; if (!n) { set.pos = set.col = null; return; } set.pos = new Float32Array(n * 6); set.col = new Float32Array(n * 6); obj.geometry.setPositions(set.pos); obj.geometry.setColors(set.col); },
-      show(n) { obj.visible = n > 0 && !!set.pos; if (!set.pos) return; obj.geometry.instanceCount = n; obj.geometry.attributes.instanceStart.data.needsUpdate = true; obj.geometry.attributes.instanceColorStart.data.needsUpdate = true; } };
-    return set;
+    // Each set is drawn after the one before and a little nearer, so two lines on the same edge do not flicker through each other.
+    const order = scene.children.length, obj = new LineSegments2(new LineSegmentsGeometry(), new LineMaterial({ linewidth, vertexColors: true, polygonOffset: true, polygonOffsetFactor: -order, polygonOffsetUnits: -2 * order }));
+    obj.frustumCulled = false; obj.visible = false; obj.renderOrder = order; scene.add(obj);
+    let n = 0, ends, w, rgb, pos, col;
+    return {
+      load(segs) {
+        obj.geometry.dispose(); obj.geometry = new LineSegmentsGeometry(); obj.visible = false; n = segs.length; if (!n) return;
+        ends = new Int32Array(n * 4); w = new Float32Array(n * 4); rgb = new Float32Array(n * 3); pos = new Float32Array(n * 6); col = new Float32Array(n * 6);
+        segs.forEach((s, i) => { ends.set([s.a[0], s.a[1], s.b[0], s.b[1]], i * 4); w.set([s.a[2], s.a[3], s.b[2], s.b[3]], i * 4); rgb.set(s.c, i * 3); });
+        obj.geometry.setPositions(pos); obj.geometry.setColors(col);
+      },
+      write(P, min = 0) {
+        if (!n) return; let m = 0;
+        for (let i = 0; i < n; i++) {
+          const at = m * 6;
+          for (let e = 0; e < 2; e++) { const k = i * 4 + e * 2, i0 = ends[k] * 3, i1 = ends[k + 1] * 3; for (let j = 0; j < 3; j++) pos[at + e * 3 + j] = P[i0 + j] * w[k] + P[i1 + j] * w[k + 1]; }
+          if (min && Math.hypot(pos[at] - pos[at + 3], pos[at + 1] - pos[at + 4], pos[at + 2] - pos[at + 5]) < min) continue;
+          for (let j = 0; j < 3; j++) col[at + j] = col[at + 3 + j] = rgb[i * 3 + j];
+          m++;
+        }
+        obj.visible = m > 0; obj.geometry.instanceCount = m; obj.geometry.attributes.instanceStart.data.needsUpdate = true; obj.geometry.attributes.instanceColorStart.data.needsUpdate = true;
+      },
+    };
   }
-  const outline = lineSet(4), seamLines = lineSet(2.5), threadLines = lineSet(1.25);   // in this order: a seam shows inside the selected piece's edge
+  const vertex = (v) => [v, v, 1, 0], between = (side, off) => [off + side.vertices[0], off + (side.vertices[1] ?? side.vertices[0]), side.weights[0], side.weights[1] ?? 0];
+  const along = (off, chain, c) => chain.slice(1).map((v, k) => ({ a: vertex(off + chain[k]), b: vertex(off + v), c }));
+  // In this order, each over the one before: the selected piece's edge, the seams inside it, an elastic as a black line with a
+  // white core (no seam has that), a creased fold as a thin black line, and the threads.
+  const outline = lineSet(4), seamLines = lineSet(2.5), elasticEdge = lineSet(5), elasticCore = lineSet(1.5), foldLines = lineSet(1.5), threadLines = lineSet(1.25);
+  const BLACK = [0, 0, 0], WHITE = [1, 1, 1], ORANGE = linear('#e35a1e');
 
   let input = null, stale = true, pieces = [], total = 0, last = null, fitted = false, wire = false, coloured = '', outlined, dirty = true, radius = 1000;
-  let seamIdx = [], threads = [], outlineIdx = [];
 
   function setBody(shapes) {
     for (const m of body.children) if (m.geometry !== ball) m.geometry.dispose();
@@ -88,7 +123,7 @@ export function createClothView({ host, scheme = () => 'trackpad', onSelect = ()
     body.updateMatrixWorld(true);
   }
 
-  /** What the solver was given: the meshes' seam chains, the seams' pairs, the materials and the body. */
+  /** What the solver was given: the meshes' boundary chains, the seams' pairs, elastics, folds, the materials and the body. */
   function setInput(next) { input = next; stale = true; setBody(next?.collisionBody?.shapes); dirty = true; }
 
   // One mesh per piece, with buffers the size of the piece. Runs when the solver's mesh changes, never per frame.
@@ -104,13 +139,16 @@ export function createClothView({ host, scheme = () => 'trackpad', onSelect = ()
       return { id: pc.id, off: pc.off, count: pc.count, geo, mesh, over, base: linear(materialCss(input?.materials, specOf.get(pc.id)?.material || pc.id)), chains: meshOf.get(pc.id)?.segmentVertices || {} };
     });
     total = frame.positions.length / 3;
-    const byId = new Map(pieces.map((p) => [p.id, p])), seamCol = []; seamIdx = []; threads = [];
+    const byId = new Map(pieces.map((p) => [p.id, p])), seamSegs = [], threadSegs = [];
     for (const s of input?.seams || []) {
-      const c = linear(seamColour(s.id)), A = byId.get(s.a?.pattern), B = byId.get(s.b?.pattern);
-      for (const [piece, ref] of [[A, s.a], [B, s.b]]) { const chain = piece?.chains[ref?.segment] || []; for (let k = 1; k < chain.length; k++) { seamIdx.push(piece.off + chain[k - 1], piece.off + chain[k]); seamCol.push(...c, ...c); } }
-      if (A && B) (s.pairs || []).forEach((pair, k) => { if (k % 2 === 0 && pair?.a?.vertices && pair?.b?.vertices) threads.push({ a: pair.a.vertices.map((v) => A.off + v), wa: pair.a.weights, b: pair.b.vertices.map((v) => B.off + v), wb: pair.b.weights, c }); });   // every other pair: enough threads to see where a seam is going
+      const c = linear(seamColour(s.id)), A = byId.get(s.a?.pattern), B = byId.get(s.b?.pattern), pairs = (s.pairs || []).filter((q) => q?.a?.vertices && q?.b?.vertices); if (!A || !B) continue;
+      // A seam may sew part of an edge, or several edges in a row: its pairs run along exactly what is sewn, on both sides.
+      for (let k = 1; k < pairs.length; k++) seamSegs.push({ a: between(pairs[k - 1].a, A.off), b: between(pairs[k].a, A.off), c }, { a: between(pairs[k - 1].b, B.off), b: between(pairs[k].b, B.off), c });
+      pairs.forEach((q, k) => { if (k % 2 === 0) threadSegs.push({ a: between(q.a, A.off), b: between(q.b, B.off), c }); });   // every other pair: enough threads to see where a seam is going
     }
-    seamLines.size(seamIdx.length / 2); seamLines.col?.set(seamCol); threadLines.size(threads.length);
+    // Elastics and creased folds come resolved onto the mesh: { pattern, chain } is a run of that piece's vertices.
+    const runs = (list, c) => (list || []).flatMap((l) => { const p = byId.get(l?.pattern); return p && Array.isArray(l.chain) ? along(p.off, l.chain, c) : []; });
+    seamLines.load(seamSegs); threadLines.load(threadSegs); elasticEdge.load(runs(input?.elastics, BLACK)); elasticCore.load(runs(input?.elastics, WHITE)); foldLines.load(runs(input?.folds, BLACK));
     stale = false; coloured = ''; outlined = undefined; stage(frame);
   }
 
@@ -131,7 +169,6 @@ export function createClothView({ host, scheme = () => 'trackpad', onSelect = ()
   function look(name) { const v = VIEWS[name]; if (!v) return; orbit.yaw = v[0]; orbit.pitch = v[1]; fit(); }
   function setWire(on) { wire = !!on; for (const p of pieces) p.over.visible = wire; dirty = true; }
 
-  const copy = (out, at, P, i) => { out[at] = P[i * 3]; out[at + 1] = P[i * 3 + 1]; out[at + 2] = P[i * 3 + 2]; };
   /** Draw a solver frame. Positions, normals, colours and line ends are written into the buffers build() made. */
   function draw({ frame, mapMode = 'off', selected = null }) {
     if (!frame?.pieces || !frame.positions) return;
@@ -149,23 +186,9 @@ export function createClothView({ host, scheme = () => 'trackpad', onSelect = ()
       p.geo.attributes.color.needsUpdate = true;
     }
     coloured = mapMode;
-    if (selected !== outlined) {   // the selected piece's own edge
-      outlined = selected; outlineIdx = []; const p = pieces.find((q) => q.id === selected);
-      for (const chain of Object.values(p?.chains || {})) for (let k = 1; k < chain.length; k++) outlineIdx.push(p.off + chain[k - 1], p.off + chain[k]);
-      outline.size(outlineIdx.length / 2); if (outline.col) { const c = linear('#e35a1e'); for (let i = 0; i < outline.col.length; i += 3) outline.col.set(c, i); }
-    }
-    for (const [set, idx] of [[seamLines, seamIdx], [outline, outlineIdx]]) { if (!set.pos) continue; for (let i = 0; i < idx.length; i++) copy(set.pos, i * 3, P, idx[i]); set.show(idx.length / 2); }
-    if (threadLines.pos) {   // only the open pairs, packed to the front of the buffer
-      let n = 0; const pos = threadLines.pos, col = threadLines.col;
-      for (const t of threads) {
-        const at = n * 6; pos.fill(0, at, at + 6);
-        for (let k = 0; k < t.a.length; k++) for (let j = 0; j < 3; j++) pos[at + j] += P[t.a[k] * 3 + j] * t.wa[k];
-        for (let k = 0; k < t.b.length; k++) for (let j = 0; j < 3; j++) pos[at + 3 + j] += P[t.b[k] * 3 + j] * t.wb[k];
-        if (Math.hypot(pos[at] - pos[at + 3], pos[at + 1] - pos[at + 4], pos[at + 2] - pos[at + 5]) < CLOSED) continue;
-        col.set(t.c, at); col.set(t.c, at + 3); n++;
-      }
-      threadLines.show(n);
-    }
+    if (selected !== outlined) { outlined = selected; const p = pieces.find((q) => q.id === selected); outline.load(p ? Object.values(p.chains).flatMap((chain) => along(p.off, chain, ORANGE)) : []); }   // the selected piece's own edge
+    for (const set of [outline, seamLines, elasticEdge, elasticCore, foldLines]) set.write(P);
+    threadLines.write(P, CLOSED);   // only the pairs still open
     last = frame; if (!fitted) { fit(); fitted = true; }   // framed once: a revised pattern must not swing the camera
     dirty = true;
   }
