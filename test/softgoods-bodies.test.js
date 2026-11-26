@@ -261,3 +261,27 @@ test('the MCP set tool takes bodies, body placement, the full avatar and the flo
   assert.throws(() => schema.parse({ patterns: [], seams: [], avatar: { size: 'XXL' } })); assert.throws(() => schema.parse({ patterns: [], seams: [], bodies: [{ id: 'a', source: {}, clearance: -1 }] }));
   for (const word of ['Bodies', 'source', 'clearance', 'left-arm', 'seated', 'NOT from a standard', 'check.bodies', 'avatar: null']) assert.ok(set.spec.description.includes(word), `the guide says '${word}'`);
 });
+
+test('a cover flattened off a can drapes on that can: it starts on the part, stays outside it and settles', async () => {
+  const { flattenMesh, mergeFlattened } = await import('../src/core/softgoods-flatten.js');
+  const { body: solid, side, disc } = await import('./fixtures/flatten-meshes.mjs');
+  const can = solid('can', [side(30, 30, 80), disc(30, 80, 1), disc(30, 0, -1)]);
+  // Patterned 2 mm out from the can (fabric and ease), sewn back together, then hung on the can itself: the flattened rows are where each piece starts.
+  const flat = mergeFlattened(new SoftgoodsDocument(null).toJSON(), flattenMesh(can, { material: 'canvas', offset: 2 })), sideRow = flat.arrangement.find((a) => a.pattern === 'can_wrap'), width = Math.max(...flat.patterns.find((p) => p.id === 'can_wrap').points.map((q) => q.x));
+  // Flattening lays the side as a flat sheet tangent to the can; started that way the seams snap it round hard enough to pull the whole cover through the
+  // can (the cloth crosses the field faster than it can push back). The arrangement row's wrap starts it round the can instead, 32 mm about its middle.
+  sideRow.wrap = { radius: 32, centre: width / 2 };
+  const d = validateSoftgoodsDocument({ ...flat,
+    materials: { canvas: { arealDensity: 340, thickness: 0.6 } }, bodies: [{ id: 'can', source: { mesh: { positions: [...can.positions], indices: [...can.indices] } } }], simulation: { floor: false } });
+  assert.ok(d.arrangement.every((a) => a.source === 'flatten'), 'every piece keeps the row it was flattened from');
+  const out = (f) => { let worst = Infinity; for (let i = 0; i < f.positions.length; i += 3) worst = Math.min(worst, cylinderDistance([f.positions[i], f.positions[i + 1], f.positions[i + 2]], [0, 0], 30, 0, 80)); return worst; };
+  // Every piece starts on the can, 2 mm out. The ends' rims sit 2 mm out and 2 mm up, 2.83 mm from the can's edge: 1 mm of slack.
+  const input = simulationInput(d, 15), start = simulate(input, 0), offsets = []; let v = 0;
+  for (const [k, m] of input.meshes.entries()) { const n = m.uv.length / 2;
+    for (let i = 0; i < n; i++, v++) offsets.push(Math.abs(cylinderDistance([start.positions[3 * v], start.positions[3 * v + 1], start.positions[3 * v + 2]], [0, 0], 30, 0, 80) - 2)); }
+  assert.ok(offsets.length && Math.max(...offsets) < 1, `the cover starts on the can, 2 mm out (worst ${Math.max(...offsets).toFixed(2)} mm off)`);
+  const drape = drapeDocument(d, { target: 15, steps: 600 }), positions = drape.pieces.flatMap((p) => [...p.positions]);
+  assert.ok(drape.settled, `settled after ${drape.steps} steps (residual ${drape.residual})`);
+  const worst = out({ positions });
+  assert.ok(worst > -0.5, `the cover stays outside the can (deepest point ${worst.toFixed(2)} mm)`);
+});
