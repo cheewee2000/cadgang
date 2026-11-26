@@ -64,3 +64,11 @@ test('a softgoods.json that no longer validates is ignored rather than stopping 
   assert.match(errors.join(' '), /ignoring .*softgoods.json/);
   fs.rmSync(dir, { recursive: true });
 });
+
+test('softgoods review exposes strain and honest pressure diagnostics', () => {
+  const worker = fs.readFileSync(new URL('../web/softgoods-worker.js', import.meta.url), 'utf8');
+  const page = fs.readFileSync(new URL('../web/softgoods.html', import.meta.url), 'utf8');
+  const ui = fs.readFileSync(new URL('../web/softgoods.js', import.meta.url), 'utf8');
+  assert.match(worker, /diagnostics: \{ strain:/); assert.match(worker, /No collision body is present/);
+  assert.match(page, /id="map"/); assert.match(ui, /strainColor/); assert.match(ui, /PRESSURE UNAVAILABLE/);
+});

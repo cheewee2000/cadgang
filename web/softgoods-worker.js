@@ -1,6 +1,6 @@
 // Incremental XPBD cloth preview. Pattern meshes and manufacturing data remain
 // authoritative outside this worker. Current scope: gravity, anisotropic in-plane
-// stretch, seam and fixed attachment constraints. No body/self collision yet.
+// stretch, seam and fixed attachment constraints, with per-vertex strain diagnostics. Body pressure requires a collision body and is reported unavailable until one is supplied.
 
 let state = null, timer = null;
 const V = (a, i) => [a[i * 3], a[i * 3 + 1], a[i * 3 + 2]];
@@ -22,7 +22,7 @@ function initialize(input) {
   for (const a of input.attachments || []) { const p = pieces.find((q) => q.id === a.pattern); if (!p) continue; let best = 0, d = Infinity; for (let i = 0; i < p.uv.length / 2; i++) { const q = Math.hypot(p.uv[i * 2] - a.at[0], p.uv[i * 2 + 1] - a.at[1]); if (q < d) { d = q; best = i; } } constraints.push({ a: p.off + best, target: a.to, alpha: 0, lambda: 0, kind: 'attachment' }); }
   // Seam segments resolve to their sampled boundary vertex chains.
   for (const s of input.seams) { const A = pieces.find((p) => p.id === s.a.pattern), B = pieces.find((p) => p.id === s.b.pattern); if (!A || !B) continue; let aa = A.segmentVertices[s.a.segment] || [], bb = B.segmentVertices[s.b.segment] || []; if (s.flip !== false) bb = [...bb].reverse(); const n = Math.max(2, Math.min(aa.length, bb.length)); for (let i = 0; i < n; i++) constraints.push({ a: A.off + aa[Math.round(i * (aa.length - 1) / (n - 1))], b: B.off + bb[Math.round(i * (bb.length - 1) / (n - 1))], rest: 0, alpha: Number(s.seamCompliance ?? 1e-9), lambda: 0, kind: 'seam' }); }
-  state = { input, pieces, x, prev, inv, constraints, velocities: new Float64Array(total * 3), running: false, step: 0, collision: 'none' };
+  state = { input, pieces, x, prev, inv, constraints, velocities: new Float64Array(total * 3), running: false, step: 0, collision: 'none', pressureAvailable: false };
 }
 
 function project(c, dt) {
@@ -37,5 +37,15 @@ function tick() {
   for (let i = 0; i < state.inv.length; i++) { v[i * 3] = (x[i * 3] - prev[i * 3]) / dt; v[i * 3 + 1] = (x[i * 3 + 1] - prev[i * 3 + 1]) / dt; v[i * 3 + 2] = (x[i * 3 + 2] - prev[i * 3 + 2]) / dt; }
   state.step++; if (state.step % 2 === 0) send();
 }
-function send() { const positions = Float32Array.from(state.x); postMessage({ type: 'frame', step: state.step, collision: state.collision, positions, pieces: state.pieces.map((p) => ({ id: p.id, off: p.off, count: p.uv.length / 2, triangles: p.triangles })) }, [positions.buffer]); }
+function send() {
+  const positions = Float32Array.from(state.x), strain = new Float32Array(state.inv.length), count = new Uint16Array(state.inv.length);
+  for (const c of state.constraints) {
+    if (c.kind !== 'fabric' || c.target || !(c.rest > 0)) continue;
+    const a = V(state.x, c.a), b = V(state.x, c.b), e = (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) - c.rest) / c.rest;
+    strain[c.a] += e; strain[c.b] += e; count[c.a]++; count[c.b]++;
+  }
+  let minStrain = Infinity, maxStrain = -Infinity;
+  for (let i = 0; i < strain.length; i++) { strain[i] = count[i] ? strain[i] / count[i] : 0; minStrain = Math.min(minStrain, strain[i]); maxStrain = Math.max(maxStrain, strain[i]); }
+  postMessage({ type: 'frame', step: state.step, collision: state.collision, diagnostics: { strain: { unit: 'ratio', min: minStrain, max: maxStrain }, pressure: { available: state.pressureAvailable, reason: state.pressureAvailable ? null : 'No collision body is present in this preview' } }, positions, strain, pieces: state.pieces.map((p) => ({ id: p.id, off: p.off, count: p.uv.length / 2, triangles: p.triangles })) }, [positions.buffer, strain.buffer]);
+}
 onmessage = (e) => { const m = e.data; if (m.type === 'init') { initialize(m.input); send(); } else if (m.type === 'run') { state.running = true; clearInterval(timer); timer = setInterval(tick, 1000 / 60); } else if (m.type === 'pause') state.running = false; else if (m.type === 'reset') { initialize(state.input); send(); } };
