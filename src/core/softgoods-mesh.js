@@ -12,19 +12,19 @@ import { GraphError } from './errors.js';
 import { sampleSegment } from './softgoods-export.js';
 
 function contourOf(pattern, contour, curveStep) {
-  const vertices = [], segmentVertices = {}, ranges = [];
+  const vertices = [], segmentVertices = {}, segmentLengths = {}, ranges = [];
   for (const id of contour) {
     const s = pattern.segments.find((q) => q.id === id); if (!s) throw new GraphError(`Pattern '${pattern.id}' is missing segment '${id}'`);
     const rough = sampleSegment(pattern, s, 32), length = rough.reduce((n, p, i) => i ? n + Math.hypot(p[0] - rough[i - 1][0], p[1] - rough[i - 1][1]) : 0, 0), steps = Math.max(1, Math.ceil(length / curveStep));
     let q = sampleSegment(pattern, s, steps), start = vertices.length;
     if (s.type === 'line') q = Array.from({ length: steps + 1 }, (_, i) => [q[0][0] + (q[1][0] - q[0][0]) * i / steps, q[0][1] + (q[1][1] - q[0][1]) * i / steps]);
     for (let i = 0; i < q.length - 1; i++) { const last = vertices.at(-1); if (!last || Math.hypot(last[0] - q[i][0], last[1] - q[i][1]) > 1e-8) vertices.push(q[i]); }
-    ranges.push({ id, start, count: vertices.length - start });
+    ranges.push({ id, start, count: vertices.length - start }); segmentLengths[id] = length;
   }
   for (const r of ranges) segmentVertices[r.id] = [...Array(r.count).keys()].map((i) => r.start + i).concat((r.start + r.count) % vertices.length);
   let area = 0; for (let i = 0; i < vertices.length; i++) { const a = vertices[i], b = vertices[(i + 1) % vertices.length]; area += a[0] * b[1] - b[0] * a[1]; }
   if (Math.abs(area) < 1e-7) throw new GraphError(`Pattern '${pattern.id}' has a collapsed contour`);
-  return { vertices, segmentVertices, area: area / 2 };
+  return { vertices, segmentVertices, segmentLengths, area: area / 2 };
 }
 
 function boundariesOf(pattern, curveStep) {
@@ -32,14 +32,15 @@ function boundariesOf(pattern, curveStep) {
   const loops = pattern.contours.map((c) => contourOf(pattern, c, curveStep));
   // The material outer boundary is the largest absolute area; every other contour is a hole.
   loops.sort((a, b) => Math.abs(b.area) - Math.abs(a.area));
-  const vertices = [], segmentVertices = {}, holes = [];
+  const vertices = [], segmentVertices = {}, segmentLengths = {}, holes = [];
   for (let n = 0; n < loops.length; n++) {
     const loop = loops[n], offset = vertices.length;
     if (n) holes.push(offset);
     vertices.push(...loop.vertices);
     for (const [id, chain] of Object.entries(loop.segmentVertices)) segmentVertices[id] = chain.map((i) => i + offset);
+    Object.assign(segmentLengths, loop.segmentLengths);
   }
-  return { vertices, segmentVertices, holes, loops: loops.map((l) => l.vertices) };
+  return { vertices, segmentVertices, segmentLengths, holes, loops: loops.map((l) => l.vertices) };
 }
 
 export const insideLoop = (loop, p) => { let c = false; for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) { const a = loop[i], b = loop[j]; if ((a[1] > p[1]) !== (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) c = !c; } return c; };
@@ -152,9 +153,21 @@ function conform(vertices, triangles, ends) {
   throw new GraphError('A simulation mesh could not follow a fold or elastic line');
 }
 
+/** meshPattern for the cloth preview. A piece that meshes as asked comes back exactly as meshPattern makes it. One that
+ *  does not (curves sampled at the mesh size turn a small round piece or hole into a polygon that crosses itself:
+ *  "a simulation mesh point fell outside its pattern") is meshed again with its curves sampled finer, 5 mm then less. */
+export function meshPatternFine(pattern, options = {}) {
+  let first;
+  for (const curveStep of [null, 5, 2, 1, 0.5]) {
+    if (curveStep != null && !(curveStep < (options.curveStep ?? options.target ?? 25))) continue;
+    try { return meshPattern(pattern, curveStep == null ? options : { ...options, curveStep }); } catch (e) { if (!(e instanceof GraphError)) throw e; first ||= e; }
+  }
+  throw first;
+}
+
 export function meshPattern(pattern, { target = 25, curveStep = target, lines = [] } = {}) {
   if (!(target > 0 && curveStep > 0)) throw new GraphError('Simulation mesh spacing must be positive');
-  const { vertices, segmentVertices: coarse, holes, loops } = boundariesOf(pattern, curveStep);
+  const { vertices, segmentVertices: coarse, segmentLengths, holes, loops } = boundariesOf(pattern, curveStep);
   const boundary = vertices.length, initial = earcut(vertices.flat(), holes, 2);
   if (!initial.length) throw new GraphError(`Pattern '${pattern.id}' contour could not be triangulated (it may cross itself or contain a hole outside its outer contour)`);
   const used = new Set(initial);
@@ -165,5 +178,6 @@ export function meshPattern(pattern, { target = 25, curveStep = target, lines = 
   const conformed = conform(vertices, flipToDelaunay(vertices, refine(vertices, flipToDelaunay(vertices, initial), target)), ends), triangles = conformed.triangles, segmentVertices = chainsOf(vertices, coarse), boundaryCount = new Set(Object.values(segmentVertices).flat()).size;
   const edges = new Map();
   for (let i = 0; i < triangles.length; i += 3) for (const [a, b] of [[triangles[i], triangles[i + 1]], [triangles[i + 1], triangles[i + 2]], [triangles[i + 2], triangles[i]]]) { const k = a < b ? `${a}/${b}` : `${b}/${a}`; edges.set(k, [a, b]); }
-  return { id: pattern.id, uv: vertices.flat(), triangles, edges: [...edges.values()].flat(), boundaryCount, segmentVertices, holes: holes.length, ...(lines.length ? { lineVertices: conformed.chains } : {}) };
+  // segmentLengths: each segment's length along its curve. Its mesh chain is chords, shorter on a tight curve.
+  return { id: pattern.id, uv: vertices.flat(), triangles, edges: [...edges.values()].flat(), boundaryCount, segmentVertices, segmentLengths, holes: holes.length, ...(lines.length ? { lineVertices: conformed.chains } : {}) };
 }
