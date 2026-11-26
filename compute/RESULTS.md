@@ -152,3 +152,32 @@ Conclusion: pretraining does not help. Accuracy stays at the baseline whatever t
 Conclusion: if joint suggestions ship, ship the ensemble or nothing new. It is the only result in Stages 4 to 7 that moves accuracy by more than seed noise, and it also gives the best axis and the most high-confidence coverage. A single distilled model is not a substitute. The class ceiling (PLANAR, CYLINDRICAL) is untouched by any of this and needs different inputs or labels, not more seeds.
 
 Artifacts: checkpoints, reports, predictions, ONNX files and `summary.{md,json,csv}` under `/mnt/shared/cadgang/joint-ensemble-v1/`.
+
+## Stage 8 — what the joint model is shown (2026-11-26)
+
+`compute/research/run-joint-inputs.sh` (Job `compute/k8s/joint-inputs-v1.yaml`, 8 GPUs, 14:53Z to 17:56Z, no restarts, $99.27 of credits) trained the Stage 4 winner (EdgeConv k=8, CE, widths 48,96,192, seed 1) eight ways, each changing only its input:
+`focus50` / `focus75` draw that share of each part's points from vertices within 1 mm of the other part; `local` adds the point's xyz in the smaller part's own frame (3 more channels); `static` ranks EdgeConv neighbours once on the input xyz instead of on each block's features; `p512` uses 512 points per part (15 and 30 epochs only, for cost). The comparison is the nine plain seeds of Stage 7.
+
+| model (best checkpoint) | accuracy | macro F1 | median axis | REVOLUTE | CYLINDRICAL | PLANAR | p≥0.90 precision / coverage | ONNX matches PyTorch |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| nine plain seeds, 60 epochs | 64.97% to 65.75% | 0.418 to 0.442 | 0.69° to 0.96° | 48% to 52% | 14% to 19% | | 95.2% to 95.8% / 18.9% to 21.1% | 19 of 33 files |
+| focus50 | 65.47% | **0.454** | 0.72° | 49.8% | 16.7% | **9.3%** | 95.7% / 20.3% | no (0.07) |
+| static | 65.28% | 0.439 | 0.93° | 53.5% | 16.6% | 8.3% | 95.8% / 20.0% | **yes (2e-4)** |
+| p512 (30 epochs) | 64.84% | 0.424 | 0.64° | 51.4% | 15.9% | 4.7% | 95.5% / 19.2% | no (0.04) |
+| local | 64.60% | 0.403 | 0.85° | 52.7% | 16.7% | 2.7% | 94.9% / 16.6% | yes (7e-4) |
+| focus50-local | 64.68% | 0.414 | **0.57°** | **55.5%** | 17.7% | 3.6% | 94.5% / 17.8% | yes (8e-6) |
+| focus75-local | 64.97% | 0.417 | 0.64° | 55.9% | 14.6% | 2.9% | 94.4% / 17.6% | yes (8e-6) |
+| static-focus50-local | 65.34% | 0.419 | 0.81° | 51.4% | 17.9% | 2.9% | 94.6% / 18.2% | yes (2e-5) |
+| p512-focus50-local (30 epochs) | 65.30% | 0.423 | 0.73° | 51.5% | 15.5% | 3.9% | 94.4% / 17.2% | yes (7e-4) |
+
+ONNX: largest difference from PyTorch over the export check's inputs; "yes" is within 1e-3. For the `local` variants the 30- and 60-epoch rows are identical: their best validation checkpoint was the 30-epoch one.
+
+**Accuracy.** No input change moves accuracy outside the seed spread. The best, `focus50`, is 65.47% against a seed mean of 65.34%.
+
+**Minority types.** Drawing half the points from the contact region is the only change that helps PLANAR (9.3% recall against 5.5% for the Stage 7 ensemble) and it gives the best macro F1 of any single model so far (0.454). The local frame does the opposite: REVOLUTE recall rises to 55 to 56% and the median axis error falls to 0.57°, but PLANAR collapses to about 3%.
+
+**Export.** The static graph fixes the Stage 7 export problem without costing accuracy: `static` is inside the seed spread at 60 epochs and both of its files match PyTorch to 2e-4, as do all four `static-*` files. Every variant with the local frame also exports cleanly. Every dynamic-graph variant without it still fails. If a joint model ships as ONNX, train it with `--edge-graph static`.
+
+**Contact.** These models still see mesh vertices only: on 300 validation pairs per type, 61% of SLIDER and NONE pairs, 39% of PLANAR, 28% of CYLINDRICAL and 23% of FASTENED pairs have no vertex within 1 mm of the other part, so their contact flag is blank. On surface points (Stage 9) the share without contact falls to 2% for SLIDER and 3% for PLANAR. Stage 9 trains on those.
+
+Artifacts: checkpoints, reports, ONNX files and `summary.{md,json,csv}` under `/mnt/shared/cadgang/joint-inputs-v1/`.
