@@ -5,14 +5,14 @@
 //   flattenPatch   one connected patch → planar coordinates that keep lengths (conformal start, then as-rigid-as-
 //                  possible iterations), with the stretch of every triangle
 //   flattenMesh    a body's faces → patches (grown across smooth borders while they lie flat, cut open where they
-//                  are closed) → patterns, seams, notches and where each piece sits on the part
+//                  are closed) → patterns, one seam per shared border (span seams), notches and where each piece sits on the part
 //   describeFaces  the bodies and faces a caller can name
 //
 // Faces are addressed as the viewer addresses them: a body is a triangle range with a name, a face is the n-th
 // B-rep face range inside it (mesh.bodies, mesh.faces: what importCadFile and tessellateBodies return). mm.
 
 import { GraphError } from './errors.js';
-import { segmentLength } from './softgoods-export.js';
+import { sampleSegment, segmentLength } from './softgoods-export.js';
 
 const DEG = 180 / Math.PI;
 const r4 = (v) => Math.round(v * 1e4) / 1e4 + 0;   // + 0: never -0
@@ -623,44 +623,47 @@ export function flattenMesh(mesh, options = {}) {
   // A small piece is fitted closer than the tolerance asks: 0.2 mm is nothing on a bag panel and a visible flat on a 20 mm tab.
   for (const piece of pieces) piece.tolerance = Math.min(Number(opt.tolerance), Math.hypot(...piece.size) / 500);
 
-  // Where the boundary of every piece breaks into segments. A break is a welded mesh vertex, so the two sides of a
-  // seam always break at the same place and pair one segment to one segment: where three or more boundaries meet or
-  // one ends, where either side turns a corner, and wherever a fitted run would stray past the tolerance.
-  const meet = new Map(), breaks = new Set();
+  // Where the boundary of every piece breaks into segments. Each piece breaks where its own outline asks: at a
+  // corner, where a straight edge runs into an arc, and wherever one fitted line or Bezier would stray past the
+  // tolerance. A seam runs from one junction to the next (where three or more boundaries meet, or one ends), so its
+  // two sides are spans of however many segments each piece needed between the same two places.
+  const meet = new Map(), junction = new Set();
   for (const piece of pieces) for (const loop of piece.loops) for (const e of loop) for (const v of [e.a, e.b]) { const g = piece.patch.gv[v]; if (!meet.has(g)) meet.set(g, new Set()); meet.get(g).add(e.key); }
-  for (const [g, keys] of meet) if (keys.size !== 2) breaks.add(g);
+  for (const [g, keys] of meet) if (keys.size !== 2) junction.add(g);
+  // A closed border with no junction on it has to start somewhere: at the same welded vertex on both of its sides.
+  for (const piece of pieces) for (const loop of piece.loops) if (!loop.some((e) => junction.has(piece.patch.gv[e.a]))) junction.add(piece.patch.gv[loop[0].a]);
   const at = (piece, v) => [piece.flat.uv[2 * v], piece.flat.uv[2 * v + 1]];
   for (const piece of pieces) {
-    piece.turn = new Map();
+    piece.turn = new Map(); piece.breaks = new Set();
     for (const loop of piece.loops) {
       const turns = loop.map((e, i) => { const prev = loop[(i + loop.length - 1) % loop.length], p = at(piece, prev.a), q = at(piece, e.a), r = at(piece, e.b); return Math.abs(Math.atan2((q[0] - p[0]) * (r[1] - q[1]) - (q[1] - p[1]) * (r[0] - q[0]), (q[0] - p[0]) * (r[0] - q[0]) + (q[1] - p[1]) * (r[1] - q[1]))) * DEG; });
       const lengths = loop.map((e) => { const p = at(piece, e.a), q = at(piece, e.b); return Math.hypot(q[0] - p[0], q[1] - p[1]); });
       loop.forEach((e, i) => {
         const before = (i + loop.length - 1) % loop.length, after = (i + 1) % loop.length, t = turns[i], beside = Math.max(turns[before], turns[after]);
         piece.turn.set(e.a, t);
+        if (junction.has(piece.patch.gv[e.a])) piece.breaks.add(e.a);
         // A corner turns sharply where its neighbours do not; a coarse arc turns the same at every vertex.
-        if (t >= 60 || (t >= 15 && t > 2.5 * beside)) breaks.add(piece.patch.gv[e.a]);
+        else if (t >= 60 || (t >= 15 && t > 2.5 * beside)) piece.breaks.add(e.a);
         // Where a straight edge runs into an arc the facets change length at once: the tangent point, a break with no corner.
-        else if (Math.max(lengths[before], lengths[i]) > 4 * Math.min(lengths[before], lengths[i]) && t + beside > 1) breaks.add(piece.patch.gv[e.a]);
+        else if (Math.max(lengths[before], lengths[i]) > 4 * Math.min(lengths[before], lengths[i]) && t + beside > 1) piece.breaks.add(e.a);
       });
-      if (!loop.some((e) => breaks.has(piece.patch.gv[e.a]))) breaks.add(piece.patch.gv[loop[0].a]);
     }
   }
   // A run is fitted within the piece's tolerance and within a hundredth of its own length: a short edge fitted
   // loosely is a seam whose two sides differ by several percent.
   const fit = (piece, pts) => { let length = 0; for (let i = 1; i < pts.length; i++) length += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); return fitRun(pts, Math.min(piece.tolerance, length / 100)); };
   const runsOf = (piece, loop) => {
-    const starts = loop.map((e, i) => i).filter((i) => breaks.has(piece.patch.gv[loop[i].a]));
+    const starts = loop.map((e, i) => i).filter((i) => piece.breaks.has(loop[i].a));
     return starts.map((s, k) => { const end = starts[(k + 1) % starts.length], count = ((end - s + loop.length - 1) % loop.length) + 1, edges = Array.from({ length: count }, (_, i) => loop[(s + i) % loop.length]); return { edges, pts: [at(piece, edges[0].a), ...edges.map((e) => at(piece, e.b))] }; });
   };
-  for (let guard = 0, added = true; added && guard < 10000; guard++) {
+  for (const piece of pieces) for (let guard = 0, added = true; added && guard < 10000; guard++) {
     added = false;
-    for (const piece of pieces) for (const loop of piece.loops) {
+    for (const loop of piece.loops) {
       const runs = runsOf(piece, loop);
-      for (const run of runs) { run.fit = fit(piece, run.pts); if (run.fit.split != null) { breaks.add(piece.patch.gv[run.edges[run.fit.split - 1].b]); added = true; } }
+      for (const run of runs) { run.fit = fit(piece, run.pts); if (run.fit.split != null) { piece.breaks.add(run.edges[run.fit.split - 1].b); added = true; } }
       if (!added && runs.length < 3) {   // a contour is at least three segments: halve the longest run
         const longest = runs.filter((r) => r.edges.length > 1).sort((p, q) => q.edges.length - p.edges.length)[0];
-        if (longest) { breaks.add(piece.patch.gv[longest.edges[(longest.edges.length - 1) >> 1].b]); added = true; }
+        if (longest) { piece.breaks.add(longest.edges[(longest.edges.length - 1) >> 1].b); added = true; }
       }
     }
   }
@@ -668,14 +671,14 @@ export function flattenMesh(mesh, options = {}) {
   // Patterns: corner points, one line or Bezier per run, the outer contour first.
   const taken = new Set(opt.avoid || []), unique = (id) => { let out = id; for (let k = 2; taken.has(out); k++) out = `${id}_${k}`; taken.add(out); return out; };
   const base = slug(opt.name || M.body), sides = [['right', 'left'], ['back', 'front'], ['top', 'bottom']];
-  const patterns = [], report = [], runOf = new Map();   // edge key → the runs on it
+  const patterns = [], report = [];
   for (const piece of pieces) {
     const { patch, flat } = piece, n = [0, 0, 0]; let total = 0;
     for (const t of patch.gt) { for (let k = 0; k < 3; k++) n[k] += M.N[3 * t + k] * M.A[t]; total += M.A[t]; }
     const axis = [0, 1, 2].sort((a, b) => Math.abs(n[b]) - Math.abs(n[a]))[0], facing = Math.hypot(...n) > 0.85 * total;
     const label = facing ? sides[axis][n[axis] > 0 ? 0 : 1] : Math.hypot(...n) < 0.5 * total ? 'wrap' : 'panel';
     const id = unique(`${base}_${label}`), points = [], segments = [], contours = [], notches = [];
-    piece.id = id; piece.runs = [];
+    piece.id = id; piece.runs = []; piece.loopRuns = [];
     for (const loop of piece.loops) {
       const contour = [], first = points.length, runs = runsOf(piece, loop);
       runs.forEach((run, i) => {
@@ -683,11 +686,9 @@ export function flattenMesh(mesh, options = {}) {
         points.push({ id: a, x: r4(run.pts[0][0]), y: r4(run.pts[0][1]) });
         Object.assign(run, { piece, id: sid, type: shape.type || 'line', fit: shape, start });
         contour.push(sid); piece.runs.push(run);
-        for (const e of run.edges) { if (!runOf.has(e.key)) runOf.set(e.key, []); runOf.get(e.key).push(run); }
         segments.push(shape.type === 'bezier' ? { id: sid, type: 'bezier', a, b, c1: `${sid}_c1`, c2: `${sid}_c2` } : { id: sid, type: 'line', a, b });
       });
-      runs.forEach((run, i) => { run.before = runs[(i + runs.length - 1) % runs.length]; });
-      contours.push(contour);
+      piece.loopRuns.push(runs); contours.push(contour);
     }
     for (const run of piece.runs) if (run.type === 'bezier') points.push({ id: `${run.id}_c1`, x: r4(run.fit.c1[0]), y: r4(run.fit.c1[1]) }, { id: `${run.id}_c2`, x: r4(run.fit.c2[0]), y: r4(run.fit.c2[1]) });
     const d = flat.distortion, lies = d.maxStrain <= opt.strainLimit && !d.flips, lapped = overlaps(patch, flat.uv);
@@ -702,29 +703,50 @@ export function flattenMesh(mesh, options = {}) {
       ...(!distortion.flat && { advice: lapped ? 'This piece laps over itself when laid flat: split it with cuts or smaller faces groups.' : `Its strain of ${(d.maxStrain * 100).toFixed(1)}% is over the ${(opt.strainLimit * 100).toFixed(1)}% limit, so it will not lie flat: add darts or split it with cuts ({path:[[x,y,z],…]} from its edge inward or across), or sew it in a fabric that stretches.` }) });
   }
 
-  // Seams: two runs on the same mesh edges are the two sides of one seam.
-  const seams = [], seamReport = [], byId = new Map(patterns.map((p) => [p.id, p])), length = (run) => segmentLength(byId.get(run.piece.id), byId.get(run.piece.id).segments.find((s) => s.id === run.id));
-  const along = (run) => { const g = [run.piece.patch.gv[run.edges[0].a]], f = [0]; for (let i = 0; i < run.edges.length; i++) { g.push(run.piece.patch.gv[run.edges[i].b]); f.push(f[i] + Math.hypot(run.pts[i + 1][0] - run.pts[i][0], run.pts[i + 1][1] - run.pts[i][1])); } return { g, f: f.map((x) => x / (f.at(-1) || 1)) }; };
-  const sewn = new Set();
-  for (const piece of pieces) for (const run of piece.runs) {
-    const others = runOf.get(run.edges[0].key).filter((r) => r !== run);
-    if (others.length !== 1 || sewn.has(run)) continue;   // a free edge, or more than two sheets on one edge
-    const mate = others[0]; sewn.add(run); sewn.add(mate);
-    const a = along(run), b = along(mate), flip = b.g[0] !== a.g[0] || (a.g[0] === a.g.at(-1) && b.g[1] !== a.g[1]);
+  // Seams: the boundary between two junctions is one seam wherever two pieces, or the two sides of a cut, share it.
+  // Each side is one segment, or the span of segments its piece needed there.
+  const seams = [], seamReport = [], byId = new Map(patterns.map((p) => [p.id, p])), segmentOf = (run) => byId.get(run.piece.id).segments.find((s) => s.id === run.id);
+  const chains = [], chainOn = new Map();
+  for (const piece of pieces) for (const runs of piece.loopRuns) {
+    const first = runs.findIndex((r) => junction.has(piece.patch.gv[r.start])); let chain = null;
+    for (let k = 0; k < runs.length; k++) { const run = runs[(first + k) % runs.length]; if (junction.has(piece.patch.gv[run.start])) chains.push(chain = { piece, runs: [] }); chain.runs.push(run); }
+  }
+  for (const c of chains) {
+    c.edges = c.runs.flatMap((r) => r.edges); c.v = [c.edges[0].a, ...c.edges.map((e) => e.b)]; c.g = c.v.map((v) => c.piece.patch.gv[v]);
+    const f = [0]; for (let i = 1; i < c.v.length; i++) { const p = at(c.piece, c.v[i - 1]), q = at(c.piece, c.v[i]); f.push(f[i - 1] + Math.hypot(q[0] - p[0], q[1] - p[1])); }
+    c.f = f.map((x) => x / (f.at(-1) || 1)); c.length = c.runs.reduce((n, r) => n + segmentLength(byId.get(c.piece.id), segmentOf(r)), 0);
+    c.ref = c.runs.length === 1 ? { pattern: c.piece.id, segment: c.runs[0].id } : { pattern: c.piece.id, segments: c.runs.map((r) => r.id) };
+    for (const e of c.edges) { if (!chainOn.has(e.key)) chainOn.set(e.key, []); chainOn.get(e.key).push(c); }
+  }
+  for (const a of chains) {
+    const others = chainOn.get(a.edges[0].key).filter((c) => c !== a);
+    if (others.length !== 1 || a.sewn) continue;   // a free edge, or more than two sheets on one edge
+    const b = others[0]; a.sewn = b.sewn = true;
+    const flip = b.piece.patch.gv[b.edges.find((e) => e.key === a.edges[0].key).a] !== a.g[0];   // the same mesh edge, run the other way
     const where = new Map(b.g.map((g, i) => [g, flip ? 1 - b.f[i] : b.f[i]]));
     // Where the two sides stretch differently, points between the ends keep the 3D order: {a, b} fractions along each side.
     let stops = []; for (let i = 1; i < a.g.length - 1; i++) { const fb = where.get(a.g[i]); if (fb != null && Math.abs(fb - a.f[i]) > 0.002) stops.push({ a: r4(a.f[i]), b: r4(fb) }); }
     if (stops.length > 7) stops = Array.from({ length: 7 }, (_, i) => stops[Math.round((i + 0.5) * stops.length / 7 - 0.5)]);
     const correspondence = []; for (const s of stops) { const last = correspondence.at(-1) || { a: 0, b: 0 }; if (s.a > last.a + 1e-3 && s.b > last.b + 1e-3 && s.a < 0.999 && s.b < 0.999) correspondence.push(s); }
-    const la = length(run), lb = length(mate), mismatch = Math.abs(la - lb) / Math.max(la, lb, 1e-9), ease = Math.ceil((mismatch + 0.001) * 1e4) / 1e4;
-    const id = unique(`sew_${slug(run.piece.id, 22)}_${slug(mate.piece.id, 22)}`);
-    seams.push({ id, a: { pattern: run.piece.id, segment: run.id }, b: { pattern: mate.piece.id, segment: mate.id }, flip, ease, kind: 'plain', correspondence });
-    seamReport.push({ id, a: `${run.piece.id}.${run.id}`, b: `${mate.piece.id}.${mate.id}`, lengthA: r3(la), lengthB: r3(lb), mismatch: +mismatch.toFixed(5), ease, ...(run.piece === mate.piece && { closes: 'the piece onto itself' }) });
-    run.sewn = mate.sewn = true;
+    const mismatch = Math.abs(a.length - b.length) / Math.max(a.length, b.length, 1e-9), ease = Math.ceil((mismatch + 0.001) * 1e4) / 1e4;
+    const id = unique(`sew_${slug(a.piece.id, 22)}_${slug(b.piece.id, 22)}`), label = (c) => `${c.piece.id}.${c.runs.map((r) => r.id).join('+')}`;
+    seams.push({ id, a: a.ref, b: b.ref, flip, ease, kind: 'plain', correspondence });
+    seamReport.push({ id, a: label(a), b: label(b), lengthA: r3(a.length), lengthB: r3(b.length), mismatch: +mismatch.toFixed(5), ease, ...(a.piece === b.piece && { closes: 'the piece onto itself' }) });
+    // Match notches: where either side starts a new segment part way along the seam (a corner of the other piece
+    // lands there, or a curve was broken to fit), both sides are marked at that place unless they turn a corner there themselves.
+    const marks = new Set([...a.runs.slice(1), ...b.runs.slice(1)].map((r) => r.piece.patch.gv[r.start]));
+    for (const side of [a, b]) for (const g of marks) {
+      const i = side.g.indexOf(g), v = side.v[i]; if (i <= 0 || i >= side.g.length - 1 || side.piece.turn.get(v) >= 10) continue;
+      const pattern = byId.get(side.piece.id); let run = side.runs.find((r) => r.start === v), place = 0;
+      if (!run) {   // part way along one of this side's segments: a notch sits at a fraction of the segment's own parameter
+        run = side.runs.find((r) => r.edges.some((e) => e.b === v));
+        const q = sampleSegment(pattern, segmentOf(run), 128), [x, y] = at(side.piece, v);
+        if (q.length === 2) place = Math.hypot(x - q[0][0], y - q[0][1]) / (Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]) || 1);
+        else place = q.reduce((best, pnt, k) => (Math.hypot(pnt[0] - x, pnt[1] - y) < Math.hypot(q[best][0] - x, q[best][1] - y) ? k : best), 0) / (q.length - 1);
+      }
+      pattern.notches.push({ segment: run.id, at: r4(Math.max(0, Math.min(1, place))), kind: 'match' });
+    }
   }
-  // Notches: where a seam segment starts in the middle of a smooth edge (the other side has a corner there, or the
-  // run was broken to fit), a match mark on both sides shows where the two meet.
-  for (const piece of pieces) for (const run of piece.runs) if ((run.sewn || run.before.sewn) && piece.turn.get(run.start) < 10) byId.get(piece.id).notches.push({ segment: run.id, at: 0, kind: 'match' });
   const arrangement = pieces.map((p) => ({ pattern: p.id, position: p.position, rotation: p.rotation, layer: 0, source: 'flatten' }));
   const meshes = pieces.map((p) => ({ id: p.id, uv: p.flat.uv, xyz: p.patch.P, triangles: p.patch.tri, stretch: p.flat.stretch }));
   return { body: M.body, patterns, seams, arrangement, report: { pieces: report, seams: seamReport, cuts, skipped }, meshes };

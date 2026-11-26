@@ -31,3 +31,5 @@ export const box = (w, d, h, n = 2) => [
 ];
 /** The upper half of a sphere, pole up: latitude rings from the rim to the pole. */
 export const hemisphere = (r, n = 48, rings = 12) => surface(n, rings, (u, v) => { const a = TAU * u, t = Math.PI / 2 * v; return [r * Math.cos(t) * Math.cos(a), r * Math.cos(t) * Math.sin(a), r * Math.sin(t)]; });
+/** A flat disc of radius R with a round hole of radius r, cx off centre; the hole's mesh lines are turned by `turn` against the rim's. */
+export const washer = (R, r, cx = 0, turn = 0, n = 64) => surface(n, 3, (u, v) => { const a = TAU * u, b = a + turn; return [R * Math.cos(a) * (1 - v) + (cx + r * Math.cos(b)) * v, R * Math.sin(a) * (1 - v) + r * Math.sin(b) * v, 0]; });

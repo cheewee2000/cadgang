@@ -12,8 +12,12 @@ import express from 'express';
 import { z } from 'zod';
 import { flattenMesh, flattenPatch, describeFaces, mergeFlattened, fitRun } from '../src/core/softgoods-flatten.js';
 import { SoftgoodsDocument, validateSoftgoodsDocument } from '../src/core/softgoods-document.js';
-import { meshPattern } from '../src/core/softgoods-mesh.js';
-import { resolveSeamCorrespondence } from '../src/core/softgoods-seams.js';
+import os from 'node:os';
+import { meshPattern, meshPatternFine } from '../src/core/softgoods-mesh.js';
+import { resolveSeamCorrespondence, seamSide } from '../src/core/softgoods-seams.js';
+import { exportProduction } from '../src/core/softgoods-production.js';
+import { drapeDocument, simulationInput } from '../src/core/softgoods-drape.js';
+import { editSoftgoods } from '../src/core/softgoods-edit.js';
 import { checkDesign } from '../src/core/softgoods-operations.js';
 import { sampleSegment, segmentLength } from '../src/core/softgoods-export.js';
 import { importCadFile } from '../src/core/step.js';
@@ -21,12 +25,13 @@ import { softgoodsRouter } from '../src/server/softgoods.js';
 import { cellsRouter } from '../src/server/cells.js';
 import { CellDocument } from '../src/core/cells.js';
 import { registerSoftgoodsTools } from '../src/mcp/softgoods.js';
-import { body, side, disc, box, quad, hemisphere, surface } from './fixtures/flatten-meshes.mjs';
+import { body, side, disc, box, quad, hemisphere, surface, washer } from './fixtures/flatten-meshes.mjs';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const near = (actual, expected, ratio, what) => assert.ok(Math.abs(actual - expected) <= ratio * Math.abs(expected), `${what}: ${actual} is not within ${ratio * 100}% of ${expected}`);
 const piece = (r, id) => r.patterns.find((p) => p.id === id), point = (p, id) => p.points.find((q) => q.id === id);
-const lengthOf = (r, ref) => { const p = piece(r, ref.pattern); return segmentLength(p, p.segments.find((s) => s.id === ref.segment)); };
+const lengthOf = (r, ref) => { const p = piece(r, ref.pattern); return seamSide(ref).segments.reduce((sum, id) => sum + segmentLength(p, p.segments.find((s) => s.id === id)), 0); };
+const count = (text, needle) => text.split(needle).length - 1;
 
 /** The produced design is a valid document, every piece meshes for the cloth preview, and every seam resolves. */
 function sewable(r) {
@@ -121,18 +126,22 @@ test('a hemisphere cannot lie flat: it reports its strain and says what to do, a
   sewable(darted);
 });
 
-test('a closed can: the side is cut once, the round ends are a few Beziers within tolerance, and matched notches mark the seams', () => {
+test('a closed can: the side is cut once, each round end is one seam of a few Beziers to one straight edge, and matched notches mark the quarters', () => {
   const r = flattenMesh(body('can', [side(30, 30, 80), disc(30, 80, 1), disc(30, 0, -1)]));
   assert.deepEqual(r.patterns.map((p) => p.id), ['can_wrap', 'can_top', 'can_bottom']); assert.equal(r.report.cuts.length, 1);
   const wrap = piece(r, 'can_wrap'), top = piece(r, 'can_top');
   assert.ok(top.segments.every((s) => s.type === 'bezier') && top.segments.length >= 3 && top.segments.length <= 6, `${top.segments.length} segments for a circle`);
-  assert.ok(wrap.segments.every((s) => s.type === 'line') && wrap.segments.length <= 14);
+  assert.deepEqual(wrap.segments.map((s) => s.type), ['line', 'line', 'line', 'line'], 'the side stays a plain rectangle: it does not break where the ends do');
   assert.ok(fitMiss(r) <= 0.2 + 1e-3, `fitted within tolerance (${fitMiss(r)})`);
-  // Each arc of an end sews to one straight run of the side; a run that starts mid-edge carries a match notch on both pieces.
-  const ends = r.seams.filter((s) => s.a.pattern !== s.b.pattern); assert.equal(ends.length, top.segments.length + piece(r, 'can_bottom').segments.length);
+  // One seam per border: the side's whole edge to the span of arcs round the end.
+  assert.equal(r.seams.length, 3);
+  const end = r.seams.find((s) => s.b.pattern === 'can_top'); assert.equal(end.a.pattern, 'can_wrap'); assert.ok(end.a.segment); assert.equal(end.b.segments.length, top.segments.length); assert.equal(end.flip, true);
+  near(lengthOf(r, end.b), 2 * Math.PI * 30, 0.002, 'the end is as long round as the side is wide'); near(lengthOf(r, end.a), lengthOf(r, end.b), 0.002, 'both sides of the seam');
   for (const s of r.report.seams) assert.ok(s.mismatch < 0.002 && s.ease >= s.mismatch, `${s.id}: ${s.mismatch}`);
-  assert.ok(wrap.notches.length >= 4 && top.notches.length >= 2); assert.ok([...wrap.notches, ...top.notches].every((n) => n.kind === 'match' && n.at === 0));
-  near(top.segments.reduce((sum, s) => sum + segmentLength(top, s), 0), 2 * Math.PI * 30, 0.002, 'the end is as long round as the side is wide');
+  // Where the end starts a new arc, both pieces carry a match notch: at the arc's start on the end, part way along the side's straight edge.
+  const joints = top.segments.length - 1, onSide = wrap.notches.filter((n) => n.segment === end.a.segment);
+  assert.equal(top.notches.length, joints); assert.ok(top.notches.every((n) => n.kind === 'match' && n.at === 0)); assert.equal(onSide.length, joints);
+  assert.deepEqual(onSide.map((n) => n.at).sort(), Array.from({ length: joints }, (_, i) => (i + 1) / (joints + 1)), 'evenly round');
   sewable(r);
 });
 
@@ -296,6 +305,70 @@ test('with no path the cell document is the source: faces go by their topology n
   } finally { server.close(); }
 });
 
+test('a small round piece the preview mesher cannot take at its mesh size is meshed with finer curves, the same in the page input and the server drape', async () => {
+  // A 30 mm washer with a 20 mm hole off centre: at a 25 mm mesh every arc is one chord and the hole's corners fall outside the rim's.
+  const r = flattenMesh(body('washer', [washer(15, 10, 3, 0.4)])), d = validateSoftgoodsDocument(mergeFlattened(new SoftgoodsDocument(null).toJSON(), r)), [p] = d.patterns;
+  assert.equal(p.contours.length, 2); assert.throws(() => meshPattern(p, { target: 25 }), /fell outside its pattern/);
+  const fine = meshPatternFine(p, { target: 25 }); assert.ok(fine.triangles.length / 3 >= 20 && fine.holes === 1);
+  assert.deepEqual(meshPatternFine(piece(flattenMesh(body('case', box(100, 60, 40))), 'case_top'), { target: 25 }), meshPattern(piece(flattenMesh(body('case', box(100, 60, 40))), 'case_top'), { target: 25 }), 'a piece that meshes at the first try is untouched');
+  const doc = new SoftgoodsDocument(null), app = express(); app.use(express.json()); app.use('/s', softgoodsRouter(doc)); doc.replace(d);
+  const server = app.listen(0);
+  try {
+    const page = await (await fetch(`http://127.0.0.1:${server.address().port}/s/simulation-input`)).json(), input = simulationInput(doc.toJSON(), 25);
+    assert.deepEqual(page, JSON.parse(JSON.stringify(input)), 'the page and the server drape start from the same input');
+    assert.equal(input.meshes[0].triangles.length, fine.triangles.length); assert.equal(input.arrangement[0].source, 'flatten'); assert.deepEqual(input.patterns[0].source.faces, [0]); assert.equal(input.patterns[0].source.kind, 'flatten');
+    assert.equal(drapeDocument(doc.toJSON(), { steps: 20 }).pieces.length, 1);
+  } finally { server.close(); }
+});
+
+test('a flattened can and box go through every production format, and drape sewn shut from where they sit on the part', () => {
+  for (const [name, mesh, pieces] of [['can', body('can', [side(30, 30, 80), disc(30, 80, 1), disc(30, 0, -1)]), 3], ['case', body('case', box(100, 60, 40)), 6]]) {
+    const r = flattenMesh(mesh, { material: 'canvas' }), d = validateSoftgoodsDocument(mergeFlattened(new SoftgoodsDocument(null).toJSON(), r)), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cadgang-flatten-'));
+    try {
+      const out = exportProduction(d, dir, name, { formats: ['marker', 'bom', 'print', 'svg'], dxf: 'astm-style' }), read = (f) => fs.readFileSync(path.join(dir, f), 'utf8'), notches = d.patterns.reduce((n, p) => n + p.notches.length, 0);
+      assert.equal(out.check.ok, true); assert.equal(out.files.length, 2 * pieces + 8, out.files.map((f) => path.basename(f)).join(' '));
+      for (const f of ['tech-pack.json', 'tech-pack.html', 'marker_canvas.dxf', 'marker_canvas.svg', 'bom.json', 'bom.html', 'print_a4.html', 'astm-style.dxf']) assert.ok(fs.statSync(path.join(dir, `${name}_${f}`)).size > 200, f);
+      assert.equal(out.markers[0].pieces, pieces); assert.equal(out.bom.materials[0].id, 'canvas'); assert.equal(out.bom.materials[0].cutPieces, pieces); assert.equal(out.bom.seams.byKind[0].count, d.seams.length);
+      // Match notches are cut like any other: on every pattern DXF, on the marker and on the numbered ASTM layer.
+      assert.equal(d.patterns.reduce((n, p) => n + count(read(`${name}_${p.id}.dxf`), '\nLINE\n8\nNOTCH\n'), 0), notches); assert.equal(count(read(`${name}_marker_canvas.dxf`), '\nLINE\n8\nNOTCH\n'), notches);
+      assert.equal(count(read(`${name}_astm-style.dxf`), '\nLINE\n8\n4\n'), notches); for (const p of d.patterns) assert.equal(read(`${name}_${p.id}.svg`).includes('<g id="NOTCH"'), p.notches.length > 0, `${p.id}.svg`);
+      assert.equal(read(`${name}_print_a4.html`).includes('class="ln NOTCH"'), notches > 0);
+      // The tech pack says where each piece came from.
+      const pack = JSON.parse(read(`${name}_tech-pack.json`)); assert.deepEqual(pack.patterns[0].source.faces, [0]); assert.equal(pack.seams.length, d.seams.length);
+      assert.equal(count(read(`${name}_tech-pack.html`), `flattened from ${name}, face `), pieces); assert.match(read(`${name}_tech-pack.html`), /lies flat/);
+    } finally { fs.rmSync(dir, { recursive: true }); }
+    // Draped with nothing under it the cover falls, but it falls sewn: every seam stays shut and the cloth barely stretches.
+    const drape = drapeDocument(d, { target: 30, steps: 60 }), by = new Map(drape.pieces.map((p) => [p.id, p])), at = (p, q) => [0, 1, 2].map((k) => q.vertices.reduce((n, v, i) => n + q.weights[i] * p.positions[3 * v + k], 0));
+    let gap = 0; for (const s of drape.seams) for (const pair of s.pairs) { const a = at(by.get(s.a.pattern), pair.a), b = at(by.get(s.b.pattern), pair.b); gap = Math.max(gap, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])); }
+    const strain = Math.max(...drape.pieces.flatMap((p) => [...p.strain]));
+    assert.equal(drape.pieces.length, pieces); assert.ok(drape.pieces.every((p) => p.positions.every(Number.isFinite)));
+    assert.ok(gap < 5 && strain < 0.1, `${name}: widest seam gap ${gap.toFixed(2)} mm, most strain ${strain.toFixed(3)}`);
+    if (name === 'case') {   // six flat panels laid on the six faces: sewn shut and unstretched from the first step, the size of the box
+      assert.ok(gap < 0.01 && strain < 1e-3, `gap ${gap}, strain ${strain}`);
+      const extent = [0, 1, 2].map((k) => { const c = drape.pieces.flatMap((p) => [...p.positions].filter((_, i) => i % 3 === k)); return Math.max(...c) - Math.min(...c); });
+      extent.forEach((e, k) => near(e, [100, 60, 40][k], 0.002, 'the cover keeps the shape of the box'));
+    }
+  }
+});
+
+test('a flattened dome takes the dart its advice asks for, through the edit route', async () => {
+  const doc = new SoftgoodsDocument(null), app = express(); app.use(express.json()); app.use('/s', softgoodsRouter(doc));
+  const r = flattenMesh(body('dome', [hemisphere(50)])), rim = r.patterns[0].segments[0].id; doc.replace(mergeFlattened(doc.toJSON(), r));
+  const server = app.listen(0), call = async (p, data) => { const res = await fetch(`http://127.0.0.1:${server.address().port}/s${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); return { status: res.status, ...(await res.json()) }; };
+  try {
+    assert.match(r.report.pieces[0].advice, /darts/);
+    const edited = await call('/edit', { op: 'dart', pattern: r.patterns[0].id, segment: rim, at: 0.5, width: 20, length: 45 });
+    assert.equal(edited.status, 200, edited.error); assert.equal(edited.check.ok, true);
+    const d = doc.toJSON(), [p] = d.patterns;
+    assert.equal(p.segments.length, r.patterns[0].segments.length + 3, 'the rim split in two, and two legs'); assert.deepEqual(d.annotations.map((a) => a.type), ['dart']); assert.equal(d.seams.length, 1, 'the legs are sewn to each other');
+    assert.deepEqual(p.source.faces, [0], 'it is still the piece flattened from that face'); assert.ok(meshPatternFine(p, { target: 20 }).triangles.length > 0);
+    assert.deepEqual(editSoftgoods(mergeFlattened(new SoftgoodsDocument(null).toJSON(), r), { op: 'autoNotch' }).patterns[0].notches, [], 'no seams, no notches');
+    // A dart across an edge that a span seam sews is refused by the edit, as for any span seam.
+    const can = mergeFlattened(new SoftgoodsDocument(null).toJSON(), flattenMesh(body('can', [side(30, 30, 80), disc(30, 80, 1), disc(30, 0, -1)])));
+    assert.throws(() => editSoftgoods(can, { op: 'dart', pattern: 'can_top', segment: can.patterns[1].segments[0].id, at: 0.5, width: 8, length: 12 }), /sews a span of edges/);
+  } finally { server.close(); }
+});
+
 test('the flatten tool sends its options as given, and a flattened piece keeps its source when the design is set again', async () => {
   const tools = {}, sent = [];
   registerSoftgoodsTools({ registerTool: (name, spec, handler) => { tools[name] = { spec, handler }; } }, { call: async (p, opts) => { sent.push([p, opts]); return p.endsWith('/check') ? { ok: true } : { revision: 3, pieces: [] }; }, ok: (v) => v, fail: (e) => { throw e; } });
@@ -305,7 +378,7 @@ test('the flatten tool sends its options as given, and a flattened piece keeps i
   assert.deepEqual(sent[0], ['/softgoods/flatten', { method: 'POST', body: args }]); assert.deepEqual(result.check, { ok: true });
   sent.length = 0; assert.equal((await tools.cadgang_softgoods_flatten.handler(schema.parse({ mode: 'list' }))).check, undefined); assert.equal(sent.length, 1);
   assert.throws(() => schema.parse({ faces: [0.5] })); assert.throws(() => schema.parse({ mode: 'fold' }));
-  assert.match(tools.cadgang_softgoods_get.spec.description, /cadgang_softgoods_flatten/);
+  assert.match(tools.cadgang_softgoods_get.spec.description, /cadgang_softgoods_flatten/); assert.ok(tools.cadgang_softgoods_edit && tools.cadgang_softgoods_measure && tools.cadgang_softgoods_export, 'registered alongside the other softgoods tools');
   const r = flattenMesh(body('case', box(100, 60, 40)), { faces: [1] }), parsed = z.object(tools.cadgang_softgoods_set.spec.inputSchema).parse({ patterns: r.patterns, seams: r.seams });
   assert.deepEqual(parsed.patterns[0].source, r.patterns[0].source);
 });
