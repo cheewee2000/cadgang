@@ -65,6 +65,10 @@ def build_parser():
     p.add_argument('--head', type=parse_ints, default=(256, 128), help='pair MLP widths (default 256,128)')
     p.add_argument('--dropout', type=float, default=0.2)
     p.add_argument('--focal-gamma', type=float, default=0.0, help='0 = cross entropy; >0 focal type loss')
+    p.add_argument('--focus', type=float, default=0.0, help='share of each part\'s points drawn from the contact region (default 0)')
+    p.add_argument('--local-frame', action='store_true', help='three more channels: xyz in the smaller part\'s own frame')
+    p.add_argument('--edge-graph', choices=('dynamic', 'static'), default='dynamic',
+                   help='EdgeConv neighbours from each block\'s features (dynamic) or once from the input xyz (static)')
     p.add_argument('--teachers', nargs='*', help='checkpoints to distil from: their averaged type probabilities join the loss')
     p.add_argument('--distill-alpha', type=float, default=0.5, help='share of the type loss taken from the teachers (default 0.5)')
     p.add_argument('--distill-t', type=float, default=2.0, help='distillation temperature (default 2)')

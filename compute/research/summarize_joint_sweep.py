@@ -23,6 +23,7 @@ def main(root):
                 revolute_recall=m.get('per_class', {}).get('REVOLUTE', {}).get('recall'),
                 cylindrical_recall=m.get('per_class', {}).get('CYLINDRICAL', {}).get('recall'),
                 slider_recall=m.get('per_class', {}).get('SLIDER', {}).get('recall'),
+                planar_recall=m.get('per_class', {}).get('PLANAR', {}).get('recall'),
                 p90_precision=c.get('precision'), p90_coverage=c.get('coverage'),
                 calibration_ece=m.get('calibration_ece'), temperature=m.get('temperature'), score=m.get('score'),
                 beats_rev=ax.get('REVOLUTE', {}).get('beats_solver_all_pairs'),
@@ -40,11 +41,11 @@ def main(root):
     os.replace(tmp, root/'summary.csv')
     L=['# CADgang supervised joint architecture sweep','',
        'Baseline: 64.6% accuracy; 97.72% precision at 9.26% coverage for p≥0.90; 3.24° median axis error.','',
-       '| run | accuracy | macro F1 | axis median | p≥.90 precision | p≥.90 coverage | rev recall | cyl recall |',
-       '|---|---:|---:|---:|---:|---:|---:|---:|']
+       '| run | accuracy | macro F1 | axis median | p≥.90 precision | p≥.90 coverage | rev recall | cyl recall | planar recall |',
+       '|---|---:|---:|---:|---:|---:|---:|---:|---:|']
     f=lambda x:'–' if x is None else f'{x:.4f}'
-    for r in rows: L.append(f"| {r['run']} | {f(r['accuracy'])} | {f(r['macro_f1'])} | {f(r['axis_median'])} | {f(r['p90_precision'])} | {f(r['p90_coverage'])} | {f(r['revolute_recall'])} | {f(r['cylindrical_recall'])} |")
-    if not rows: L.append('| no completed evaluations yet | | | | | | | |')
+    for r in rows: L.append(f"| {r['run']} | {f(r['accuracy'])} | {f(r['macro_f1'])} | {f(r['axis_median'])} | {f(r['p90_precision'])} | {f(r['p90_coverage'])} | {f(r['revolute_recall'])} | {f(r['cylindrical_recall'])} | {f(r['planar_recall'])} |")
+    if not rows: L.append('| no completed evaluations yet | | | | | | | | |')
     atomic(root/'summary.md','\n'.join(L)+'\n'); print(f'wrote {root/"summary.md"}: {len(rows)} runs',flush=True)
 
 if __name__ == '__main__': main(sys.argv[1] if len(sys.argv)>1 else '/mnt/shared/cadgang/joint-architecture-v1')

@@ -87,6 +87,24 @@ class JointData(unittest.TestCase):
         p = np.random.default_rng(0).uniform(0, 20, (300, 3))
         np.testing.assert_array_equal(near(p, B, 1.5, use_kdtree=False), near(p, B, 1.5, use_kdtree=True))
 
+    def test_make_pair_contact_focus_and_local_frame(self):
+        from cadnn.util import rng_for
+        from joints.data import make_pair
+        g = np.linspace(0, 10, 6)
+        cube = np.array([[x, y, z] for x in g for y in g for z in g])
+        # a 10 mm cube against a 40 mm part that has the same vertex grid on the shared face x = 10
+        A, B = cube, np.concatenate([cube, cube * 4]) + [10, 0, 0]
+        ba, bb = [*A.min(0), *A.max(0)], [*B.min(0), *B.max(0)]
+        r = lambda: (rng_for(1, 'a'), rng_for(1, 'b'))
+        plain, _, _ = make_pair(A, B, ba, bb, 64, 1.0, *r())
+        xa, xb, _ = make_pair(A, B, ba, bb, 64, 1.0, *r(), focus=0.5, local=True)
+        self.assertEqual((xa.shape, xb.shape), ((64, 8), (64, 8)))
+        self.assertGreaterEqual(int(xa[:, 3].sum()), 32, 'half the points come from the 36 contact vertices')
+        self.assertLess(int(plain[:, 3].sum()), 32)
+        self.assertLessEqual(float(np.abs(xa[:, 5:]).max()), 0.5 + 1e-6, 'the smaller part fills its own frame')
+        self.assertGreater(float(np.ptp(xa[:, 5:], axis=0).min()), 2 * float(np.ptp(xa[:, :3], axis=0).min()))
+        self.assertLessEqual(float(np.abs(xb[:, 5:]).max()), 2.0)
+
     def test_index_split_by_assembly_and_dataset(self):
         from joints.data import LABEL_ID, LABELS, PairDataset, build_index, load_index, train_rows_for_epoch
         from joints.synth import write_dump
@@ -223,6 +241,15 @@ class JointTraining(unittest.TestCase):
         self.assertNotEqual(code, 4, 'EdgeConv must export')
         rep = json.loads(Path(f'{self.t}/student.onnx.json').read_text())
         self.assertLess(rep['ort_max_abs_diff'], 0.1, 'onnxruntime must follow PyTorch through the neighbour ties')
+        # the static graph ranks neighbours on input xyz only; with the contact focus and the local frame it trains,
+        # evaluates and exports with three more channels
+        T.train(self._args(f'{self.t}/static', *edge, '--edge-graph', 'static', '--focus', '0.5', '--local-frame'))
+        T.evaluate(build_parser().parse_args(['eval', '--index', f'{self.t}/idx', '--ckpt', f'{self.t}/static/best.pt',
+                                              '--report', f'{self.t}/static-rep', '--device', 'cpu', '--workers', '0']))
+        T.export(build_parser().parse_args(['export', '--ckpt', f'{self.t}/static/best.pt', '--out', f'{self.t}/static.onnx']))
+        rep = json.loads(Path(f'{self.t}/static.onnx.json').read_text())
+        self.assertEqual(rep['contract']['local_frame'], True)
+        self.assertLess(rep['ort_max_abs_diff'], 1e-3, 'the static graph must export exactly')
 
     def test_xyz_pretrain_transfer_preserves_joint_channels(self):
         from cadnn.pointnet import encoder_payload
