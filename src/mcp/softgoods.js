@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FABRICS } from '../core/softgoods-fabrics.js';
 
 const ref = z.object({ pattern: z.string(), segment: z.string() });
 const point = z.object({ id: z.string(), x: z.number(), y: z.number() });
@@ -8,7 +9,7 @@ const segment = z.discriminatedUnion('type', [
   z.object({ id: z.string(), type: z.literal('bezier'), a: z.string(), b: z.string(), c1: z.string(), c2: z.string() }),
 ]);
 const pattern = z.object({
-  id: z.string(), name: z.string().optional(), material: z.string().optional(), cut: z.number().int().positive().optional(),
+  id: z.string(), name: z.string().optional(), material: z.string().optional(), cut: z.number().int().positive().optional(), mirror: z.boolean().optional(),
   points: z.array(point), segments: z.array(segment), contours: z.array(z.array(z.string()).min(3)),
   allowances: z.record(z.number().nonnegative()).optional(),
   notches: z.array(z.object({ segment: z.string(), at: z.number().min(0).max(1), depth: z.number().positive().optional(), kind: z.string().optional() })).optional(),
@@ -21,6 +22,7 @@ const material = z.object({
   tensile: z.object({ warp: z.number().positive().optional(), weft: z.number().positive().optional() }).optional(), shearRigidity: z.number().positive().optional(),
   damping: z.number().min(0).max(1).optional(), friction: z.number().min(0).max(1).optional(), notes: z.string().optional(),
   weightGsm: z.number().positive().optional(), thicknessMm: z.number().positive().optional(),
+  preset: z.string().optional(), source: z.string().optional(), rollWidth: z.number().positive().optional(), pricePerMeter: z.number().positive().optional(), pricePerSqm: z.number().positive().optional(),
 });
 const pointRef = z.object({ pattern: z.string(), point: z.string() });
 const constraint = z.object({ id: z.string(), name: z.string().optional(), type: z.enum(['distance', 'length']), target: z.number().nonnegative(), tolerance: z.number().nonnegative().optional(), a: pointRef.optional(), b: pointRef.optional(), pattern: z.string().optional(), segments: z.array(z.string()).optional(), contour: z.number().int().nonnegative().optional() });
@@ -36,7 +38,9 @@ Seams join {pattern,segment} to {pattern,segment}, never array positions. flip:t
 
 Checks. constraints are named measurements the design must hold: {type:'distance', a:{pattern,point}, b:{pattern,point}, target, tolerance} or {type:'length', pattern, segments:[ids] | contour:index, target, tolerance}. annotations mark a dart, pleat or fold_line as point-pair lines on a pattern. grades are the other sizes: {size:'L', rules:[{pattern, point, dx, dy}]} moves named points of the base size. Every set and get returns check: each measurement against its target and both sides of every seam, at the base size and every graded size. Fix what it reports before exporting.
 
-Materials are what the cloth preview uses: arealDensity g/m², thickness mm, tensile {warp, weft} N per mm of width at 100% strain, shearRigidity N/mm, rigidity N·mm (bending: one number or {warp, weft}; a cantilever of it droops what a beam does, and a fabric without one only hangs. Roughly 0.01-0.1 light woven, 0.1-1 canvas and coated cordura, 1-20 webbing and leather, 100+ foam panels), friction 0..1 against the body, damping 0..1.
+Materials are what the cloth preview uses: arealDensity g/m², thickness mm, tensile {warp, weft} N per mm of width at 100% strain, shearRigidity N/mm, rigidity N·mm (bending: one number or {warp, weft}; a cantilever of it droops what a beam does, and a fabric without one only hangs. Roughly 0.01-0.1 light woven, 0.1-1 canvas and coated cordura, 1-20 webbing and leather, 100+ foam panels), friction 0..1 against the body, damping 0..1. A material may start from the fabric library: {preset: '<id>', ...your own fields over it}. Presets: ${Object.keys(FABRICS).join(', ')}. Their values are typical, NOT measured (each says source: 'typical, not measured') and a number nobody could vouch for is simply absent: use them to start, and put the supplier's or your measured figures over them before trusting a weight or a drape.
+
+Production. A material may carry rollWidth (usable mm, 1500 assumed without one) and pricePerMeter (per running metre of roll) or pricePerSqm. A pattern is cut its cut quantity of times; mirror:true flips every second copy (cut 2, mirror: a left and a right). The export can lay markers (the cut pieces nested on the roll, grain along it, with yield), write a bill of materials (cloth by net and consumed area, weight, cost, seam length by kind, a thread estimate), a 1:1 tiled print and SVGs.
 
 3D. z is up, the body stands on z = 0 facing -y. Give avatar {height, chest, ...} and each pattern placement {region: front|back|left|right, anchor: 'shoulder' to hang its top edge at the shoulder line (a garment hung from shoulder seams), layer, offset:[x,y,z]} and the pieces are stood around the body, centred on their region; arrangement rows are then not needed. Without placement, arrangement gives {pattern, position:[x,y,z], rotation:[rx,ry,rz] degrees about x then y then z, layer}; a piece with neither is laid flat beside the others. The preview is an XPBD cloth: its strain and pressure maps point at tight places, they are not a fit guarantee.`;
 
@@ -59,7 +63,17 @@ export function registerSoftgoodsTools(server, { call, ok, fail }) {
   }, async ({ avatar: body, ...design }) => { try { const d = await call('/softgoods/document', { method: 'PUT', body: { version: 1, ...design, simulation: { status: 'not_run', ...(body ? { avatar: body } : {}) } } }); return ok({ revision: d.revision, patterns: d.patterns.length, seams: d.seams.length, avatar: d.simulation?.avatar || null, arrangement: d.arrangement, check: await call('/softgoods/check') }); } catch (e) { return fail(e); } });
 
   server.registerTool('cadgang_softgoods_export', {
-    title: 'Export softgoods patterns and tech pack', description: 'Write one DXF per authoritative pattern (STITCH geometry, the closed CUT contour at each edge\'s seam allowance, notches, grain, darts, pleats and folds), one more per pattern for every graded size, and JSON and printable HTML tech packs. Returns the files and what the check still reports.',
-    inputSchema: { name: z.string().regex(/^[\w.-]+$/) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, async ({ name }) => { try { return ok(await call('/softgoods/export', { method: 'POST', body: { name } })); } catch (e) { return fail(e); } });
+    title: 'Export softgoods patterns and tech pack', description: 'Write one DXF per authoritative pattern (STITCH geometry, the closed CUT contour at each edge\'s seam allowance, notches, grain, darts, pleats and folds), one more per pattern for every graded size, and JSON and printable HTML tech packs (the tech pack includes the bill of materials). Returns the files and what the check still reports.\n\nformats adds production outputs: "marker" nests every cut piece of each material on its roll (a DXF and an SVG per material; returns length, yield and length per unit; fails if a piece is wider than the roll), "bom" writes the bill of materials as JSON and HTML, "print" writes one HTML of 1:1 tiled pages (print at 100%; page 1 has 100 mm and 4 inch check squares), "svg" writes one 1:1 SVG per pattern and graded size.',
+    inputSchema: {
+      name: z.string().regex(/^[\w.-]+$/),
+      formats: z.array(z.enum(['marker', 'bom', 'print', 'svg'])).optional(),
+      width: z.union([z.number().positive(), z.record(z.number().positive())]).optional().describe('Usable roll width mm, for every material or {material: mm}. Default: the material\'s rollWidth, else 1500.'),
+      gap: z.number().nonnegative().optional().describe('Clear distance between pieces on the marker, mm. Default 3.'),
+      turns: z.union([z.literal(180), z.literal(0), z.literal(90), z.literal('free')]).optional().describe('180 (default): grain along the roll, either way up. 0: napped cloth, one way only. 90: quarter turns too. free: any angle, for cloth with no direction.'),
+      sizes: z.union([z.array(z.string()), z.record(z.number().int().positive())]).optional().describe('Sizes on the marker, bill and print: ["base", "L"] or units of each {base: 1, L: 2}. "base" is the pattern as drawn. Default: base only.'),
+      threadMultiplier: z.union([z.number().positive(), z.record(z.number().positive())]).optional().describe('mm of thread per mm of seam: one number or by seam kind {plain: 2.5, overlock: 14, default: 2.5}. Default 2.5 (lockstitch rule of thumb).'),
+      paper: z.enum(['a4', 'letter']).optional(), orientation: z.enum(['portrait', 'landscape']).optional(),
+      margin: z.number().nonnegative().optional().describe('Unprinted border of each page, mm. Default 10.'), overlap: z.number().nonnegative().optional().describe('Strip shared by neighbouring pages, mm. Default 10.'),
+    }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async (body) => { try { return ok(await call('/softgoods/export', { method: 'POST', body })); } catch (e) { return fail(e); } });
 }

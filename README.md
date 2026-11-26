@@ -119,6 +119,15 @@ The repo ships `.mcp.json` (and `.codex/config.toml`), so opening it in Claude C
 
 Softgoods are prompt-authored through `cadgang_softgoods_get` / `cadgang_softgoods_set`, reviewed in 3D at `/softgoods`, then exported with `cadgang_softgoods_export` as one DXF per authoritative pattern plus JSON and printable HTML tech packs. The persistent `<project>/cadgang/softgoods.json` owns stable point, curve, segment and seam IDs, curved contours, per-edge allowances, notches, grain and arrangement. There is deliberately no manual 2D drafting UI. The 3D review includes an **experimental XPBD preview** generated from boundary-conforming triangle meshes, with grain-aware warp/weft/bias compliance, seam constraints and fixed attachments in a browser worker. It does not yet have body, panel or self-collision, so it is not a fit guarantee.
 
+**Production outputs.** `cadgang_softgoods_export` (and `POST /api/softgoods/export`) take `formats`, any of:
+
+- `marker`: every cut piece of each material nested on its roll (usable `width`, `gap` between pieces, grain along the roll with 180° turns; `turns: 0 | 90 | 'free'` for napped or non-directional cloth; `sizes: {base: 1, L: 2}` for several graded sizes on one marker; `mirror: true` on a pattern flips every second copy). Written as DXF and SVG per material, with marker length, yield and length per unit. A piece wider than the roll stops the export. The nester is a scanline bottom-left heuristic on the true outlines (about 77-85% on a T-shirt), not a commercial nester.
+- `bom`: the bill of materials as JSON and HTML: per material the net and consumed area, marker length, weight (from `arealDensity`) and cost (from `pricePerMeter` or `pricePerSqm`); seam length by kind and a thread estimate (`threadMultiplier`, default 2.5 × seam length); an empty `trims` section. The tech pack always carries it.
+- `print`: one self-contained HTML of 1:1 tiled pages (`paper: 'a4' | 'letter'`, `margin`, `overlap`, `orientation`). Print at 100%; page 1 has 100 mm and 4 inch check squares, every tile has its row and column, and registration diamonds on the joins.
+- `svg`: one 1:1 SVG per pattern and graded size, a group per DXF layer.
+
+**Fabric library.** A material may start from a preset, `{ "preset": "nylon-500d", "rollWidth": 1500 }`, and put its own fields over it (`src/core/softgoods-fabrics.js`: ripstop, 500D and 1000D nylon, laminate, waxed canvas, denim, jersey, neoprene, foam, spacer mesh, webbing, elastic). These values are typical, **not measured**: each says `source: 'typical, not measured'`, and a figure nobody could vouch for is left out. Put the supplier's numbers over them before trusting a weight or a drape.
+
 ## REST
 
 | Endpoint | Description |
