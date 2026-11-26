@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import express from 'express';
 import { SoftgoodsDocument } from '../src/core/softgoods-document.js';
 import { softgoodsRouter } from '../src/server/softgoods.js';
-import { strainRGB, pressureRGB, css, materialHue, materialCss, seamCss, seamSide, sideLabel, cutLine, isCadBody, floorOf, nearestVertex, trimShapes, placeOnRow } from '../web/softgoods-view.js';
+import { strainRGB, pressureRGB, css, materialHue, materialCss, seamCss, seamSide, sideLabel, cutLine, isCadBody, floorOf, nearestVertex, trimShapes, placeOnRow, insetMesh } from '../web/softgoods-view.js';
 import { simulate } from '../web/softgoods-worker.js';
 
 const read = (name) => fs.readFileSync(new URL(`../web/${name}`, import.meta.url), 'utf8');
@@ -94,6 +94,8 @@ test('bodies: a CAD mesh is told from the avatar\'s torso, the floor is where th
   const view = read('softgoods-view.js'), page = read('softgoods.js');
   assert.match(view, /s\.type === 'mesh' && s\.positions\?\.length && s\.indices\?\.length/, 'a mesh shape is built from the input, once');
   assert.match(view, /isCadBody\(s\) \? cadMat : bodyMat/, 'a CAD body in its own grey, the avatar\'s torso as the body');
+  assert.match(view, /if \(isCadBody\(s\)\) P\.set\(insetMesh\(s\.positions, s\.indices, SKIN\)\)/, 'a CAD body is set in along its distance field, which no winding can turn outward');
+  assert.match(view, /const cadMat = [^\n]*polygonOffset: true, polygonOffsetFactor: 2/, 'and set back in depth instead');
   assert.match(view, /else if \(s\.a && s\.b && s\.r > 0\)/, 'every capsule, the neck and the limbs among them, is drawn');
   assert.match(view, /function setInput\(next\) \{[^\n]*setBody\(next\?\.collisionBody\?\.shapes\)/, 'bodies come from the input, never from a frame');
   assert.match(view, /ground\.visible = floor != null/, 'floor: false draws no floor'); assert.match(view, /floor != null && box\.min\.z - floor </);
@@ -139,4 +141,16 @@ test('the page places a piece from its arrangement row where the solver starts i
   for (let i = 0; i < uv.length / 2; i++) assert.ok(placeOnRow(uv[2 * i], uv[2 * i + 1], row).every((v, k) => Math.abs(v - start[3 * i + k]) < 1e-3), `vertex ${i} starts where the page puts it`);   // float32 positions
   assert.ok(Math.abs(placeOnRow(0, 0, row)[2] - placeOnRow(0, 0, { ...row, wrap: undefined })[2]) > 1 || Math.abs(placeOnRow(0, 0, row)[1] - placeOnRow(0, 0, { ...row, wrap: undefined })[1]) > 1, 'and the wrap moves it');
   assert.match(read('softgoods.js'), /fill\(sample\(p,s\)\)\.map\(q=>placeOnRow\(q\.x,q\.y,a\)\)/, 'the painter\'s outlines use it');
+});
+
+test('a CAD body is drawn set in, whatever its winding: the can with its top disc wound backwards still shrinks on every side', async () => {
+  const { body: solid, side, disc } = await import('./fixtures/flatten-meshes.mjs');
+  const can = solid('can', [side(30, 30, 80), disc(30, 80, 1), disc(30, 0, -1)]), idx = [...can.indices];
+  const flipped = idx.map((v, i) => (i % 3 === 1 ? idx[i + 1] : i % 3 === 2 ? idx[i - 1] : v));   // every triangle wound the other way
+  for (const indices of [idx, flipped]) {
+    const P = insetMesh([...can.positions], indices, 3); let r = 0, lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < P.length; i += 3) { r = Math.max(r, Math.hypot(P[i], P[i + 1])); lo = Math.min(lo, P[i + 2]); hi = Math.max(hi, P[i + 2]); }
+    assert.ok(r < 29.8 && hi < 79.8 && lo > 0.2, `inside the can: radius ${r.toFixed(2)}, z ${lo.toFixed(2)} to ${hi.toFixed(2)}`);
+  }
+  assert.match(read('softgoods.js'), /Math\.max\(10,Math\.min\(30,\.\.\.doc\.patterns\.map/, 'and a small design is previewed on a finer mesh, a garment still at 30 mm');
 });

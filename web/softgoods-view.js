@@ -6,6 +6,7 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { attachOrbitInput } from './orbitinput.js';
+import { meshField } from './softgoods-sdf.js';
 
 // ---- colours, shared with the page's schedules, its legend and its painter's view (all sRGB, 0..1)
 
@@ -52,6 +53,13 @@ export function placeOnRow(u, v, a = {}) {
 
 /** A mesh body that carries an id is a CAD part of the design (softgoods-bodies.js); the avatar's torso has none. */
 export const isCadBody = (s) => s?.type === 'mesh' && s.id != null;
+/** A CAD mesh's vertices moved `d` mm in along its distance field (the solver's, signed by a flood): right whatever the winding or a
+ *  doubled rim. A mesh that encloses nothing comes back as it was. */
+export function insetMesh(positions, indices, d) {
+  const out = Float32Array.from(positions), field = meshField(positions, indices, { reach: d * 2, budget: 200000 }), n = [0, 0, 0]; if (!field.inside) return out;
+  for (let i = 0; i < out.length; i += 3) { field.at(out[i], out[i + 1], out[i + 2], n); for (let k = 0; k < 3; k++) out[i + k] -= n[k] * d; }
+  return out;
+}
 /** Where the floor is, as the solver reads collisionBody.floor: a height in mm, 0 when not given, null for floor: false. */
 export const floorOf = (b) => (b?.floor === false ? null : Number(b?.floor ?? 0) || 0);
 /** The vertex of a piece's rest mesh (uv: flat x, y pattern mm) nearest a spot on the pattern, of all of them or of `only` (vertex indices). */
@@ -100,7 +108,8 @@ export function createClothView({ host, scheme = () => 'trackpad', onSelect = ()
   const clothMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.85, metalness: 0, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
   const wireMat = new THREE.MeshBasicMaterial({ color: 0x000000, wireframe: true, transparent: true, opacity: 0.3 });
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0xd2d0cb, roughness: 1, metalness: 0 });
-  const cadMat = new THREE.MeshStandardMaterial({ color: 0x8e8e8e, roughness: 0.55, metalness: 0.1, side: THREE.DoubleSide });   // a CAD part: a darker, harder grey than the avatar
+  // A CAD part: a darker, harder grey than the avatar, set back in depth too, so the cloth lying on a face never flickers through it.
+  const cadMat = new THREE.MeshStandardMaterial({ color: 0x8e8e8e, roughness: 0.55, metalness: 0.1, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });
   const discMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0.2, side: THREE.DoubleSide });
   const cloth = new THREE.Group(), body = new THREE.Group(), ball = new THREE.SphereGeometry(1, 48, 32), UP = new THREE.Vector3(0, 1, 0);
   const ground = new THREE.Mesh(new THREE.CircleGeometry(1, 96), new THREE.ShadowMaterial({ opacity: 0.18 })); ground.receiveShadow = true;
@@ -156,9 +165,15 @@ export function createClothView({ host, scheme = () => 'trackpad', onSelect = ()
       let m = null;
       if (s.type === 'ellipsoid' && s.c && s.r) { m = new THREE.Mesh(ball, bodyMat); m.position.fromArray(s.c); m.scale.fromArray(s.r.map((v) => Math.max(1, v - SKIN))); }
       else if (s.type === 'mesh' && s.positions?.length && s.indices?.length) {
-        // Built once from the input: frames name a mesh shape and carry nothing else. Drawn SKIN inside, as the other shapes are.
-        const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(s.positions, 3)); g.setIndex(s.indices); g.computeVertexNormals();
-        const P = g.attributes.position.array, N = g.attributes.normal.array; for (let i = 0; i < P.length; i++) P[i] -= N[i] * SKIN; g.computeVertexNormals();
+        // Built once from the input: frames name a mesh shape and carry nothing else. Drawn SKIN inside, as the other shapes are: the solver
+        // keeps the cloth's vertices out, and a flat cloth triangle laid over a sharp rim still cuts its corner. A CAD part's faces arrive
+        // separate, with rims doubled and winding not to be trusted, so its way in is read off the distance field the solver uses
+        // (softgoods-sdf.js signs it by a flood, not by winding), never off its normals. A mesh that encloses nothing is drawn as it is.
+        const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(s.positions, 3)); g.setIndex(s.indices);
+        const P = g.attributes.position.array;
+        if (isCadBody(s)) P.set(insetMesh(s.positions, s.indices, SKIN));
+        else { g.computeVertexNormals(); const N = g.attributes.normal.array; for (let i = 0; i < P.length; i++) P[i] -= N[i] * SKIN; }
+        g.computeVertexNormals();
         m = new THREE.Mesh(g, isCadBody(s) ? cadMat : bodyMat);
       }
       else if (s.a && s.b && s.r > 0) { const a = new THREE.Vector3().fromArray(s.a), b = new THREE.Vector3().fromArray(s.b), l = a.distanceTo(b); m = new THREE.Mesh(new THREE.CapsuleGeometry(Math.max(1, s.r - SKIN), l, 12, 32), bodyMat); m.position.copy(a).add(b).multiplyScalar(0.5); if (l > 1e-6) m.quaternion.setFromUnitVectors(UP, b.sub(a).normalize()); }
