@@ -24,9 +24,11 @@
  * (`garment.weight`) is a rigid block the cloth carries: it sinks until the cloth under
  * it is taut.
  *
- * ponytail: stretch and shear are still solver factors (0..1), not measured moduli —
- * move them to XPBD compliance from tensile tests when a strain has to match a sample.
- * No self collision, no thickness in the result (faces), no darts or pleats.
+ * Measured fabrics may provide tensile {warp,weft} and shearRigidity in N/mm, plus
+ * rigidity (isotropic or {warp,weft}) in N·mm. Those constraints use XPBD compliance,
+ * so their response does not depend on the number of projection iterations. Legacy
+ * stretch/shear/bend factors remain supported for visual studies.
+ * No self collision yet; thickness is used for body contact but the result is a face.
  */
 
 import {
@@ -46,13 +48,36 @@ const FABRICS = {
   'eva-10mm': { weight: 1200, thickness: 10, stretch: 0.9, shear: 0.8, bend: 0.9, friction: 0.7, maxStretch: 10 },
 };
 
-/** A fabric by preset name, or a spec object ({weight, thickness, stretch, shear, bend, friction, maxStretch}) over the cordura defaults. */
+/**
+ * A fabric by preset name, or a measured/custom specification over the Cordura defaults.
+ * `weight` (or `arealDensity`) is g/m²; `tensile.{warp,weft}` and `shearRigidity`
+ * are N/mm; `rigidity` is N·mm, either one number or {warp,weft}; damping/friction
+ * are fractions. The measured fields opt their constraint family into XPBD.
+ */
 export function fabric(spec = 'cordura-500d') {
   if (typeof spec === 'string') {
     if (!FABRICS[spec]) throw new GraphError(`soft.fabric: no fabric '${spec}'. Known: ${Object.keys(FABRICS).join(', ')}`);
     return Object.freeze({ name: spec, ...FABRICS[spec] });
   }
-  return Object.freeze({ name: spec.name || 'custom', ...FABRICS['cordura-500d'], ...spec });
+  const measured = { ...spec };
+  if (measured.arealDensity != null) measured.weight = measured.arealDensity;
+  const out = { name: measured.name || 'custom', ...FABRICS['cordura-500d'], ...measured };
+  const positive = (v, label) => { if (!(Number.isFinite(v) && v > 0)) throw new GraphError(`soft.fabric: ${label} must be greater than zero`); };
+  positive(out.weight, 'weight/arealDensity'); positive(out.thickness, 'thickness');
+  if (out.tensile != null) {
+    if (typeof out.tensile !== 'object') throw new GraphError('soft.fabric: tensile must be {warp, weft} in N/mm');
+    positive(out.tensile.warp, 'tensile.warp'); positive(out.tensile.weft, 'tensile.weft');
+    out.tensile = Object.freeze({ warp: Number(out.tensile.warp), weft: Number(out.tensile.weft) });
+  }
+  if (out.shearRigidity != null) positive(out.shearRigidity, 'shearRigidity');
+  if (out.rigidity != null) {
+    if (typeof out.rigidity === 'object') {
+      positive(out.rigidity.warp, 'rigidity.warp'); positive(out.rigidity.weft, 'rigidity.weft');
+      out.rigidity = Object.freeze({ warp: Number(out.rigidity.warp), weft: Number(out.rigidity.weft) });
+    } else positive(out.rigidity, 'rigidity');
+  }
+  if (out.damping != null && (!(Number.isFinite(out.damping)) || out.damping < 0 || out.damping > 1)) throw new GraphError('soft.fabric: damping must be from 0 to 1');
+  return Object.freeze(out);
 }
 
 // the most a pin or tether moves a node per solver iteration, mm: the collision step (once per substep) must get to see every position the cloth passes through
@@ -247,7 +272,7 @@ class Garment {
     for (const p of this.pieces) { const gr = layoutGrid(p, count); grids.push(gr); count += gr.nu * gr.nv; }
     const x = new Float64Array(count * 3), x0 = new Float64Array(count * 3), vel = new Float64Array(count * 3), invm = new Float64Array(count);
     const fabricOf = new Array(count), thick = new Float64Array(count), cloth = new Uint8Array(count);   // cloth: inside the outline, not the rim
-    const cons = [];  // [a, b, rest, k, kind]
+    const cons = [];  // [a, b, rest, k, kind, alpha, lambda]; alpha is XPBD compliance / dt²
     const bends = [];  // [a, middle, b, compliance / dt²]: a fabric with a measured rigidity
     const bf = body ? bodyField(body) : null, field = bf?.distance ?? null;
 
@@ -262,13 +287,26 @@ class Garment {
           invm[n] = active[i * nv + j] ? 1 / (mass * gr.cover[i * nv + j]) : 0;   // a rim node weighs what little cloth it carries, and so follows its neighbours
           cloth[n] = gr.cover[i * nv + j] === 1 ? 1 : 0;
           fabricOf[n] = f; thick[n] = f.thickness / 2 + clearance;
-          const link = (i2, j2, rest, k, kind) => {
-            if (i2 >= nu || j2 >= nv || !active[i * nv + j] || !active[i2 * nv + j2]) return;
-            cons.push([n, at(i2, j2), rest, stiff(k), kind]);
+          const grain = piece.grain * Math.PI / 180, warp = [Math.sin(grain), Math.cos(grain)];
+          const measuredAlpha = (du, dv, width, rest, family) => {
+            let axial;
+            if (family === 's' && f.tensile) {
+              const L = Math.hypot(du, dv) || 1, cw = (du * warp[0] + dv * warp[1]) / L;
+              // Orthotropic compliance projected onto the link direction. A is extensional
+              // stiffness per unit width; a grid strip has k=A*width/rest N/mm.
+              const A = 1 / ((cw * cw) / f.tensile.warp + (1 - cw * cw) / f.tensile.weft);
+              axial = A * width / rest;
+            } else if (family === 'h' && f.shearRigidity) axial = f.shearRigidity * width / rest;
+            return axial ? 1 / (axial * 1e6 * dt * dt) : null; // N -> g·mm/s²
           };
-          link(i + 1, j, hu, f.stretch, 's'); link(i, j + 1, hv, f.stretch, 's');
-          link(i + 1, j + 1, Math.hypot(hu, hv), f.shear, 'h'); if (i > 0) link(i - 1, j + 1, Math.hypot(hu, hv), f.shear, 'h');
-          if (!(f.rigidity > 0)) { link(i + 2, j, 2 * hu, f.bend, 'b'); link(i, j + 2, 2 * hv, f.bend, 'b'); continue; }
+          const link = (i2, j2, rest, k, kind, du, dv, width) => {
+            if (i2 < 0 || j2 < 0 || i2 >= nu || j2 >= nv || !active[i * nv + j] || !active[i2 * nv + j2]) return;
+            cons.push([n, at(i2, j2), rest, stiff(k), kind, measuredAlpha(du, dv, width, rest, kind), 0]);
+          };
+          link(i + 1, j, hu, f.stretch, 's', hu, 0, hv); link(i, j + 1, hv, f.stretch, 's', 0, hv, hu);
+          const diag = Math.hypot(hu, hv), diagWidth = (hu * hv) / diag;
+          link(i + 1, j + 1, diag, f.shear, 'h', hu, hv, diagWidth); if (i > 0) link(i - 1, j + 1, diag, f.shear, 'h', -hu, hv, diagWidth);
+          if (f.rigidity == null) { link(i + 2, j, 2 * hu, f.bend, 'b', 2 * hu, 0, hv); link(i, j + 2, 2 * hv, f.bend, 'b', 0, 2 * hv, hu); continue; }
           // ponytail: a stiff panel on a fine grid still reads softer than it is (2 N·mm on a 6 mm grid droops 3x a beam's at 4
           // iterations; cloth, under about 1 N·mm on a 10 to 15 mm grid, is within a few percent): raise iterations for foam and board,
           // or solve the bending implicitly when panels like that matter.
@@ -276,7 +314,9 @@ class Garment {
           // as a beam one cell wide does, k = rigidity × width / spacing³ (the solver's force unit is 1e-6 N: g, mm, s)
           const beam = (i0, j0, i2, j2, h, wd) => {
             if (i0 < 0 || j0 < 0 || i2 >= nu || j2 >= nv || !active[i * nv + j] || !active[i0 * nv + j0] || !active[i2 * nv + j2]) return;
-            bends.push([at(i0, j0), n, at(i2, j2), (h * h * h) / (f.rigidity * 1e6 * wd) / (dt * dt)]);
+            const alongWarp = i0 === i && i2 === i; // v-grid direction before grain rotation
+            const rigidity = typeof f.rigidity === 'number' ? f.rigidity : (alongWarp ? f.rigidity.warp : f.rigidity.weft);
+            bends.push([at(i0, j0), n, at(i2, j2), (h * h * h) / (rigidity * 1e6 * wd) / (dt * dt)]);
           };
           beam(i - 1, j, i + 1, j, hu, hv); beam(i, j - 1, i, j + 1, hv, hu);
         }
@@ -358,14 +398,18 @@ class Garment {
     const lam = new Float64Array(bends.length);
     // one pass of the grid's springs (all of them, or the stretch ones alone), and one of what holds the cloth to the world and to itself
     const links = (all) => {
-      for (const [a, b, rest, k, kind] of cons) {
+      for (const c of cons) {
+        const [a, b, rest, k, kind, alpha] = c;
         if (!all && kind !== 's') continue;
         const dx = x[b * 3] - x[a * 3], dy = x[b * 3 + 1] - x[a * 3 + 1], dz = x[b * 3 + 2] - x[a * 3 + 2];
         const d = Math.hypot(dx, dy, dz); if (d < 1e-12) continue;
         const w = invm[a] + invm[b]; if (!w) continue;
-        const s = ((d - rest) / d) * k / w;
-        x[a * 3] += dx * s * invm[a]; x[a * 3 + 1] += dy * s * invm[a]; x[a * 3 + 2] += dz * s * invm[a];
-        x[b * 3] -= dx * s * invm[b]; x[b * 3 + 1] -= dy * s * invm[b]; x[b * 3 + 2] -= dz * s * invm[b];
+        let correction;
+        if (alpha == null) correction = (d - rest) * k / w;
+        else { const dl = (-(d - rest) - alpha * c[6]) / (w + alpha); c[6] += dl; correction = -dl; }
+        const q = correction / d;
+        x[a * 3] += dx * q * invm[a]; x[a * 3 + 1] += dy * q * invm[a]; x[a * 3 + 2] += dz * q * invm[a];
+        x[b * 3] -= dx * q * invm[b]; x[b * 3 + 1] -= dy * q * invm[b]; x[b * 3 + 2] -= dz * q * invm[b];
       }
     };
     const anchors = () => {
@@ -389,7 +433,8 @@ class Garment {
       prev.set(x);
       for (let n = 0; n < count; n++) {
         if (!invm[n]) continue;
-        vel[n * 3] = (vel[n * 3] + G[0] * dt) * 0.98; vel[n * 3 + 1] = (vel[n * 3 + 1] + G[1] * dt) * 0.98; vel[n * 3 + 2] = (vel[n * 3 + 2] + G[2] * dt) * 0.98;
+        const damp = 1 - (fabricOf[n].damping ?? 0.02);
+        vel[n * 3] = (vel[n * 3] + G[0] * dt) * damp; vel[n * 3 + 1] = (vel[n * 3 + 1] + G[1] * dt) * damp; vel[n * 3 + 2] = (vel[n * 3 + 2] + G[2] * dt) * damp;
         x[n * 3] += vel[n * 3] * dt; x[n * 3 + 1] += vel[n * 3 + 1] * dt; x[n * 3 + 2] += vel[n * 3 + 2] * dt;
       }
       for (const b of blocks) {
@@ -397,7 +442,7 @@ class Garment {
         b.v = mul(add(b.v, mul(G, dt)), 0.98); b.c = add(b.c, mul(b.v, dt)); b.om = mul(b.om, 0.98); turn(b, mul(b.om, dt));
         pushOut(b);
       }
-      lam.fill(0);
+      lam.fill(0); for (const c of cons) c[6] = 0;
       for (let it = 0; it < iterations; it++) {
         // bending is cheap and slow to carry along a stiff panel: four sweeps of it per iteration, there and back
         for (let sweep = 0, nb = bends.length; sweep < 4 * nb; sweep++) {
