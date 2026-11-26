@@ -72,3 +72,10 @@ test('softgoods review exposes strain and honest pressure diagnostics', () => {
   assert.match(worker, /diagnostics: \{ strain:/); assert.match(worker, /No collision body is present/);
   assert.match(page, /id="map"/); assert.match(ui, /strainColor/); assert.match(ui, /PRESSURE UNAVAILABLE/);
 });
+
+test('softgoods review links authoritative 2D selection to 3D highlighting', () => {
+  const page = fs.readFileSync(new URL('../web/softgoods.html', import.meta.url), 'utf8');
+  const ui = fs.readFileSync(new URL('../web/softgoods.js', import.meta.url), 'utf8');
+  assert.match(page, /id="patternCanvas"/); assert.match(ui, /selectedPattern/);
+  assert.match(ui, /authoritative STITCH/); assert.match(ui, /pc\.id===selectedPattern/);
+});
