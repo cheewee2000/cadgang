@@ -79,3 +79,9 @@ test('softgoods review links authoritative 2D selection to 3D highlighting', () 
   assert.match(page, /id="patternCanvas"/); assert.match(ui, /selectedPattern/);
   assert.match(ui, /authoritative STITCH/); assert.match(ui, /pc\.id===selectedPattern/);
 });
+
+test('browser XPBD preview separates cloth layers by material thickness', () => {
+  const worker = fs.readFileSync(new URL('../web/softgoods-worker.js', import.meta.url), 'utf8');
+  assert.match(worker, /function collideSelf/); assert.match(worker, /mat\.thickness/);
+  assert.match(worker, /excluded\.add/); assert.match(worker, /avatar\+self/);
+});
