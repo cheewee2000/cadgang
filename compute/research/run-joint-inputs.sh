@@ -3,6 +3,8 @@
 # the model is shown: points drawn from the contact region, a second frame the size of the smaller part, more points,
 # and neighbours ranked on input xyz (the graph that exports exactly). Compare with the nine plain seeds in
 # joint-ensemble-v1. Every stage resumes.
+# STUDY=seeds (Stage 11) trains four more seeds of each exportable member of Stage 10's mixed ensemble, vertex `static` and
+# surface `surf-normals-static`, then averages all ten (the two Stage 8/9 checkpoints included) on one GPU.
 # STUDY=surface is the second half: the same model on points spread over the parts' faces, with exact contact and
 # normals, from the cache `main.py surface` builds (SURFACE).
 set -euo pipefail
@@ -39,7 +41,11 @@ lane() {
 
 # tag | stages | options. The 512-point lanes cost about four times as much per epoch, so they stop at half the epochs.
 lanes() {
-  if [ "$STUDY" = surface ]; then
+  if [ "$STUDY" = seeds ]; then
+    S="--surface $SURFACE"
+    for n in 2 3 4 5; do echo "static-s$n|$STAGES|--edge-graph static --seed $n"; done
+    for n in 2 3 4 5; do echo "surf-normals-static-s$n|$STAGES|$S --normals --edge-graph static --seed $n"; done
+  elif [ "$STUDY" = surface ]; then
     [ -f "$SURFACE/surface.json" ] || { echo "no surface cache at $SURFACE" >&2; exit 1; }
     S="--surface $SURFACE"
     cat <<L
@@ -76,4 +82,13 @@ $list
 LANES
 bad=0; for p in $pids; do wait "$p" || bad=1; done
 python compute/research/summarize_joint_sweep.py "$ROOT"
+if [ "$STUDY" = seeds ] && [ "$bad" = 0 ]; then
+  V="$WORK/joint-inputs-v1/static/run/best.pt" U="$WORK/joint-surface-v1/surf-normals-static/run/best.pt"
+  E="$J ensemble --index $INDEX --dump $DUMP --device $DEVICE --batch-size 256 --workers $WORKERS"
+  vs="$V $(for n in 2 3 4 5; do printf '%s ' "$ROOT/static-s$n/run/best.pt"; done)" ss="$U $(for n in 2 3 4 5; do printf '%s ' "$ROOT/surf-normals-static-s$n/run/best.pt"; done)"
+  $E --ckpts $vs $ss --report "$ROOT/reports/ensemble-ten" || bad=1
+  $E --ckpts $vs --report "$ROOT/reports/ensemble-vertex-five" || bad=1
+  $E --ckpts $ss --report "$ROOT/reports/ensemble-surface-five" || bad=1
+  $E --ckpts "$V" "$ROOT/static-s2/run/best.pt" "$U" "$ROOT/surf-normals-static-s2/run/best.pt" --report "$ROOT/reports/ensemble-four-static" || bad=1
+fi
 exit "$bad"

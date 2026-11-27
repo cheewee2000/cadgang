@@ -238,3 +238,31 @@ Axis by type for the four: REVOLUTE 0.6°, SLIDER 2.4° (the shape solver's is 2
 Conclusion: if joint suggestions ship, ship a mixed ensemble (vertex `static` + surface `surf-normals-static`, plus more of each as the budget allows). It is the most accurate and the best on macro F1, both members export, and it costs two forward passes plus the surface sampling at inference.
 
 Artifacts: `static-pair.{md,json}` and `four.{md,json}` under `/mnt/shared/cadgang/joint-mixed-ensemble/`.
+
+## Stage 11 — more seeds of the exportable members (2026-11-27)
+
+`compute/research/run-joint-inputs.sh` with `STUDY=seeds` (Job `compute/k8s/joint-seeds-v1.yaml`, commit 1bb4a6c, 8 GPUs, 14:42Z to 16:28Z, no restarts, $64.63 of credits) trained four more seeds (2 to 5) of each member of Stage 10's exportable pair, vertex `static` and surface `surf-normals-static`, 60 epochs each, then averaged them on one GPU as in Stage 10 (mean type probability, sign-aligned mean axis, one temperature on validation). Test split, 86,806 pairs.
+
+| model | members | accuracy | macro F1 | REVOLUTE | SLIDER | CYLINDRICAL | PLANAR | median axis REV / SLI / CYL |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| new vertex `static` seeds (range) | 1 | 65.15% to 65.36% | 0.425 to 0.444 | 49% to 51% | | 16% to 17% | 6% to 11% | |
+| new surface `surf-normals-static` seeds (range) | 1 | 62.49% to 63.66% | 0.427 to 0.448 | 45% to 47% | | 14% to 17% | 13% to 15% | |
+| Stage 10 four (one not exportable) | 4 | 67.6% | 0.479 | 52.6% | 34.0% | 14.9% | 8.4% | |
+| vertex five | 5 | 66.8% | 0.454 | 52.8% | 34.6% | 15.2% | 6.5% | 0.4° / 1.5° / 0.7° |
+| surface five | 5 | 65.0% | 0.468 | 48.4% | 33.9% | 15.0% | 13.7% | 0.6° / 2.0° / 0.7° |
+| four static (two of each) | 4 | 67.5% | 0.474 | 53.8% | 34.3% | 15.5% | 8.5% | 0.6° / 3.2° / 1.1° |
+| **ten (five of each)** | 10 | **68.1%** | **0.479** | 52.8% | 34.8% | 14.4% | 8.3% | 0.4° / 2.6° / 0.7° |
+
+**Seeds.** The new seeds land where Stages 8 and 9 put their first seeds: vertex 65.2% to 65.4%, surface 62.5% to 63.7%. Nothing new about the single model.
+
+**Ensembles.** Ten models (five of each input) reach 68.1%, the best accuracy so far and 0.5 points above Stage 10's four; macro F1 ties the four at 0.479. Mixing inputs still beats stacking seeds: five vertex seeds (66.8%) and five surface seeds (65.0%) are each below two of each (67.5%). Going from four mixed to ten mixed buys 0.6 points, smaller than the 0.7 that the first mixed pair bought over nine vertex seeds.
+
+**Minority types.** PLANAR stays where averaging puts it: the surface five find 13.7% of PLANAR pairs, the mixed ensembles 8%. CYLINDRICAL is about 15% everywhere. More seeds do not touch the class ceiling.
+
+**Axis.** The ten's median axis error is 0.4° on REVOLUTE and 0.7° on CYLINDRICAL, back near Stage 7's nine-seed 0.37°; SLIDER is 2.6° against the shape solver's 20.8°, still the only type where the model beats the solver.
+
+**Export.** All eight new files pass the ONNX checker and match PyTorch on the export check's inputs: vertex `static` within 1.5e-4, surface within 1.5e-5. Every member of the ten is exportable. As Stage 7 says, compare each file with PyTorch on real pairs before it ships.
+
+Conclusion: the shipping candidate is the ten (five vertex `static`, five `surf-normals-static`): 68.1%, F1 0.479, all exportable, ten 1.9 MB files. If ten forward passes are too many, the four static (two of each) gives up 0.6 points for less than half the cost. Further seeds are unlikely to pay; the next gain needs different inputs or labels for PLANAR and CYLINDRICAL.
+
+Artifacts: checkpoints, reports, ONNX files, `summary.{md,json,csv}` and `reports/ensemble-{ten,vertex-five,surface-five,four-static}.{md,json}` under `/mnt/shared/cadgang/joint-seeds-v1/`.
