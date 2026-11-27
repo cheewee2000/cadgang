@@ -212,3 +212,29 @@ The same script with `STUDY=surface` (Job `compute/k8s/joint-surface-v1.yaml`, c
 **Next, if continued.** The two inputs are good at different things, so the cheap test is an ensemble of a vertex model (Stage 8 `static`) and a surface model (`surf-normals-static`) on existing checkpoints, CPU only. No training run is planned.
 
 Artifacts: checkpoints, reports, ONNX files and `summary.{md,json,csv}` under `/mnt/shared/cadgang/joint-surface-v1/`.
+
+## Stage 10 — vertex and surface models together (2026-11-27)
+
+`compute/k8s/joint-mixed-ensemble.yaml` ran `main.py ensemble` on the free CPU worker (0 GPUs, no credits, 01:12Z to about 03:00Z) over checkpoints already trained: mean type probability and sign-aligned mean axis, one temperature fitted on validation, as in Stage 7. Test split, 86,806 pairs.
+
+| model | members | accuracy | macro F1 | median axis (all axial) | REVOLUTE | SLIDER | CYLINDRICAL | PLANAR |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Stage 7 ensemble of nine (vertices, nine seeds) | 9 | 66.90% | 0.450 | 0.37° | 52.0% | | 14.3% | 5.5% |
+| Stage 8 `static` (vertices) | 1 | 65.28% | 0.439 | 0.93° | 53.5% | | 16.6% | 8.3% |
+| Stage 9 `surf-normals-static` (surface) | 1 | 62.31% | 0.449 | 1.13° | 45.7% | 33.7% | 17.9% | 18.5% |
+| **pair**: `static` + `surf-normals-static` | 2 | 67.0% | 0.475 | 1.0° | 53.0% | 34.2% | **17.3%** | **10.6%** |
+| **four**: `static`, `focus50` + `surf-normals`, `surf-normals-static` | 4 | **67.6%** | **0.479** | 0.8° | 52.6% | 34.0% | 14.9% | 8.4% |
+
+Axis by type for the four: REVOLUTE 0.6°, SLIDER 2.4° (the shape solver's is 20.8°), CYLINDRICAL 0.9°. As before, the model beats the solver's axis only on SLIDER.
+
+**Accuracy.** Two models, one on vertices and one on surface points, reach 67.0%, level with nine vertex seeds (66.90%). Four reach 67.6%, the best result so far and 0.7 points above the nine-seed ensemble with fewer than half the forward passes. The two inputs make different mistakes, so averaging them gains more than averaging seeds of one.
+
+**Minority types.** Macro F1 rises to 0.475 and 0.479, the best so far, mostly on precision. PLANAR recall in the ensembles (8 to 11%) sits between the vertex models (about 8%) and the surface model alone (18.5%): averaging dilutes the one model that finds PLANAR.
+
+**Axis.** The median axis error (0.8° to 1.0°) is worse than the nine-seed ensemble's 0.37°: that one averaged nine axes of the same kind, and the surface models' axes are less precise (Stage 9).
+
+**Export.** Every member exports to ONNX and matches PyTorch (Stage 8 `static` within 2e-4; surface models with normals within 3e-5). `focus50` does not (0.07), so the exportable choice is the pair, or the four with `focus50` swapped for another static vertex seed (untested).
+
+Conclusion: if joint suggestions ship, ship a mixed ensemble (vertex `static` + surface `surf-normals-static`, plus more of each as the budget allows). It is the most accurate and the best on macro F1, both members export, and it costs two forward passes plus the surface sampling at inference.
+
+Artifacts: `static-pair.{md,json}` and `four.{md,json}` under `/mnt/shared/cadgang/joint-mixed-ensemble/`.
