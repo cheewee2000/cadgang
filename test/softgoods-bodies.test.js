@@ -287,7 +287,7 @@ test('a cover flattened off a can drapes on that can: it starts on the part, sta
   assert.ok(worst > -0.5, `the cover stays outside the can (deepest point ${worst.toFixed(2)} mm)`);
 });
 
-test('a cover flattened off a cone frustum: its side starts tangent (a wrap is a cylinder), and it drapes without passing through', async () => {
+test('a cover flattened off a cone frustum: its side starts on the cone from its own flatten mesh, and it drapes without passing through', async () => {
   const { flattenMesh, mergeFlattened } = await import('../src/core/softgoods-flatten.js');
   const { body: solid, side, disc } = await import('./fixtures/flatten-meshes.mjs');
   const cone = solid('cone', [side(50, 30, 60), disc(30, 60, 1), disc(50, 0, -1)]);
@@ -296,12 +296,32 @@ test('a cover flattened off a cone frustum: its side starts tangent (a wrap is a
     const near = Math.min(seg([0, 0], [50, 0]), seg([50, 0], [30, 60]), seg([30, 60], [0, 60])); return z > 0 && z < 60 && r < 50 - z / 3 ? -near : near; };
   const flat = mergeFlattened(new SoftgoodsDocument(null).toJSON(), flattenMesh(cone, { material: 'canvas', offset: 2 }));
   assert.ok(flat.arrangement.every((a) => !a.wrap), 'no row is wrapped: a wrap bends round a line parallel to v and the cone\'s rulings fan out');
+  assert.deepEqual(flat.arrangement.filter((a) => a.start).map((a) => a.pattern), ['cone_wrap'], 'the side starts from its mesh; the flat ends keep their rows');
   const d = validateSoftgoodsDocument({ ...flat, materials: { canvas: { arealDensity: 340, thickness: 0.6 } }, bodies: [{ id: 'cone', source: { mesh: { positions: [...cone.positions], indices: [...cone.indices] } } }], simulation: { floor: false } });
   const input = simulationInput(d, 15), start = simulate(input, 0), off = new Map(); let v = 0;
   for (const [k, m] of input.meshes.entries()) { let worst = 0; for (let i = 0; i < m.uv.length / 2; i++, v++) worst = Math.max(worst, Math.abs(coneDistance([start.positions[3 * v], start.positions[3 * v + 1], start.positions[3 * v + 2]]) - 2)); off.set(d.arrangement[k].pattern, worst); }
-  // The ends start on it (their rims 2 mm out and 2 mm off the edge); the side starts as a flat sheet tangent to the cone, about 104 mm off at its far corners.
-  assert.ok(off.get('cone_top') < 2 && off.get('cone_bottom') < 2 && off.get('cone_wrap') > 50 && off.get('cone_wrap') < 150, JSON.stringify([...off]));
+  // Every piece starts on it, 2 mm out, its rims up to 2 mm off where they round the cone's edges (a flat sheet tangent to the
+  // cone started about 104 mm off at its far corners).
+  assert.ok(off.get('cone_top') < 2 && off.get('cone_bottom') < 2 && off.get('cone_wrap') < 2, JSON.stringify([...off]));
   const drape = drapeDocument(d, { target: 15, steps: 600 }); let worst = Infinity;
   for (const p of drape.pieces) for (let i = 0; i < p.positions.length; i += 3) worst = Math.min(worst, coneDistance([p.positions[i], p.positions[i + 1], p.positions[i + 2]]));
   assert.ok(worst > -0.5, `the cover stays outside the cone (deepest point ${worst.toFixed(2)} mm)`);
+});
+
+test('a cover flattened off a dome starts on the dome: a doubly curved piece takes its flatten mesh as its start', async () => {
+  const { flattenMesh, mergeFlattened } = await import('../src/core/softgoods-flatten.js');
+  const { body: solid, hemisphere, disc } = await import('./fixtures/flatten-meshes.mjs');
+  const dome = solid('dome', [hemisphere(50), disc(50, 0, -1)]);
+  const flat = mergeFlattened(new SoftgoodsDocument(null).toJSON(), flattenMesh(dome, { material: 'canvas', offset: 2 }));
+  const d = validateSoftgoodsDocument({ ...flat, materials: { canvas: { arealDensity: 340, thickness: 0.6 } }, bodies: [{ id: 'dome', source: { mesh: { positions: [...dome.positions], indices: [...dome.indices] } } }], simulation: { floor: false } });
+  const curved = d.arrangement.filter((a) => a.start).map((a) => a.pattern);
+  assert.ok(curved.length >= 1, JSON.stringify(d.arrangement.map((a) => a.pattern)));
+  const input = simulationInput(d, 15), start = simulate(input, 0); let v = 0, worst = 0;
+  for (const [k, m] of input.meshes.entries()) for (let i = 0; i < m.uv.length / 2; i++, v++) {
+    if (!curved.includes(d.arrangement[k].pattern)) continue;
+    const r = Math.hypot(start.positions[3 * v], start.positions[3 * v + 1], start.positions[3 * v + 2]); worst = Math.max(worst, Math.abs(r - 52));
+  }
+  // On the sphere 2 mm out, give or take the chord of the dome's own facets.
+  assert.ok(worst < 1.5, `the dome's cover starts on it (worst ${worst.toFixed(2)} mm off)`);
+  assert.throws(() => validateSoftgoodsDocument({ ...d, arrangement: d.arrangement.map((a) => a.start ? { ...a, start: { ...a.start, triangles: [0, 1, 1e9] } } : a) }), /start triangles/);
 });

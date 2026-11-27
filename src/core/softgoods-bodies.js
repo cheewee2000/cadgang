@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import { GraphError } from './errors.js';
 import { bodyOfAvatar, arrangeOnAvatar, rowFacing, LIMB_REGIONS } from './softgoods-avatar.js';
 import { meshField } from '../../web/softgoods-sdf.js';
+import { startOn, startProblem } from '../../web/softgoods-start.js';
 
 const ID = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/, CAD = /\.(step|stp|iges|igs|brep)$/i, LIVE = /[\\/]cadgang[\\/]cells\.json$/;
 const SIDES = { top: [[0, 0, 1], [0, 1, 0]], bottom: [[0, 0, -1], [0, 1, 0]], front: [[0, -1, 0], [0, 0, 1]], back: [[0, 1, 0], [0, 0, 1]], left: [[-1, 0, 0], [0, 0, 1]], right: [[1, 0, 0], [0, 0, 1]] };
@@ -60,6 +61,7 @@ export function validateBodies(d) {
     if (spec.layer != null && !finite(spec.layer)) throw new GraphError(`Pattern '${p.id}' placement layer must be a number`);
   }
   for (const a of d.arrangement) if (a.wrap != null && !(finite(a.wrap?.radius) && Number(a.wrap.radius) > 0 && finite(a.wrap.centre))) throw new GraphError(`Arrangement '${a.pattern}' wrap must be { radius: mm above zero, centre: the pattern x the tube is centred on }`);
+  for (const a of d.arrangement) { const why = a.start != null && startProblem(a.start); if (why) throw new GraphError(`Arrangement '${a.pattern}' ${why}`); }
   const floor = d.simulation?.floor; if (floor != null && floor !== false && !finite(floor)) throw new GraphError('simulation.floor must be a height in mm, or false for no floor');
 }
 
@@ -189,6 +191,7 @@ function depthIn(s, p) {
 }
 /** Where the flat point (u, v) of a piece starts, by its arrangement row: the solver's own transform, wrap included. */
 export function startPoint([u, v], row = {}) {
+  if (row.start) return startOn(row.start, u, v);
   let x = u, z = 0; if (row.wrap) { const t = (u - row.wrap.centre) / row.wrap.radius; x = row.wrap.centre + row.wrap.radius * Math.sin(t); z = row.wrap.radius * (Math.cos(t) - 1); }
   const p = turn(row.rotation || [0, 0, 0], [x, v, z]), at = row.position || [0, 0, 0]; return [p[0] + at[0], p[1] + at[1], p[2] + at[2]];
 }
