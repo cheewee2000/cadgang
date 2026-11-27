@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SoftgoodsDocument, validateSoftgoodsDocument } from '../src/core/softgoods-document.js';
-import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS, setPiece, addSize, removeSize, gradePoint, graded } from '../web/softgoods-draft.js';
+import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS, setPiece, addSize, removeSize, gradePoint, graded, setMaterial } from '../web/softgoods-draft.js';
 import { editSoftgoods } from '../src/core/softgoods-edit.js';
 
 const two = () => { const d = new SoftgoodsDocument(null); d.addRectangle({ id: 'front', width: 200, height: 100 }); d.addRectangle({ id: 'back', width: 200, height: 100 }); return d.toJSON(); };
@@ -86,4 +86,12 @@ test('drafting: a size is added, a point dragged in it is a rule the server take
   d = ok(gradePoint(d, 'L', 'front', 'front_tr', 0, 0)); assert.equal(L().rules.length, 0);
   assert.throws(() => gradePoint(d, 'XL', 'front', 'front_tr', 1, 1), /No size/);
   assert.deepEqual(ok(removeSize(d, 'L')).grades, []);
+});
+
+test('drafting: a fabric starts from a preset, its own numbers go over it, a blank one falls back, and nonsense is refused', () => {
+  let d = ok(setMaterial(two(), 'shell', { preset: 'nylon-500d', color: '#336699', arealDensity: '255', 'tensile.warp': '40' }));
+  assert.deepEqual(d.materials.shell, { preset: 'nylon-500d', color: '#336699', arealDensity: 255, tensile: { warp: 40 } });
+  d = ok(setMaterial(d, 'shell', { arealDensity: '', 'tensile.warp': '' })); assert.deepEqual(d.materials.shell, { preset: 'nylon-500d', color: '#336699' });
+  assert.throws(() => setMaterial(d, 'shell', { friction: 2 }), /between 0 and 1/); assert.throws(() => setMaterial(d, 'shell', { color: 'red' }), /#rrggbb/);
+  assert.throws(() => validateSoftgoodsDocument(setMaterial(d, 'shell', { preset: 'silk' })), /not in the fabric library/);
 });
