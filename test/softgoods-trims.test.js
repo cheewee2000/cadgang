@@ -375,7 +375,7 @@ test('trims are added, changed and removed through the document, the REST routes
     assert.equal((await call('/trims/top_zip', 'PATCH', { id: 'zip' })).status, 400); assert.equal((await call('/trims', 'POST', { id: 'top_zip', kind: 'rivet', at: { pattern: 'front', u: 5, v: 5 } })).status, 400); assert.equal((await call('/trims/none', 'DELETE')).status, 400);
     assert.equal((await call('/trims')).trims.length, 2); assert.equal(doc.data.revision, before + 3);
     // What the cloth preview is handed: the zipper as a seam between its edges, paired point for point.
-    await call('/trims', 'POST', { id: 'flap_snap', kind: 'snap', spec: { mass: 2, strength: 4 }, at: { pattern: 'front', u: 150, v: 100 }, mate: { pattern: 'back', u: 150, v: 100 } });
+    await call('/trims', 'POST', { id: 'flap_snap', kind: 'snap', spec: { mass: 2, strength: 4, diameter: 12 }, at: { pattern: 'front', u: 150, v: 100 }, mate: { pattern: 'back', u: 150, v: 100 } });
     await call('/trims', 'POST', { id: 'strap', kind: 'webbing', spec: { width: 25, massPerMeter: 30 }, path: { pattern: 'back', points: [[50, 20], [50, 180]] } });
     await call('/trims', 'POST', { id: 'waist', kind: 'elastic', spec: { width: 20, ratio: 0.75 }, along: [{ pattern: 'back', segment: 'back_bottom' }] });
     await call('/trims', 'POST', { id: 'hem', kind: 'topstitch', along: [{ pattern: 'front', segment: 'front_bottom' }] });
@@ -385,7 +385,7 @@ test('trims are added, changed and removed through the document, the REST routes
     assert.deepEqual(fact('top_zip').seam, { id: 'top_zip', a: { pattern: 'front', segment: 'front_top' }, b: { pattern: 'back', segment: 'back_top' }, flip: false, kind: 'zipper' }, 'written as a seam of the design'); assert.equal(fact('top_zip').widthMm, 13.5);
     assert.equal(fact('top_zip').rigidity, 5); assert.equal(fact('top_zip').rigiditySource, 'typical, not measured'); assert.equal(fact('top_zip').massPerMeterG, null, 'a mass nobody gave is not invented');
     // A snap is written as the design's own cloth-to-cloth tack: an attachment whose target is a spot on another piece.
-    assert.deepEqual(fact('flap_snap').attachments, [{ id: 'flap_snap_1', pattern: 'front', at: [150, 100], to: { pattern: 'back', at: [150, 100] }, kind: 'snap', strength: 4 }]); assert.equal(fact('flap_snap').massG, 2);
+    assert.deepEqual(fact('flap_snap').attachments, [{ id: 'flap_snap_1', pattern: 'front', at: [150, 100], to: { pattern: 'back', at: [150, 100] }, kind: 'snap', strength: 4 }]); assert.equal(fact('flap_snap').massG, 2); assert.equal(fact('flap_snap').diameterMm, 12, 'the review draws it this size');
     assert.deepEqual([fact('strap').widthMm, fact('strap').massPerMeterG, fact('strap').lengthMm], [25, 30, 160]); assert.deepEqual(fact('strap').paths, [{ pattern: 'back', points: [[50, 20], [50, 180]] }]);
     assert.deepEqual([fact('waist').relaxedRatio, fact('waist').relaxedLengthMm, fact('waist').rigidity, fact('waist').elastic], [0.75, 225, null, 'waist']);
     assert.deepEqual(simulationTrims(doc.toJSON(), { spacing: 25 }), input.trims); assert.deepEqual(input, { status: 200, ...JSON.parse(JSON.stringify(simulationInput(doc.toJSON(), 50))) }, 'the server drape starts from the same input');

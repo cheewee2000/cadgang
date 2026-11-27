@@ -72,8 +72,9 @@ export function trimShapes(trims, step = 5) {
   // A run is filled in every `step` mm: a straight edge comes as its two ends, and its middle must find the edge vertices too.
   const discs = [], runs = [], xy = (q) => (Array.isArray(q) ? q : [q.x, q.y]), fill = (q) => q.flatMap((b, i) => { if (!i) return [b]; const a = q[i - 1], n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / step)); return Array.from({ length: n }, (_, k) => [a[0] + (b[0] - a[0]) * (k + 1) / n, a[1] + (b[1] - a[1]) * (k + 1) / n]); });
   for (const t of trims || []) {
-    if (t.type === 'point') for (const q of t.points || []) discs.push({ trim: t.id, pattern: q.pattern, at: xy(q) });
-    else if (t.type === 'tack') for (const a of t.attachments || []) discs.push({ trim: t.id, pattern: a.pattern, at: a.at }, { trim: t.id, pattern: a.to.pattern, at: a.to.at });
+    const size = t.diameterMm > 0 ? t.diameterMm : DISC;
+    if (t.type === 'point') for (const q of t.points || []) discs.push({ trim: t.id, pattern: q.pattern, at: xy(q), size });
+    else if (t.type === 'tack') for (const a of t.attachments || []) discs.push({ trim: t.id, pattern: a.pattern, at: a.at, size }, { trim: t.id, pattern: a.to.pattern, at: a.to.at, size });
     else if (t.type === 'seam') for (const side of ['a', 'b']) { const q = (t.pairs || []).map((p) => p[side]); if (q.length > 1) runs.push({ trim: t.id, pattern: q[0].pattern, points: fill(q.map(xy)) }); }
     else for (const path of t.paths || []) runs.push({ trim: t.id, pattern: path.pattern, points: fill(path.points.map(xy)) });
   }
@@ -89,7 +90,7 @@ const VIEWS = { front: [0, 0], back: [Math.PI, 0], left: [-Math.PI / 2, 0], righ
 const SKIN = 3;
 // A seam pair this close has closed: no thread is drawn for it.
 const CLOSED = 2;
-// ponytail: every point trim is a 10 mm disc whatever its spec; read spec.diameter from the design if the size matters in review.
+// A point trim is drawn at its spec.diameter (diameterMm in the input), this many mm where the spec gives none.
 const DISC = 10;
 
 /** Build the view inside `host`. Throws where WebGL is not available, and the page then keeps its painter's view.
@@ -213,7 +214,7 @@ export function createClothView({ host, scheme = () => 'trackpad', onSelect = ()
     // Trims are given on the pattern in mm: each spot and each point of a run goes to the nearest vertex of its piece's rest mesh.
     // A run lies along the outline, so it takes only the piece's edge vertices: an inner one would zigzag it across the cloth.
     const uvOf = new Map((input?.meshes || []).map((m) => [m.id, m.uv || []])), vertexAt = (pattern, [x, y], edge) => { const p = byId.get(pattern), i = p ? nearestVertex(uvOf.get(pattern) || [], x, y, edge ? [...new Set(Object.values(p.chains).flat())] : null) : -1; return i < 0 ? -1 : p.off + i; };
-    discAt = shapes.discs.map((d) => ({ trim: d.trim, v: vertexAt(d.pattern, d.at) })).filter((d) => d.v >= 0);
+    discAt = shapes.discs.map((d) => ({ trim: d.trim, size: d.size ?? DISC, v: vertexAt(d.pattern, d.at) })).filter((d) => d.v >= 0);
     for (const r of shapes.runs) r.chain = r.points.map((q) => vertexAt(r.pattern, q, true)).filter((v, i, a) => v >= 0 && v !== a[i - 1]);
     if (discAt.length * 2 > discs.instanceMatrix.count) { scene.remove(discs); discs.dispose(); discs = new THREE.InstancedMesh(discs.geometry, discMat, discAt.length * 2); discs.frustumCulled = false; discs.castShadow = true; scene.add(discs); }
     stale = false; coloured = ''; outlined = trimmed = undefined; stage(frame);
@@ -262,7 +263,7 @@ export function createClothView({ host, scheme = () => 'trackpad', onSelect = ()
     // A disc sits square to the cloth at its vertex, a little off each face (which face is outside, the view does not know): the normal is the one computeVertexNormals just gave the piece.
     discAt.forEach((d, i) => {
       const p = pieces.find((q) => d.v >= q.off && d.v < q.off + q.count), n = p.geo.attributes.normal.array, j = (d.v - p.off) * 3;
-      normal.set(n[j], n[j + 1], n[j + 2]); pose.quaternion.setFromUnitVectors(ZUP, normal);
+      normal.set(n[j], n[j + 1], n[j + 2]); pose.quaternion.setFromUnitVectors(ZUP, normal); pose.scale.setScalar(d.size / DISC);
       for (const side of [0, 1]) { pose.position.set(P[d.v * 3], P[d.v * 3 + 1], P[d.v * 3 + 2]).addScaledVector(normal, side ? -1.5 : 1.5); pose.updateMatrix(); discs.setMatrixAt(2 * i + side, pose.matrix); }
     });
     discs.count = discAt.length * 2; discs.instanceMatrix.needsUpdate = true;
