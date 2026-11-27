@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SoftgoodsDocument, validateSoftgoodsDocument } from '../src/core/softgoods-document.js';
-import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS, setPiece } from '../web/softgoods-draft.js';
+import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS, setPiece, addSize, removeSize, gradePoint, graded } from '../web/softgoods-draft.js';
 import { editSoftgoods } from '../src/core/softgoods-edit.js';
 
 const two = () => { const d = new SoftgoodsDocument(null); d.addRectangle({ id: 'front', width: 200, height: 100 }); d.addRectangle({ id: 'back', width: 200, height: 100 }); return d.toJSON(); };
@@ -76,4 +76,14 @@ test('drafting: a piece\'s name, material, cut count and grain are set in place,
   const d = ok(setPiece(two(), 'front', { name: 'Front panel', material: 'denim', cut: '2', grain: '45' })), p = piece(d, 'front');
   assert.deepEqual([p.name, p.material, p.cut, p.grain.angle], ['Front panel', 'denim', 2, 45]);
   assert.throws(() => setPiece(two(), 'front', { cut: 0 }), /whole number/); assert.throws(() => setPiece(two(), 'front', { name: ' ' }), /needs a name/);
+});
+
+test('drafting: a size is added, a point dragged in it is a rule the server takes, back to the base drops it, and the size goes', () => {
+  let d = ok(addSize(two(), 'L')); assert.throws(() => addSize(d, 'L'), /already/); assert.throws(() => addSize(d, ' '), /needs a name/);
+  d = ok(gradePoint(d, 'L', 'front', 'front_tr', 10, 5)); const L = () => d.grades.find((g) => g.size === 'L');
+  const at = graded(piece(d, 'front'), L()).points.find((q) => q.id === 'front_tr'), base = piece(d, 'front').points.find((q) => q.id === 'front_tr');
+  assert.deepEqual([at.x - base.x, at.y - base.y], [10, 5]);
+  d = ok(gradePoint(d, 'L', 'front', 'front_tr', 0, 0)); assert.equal(L().rules.length, 0);
+  assert.throws(() => gradePoint(d, 'XL', 'front', 'front_tr', 1, 1), /No size/);
+  assert.deepEqual(ok(removeSize(d, 'L')).grades, []);
 });

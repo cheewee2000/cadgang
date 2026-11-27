@@ -163,22 +163,44 @@ export function setPiece(d, pid, { name, material, cut, grain } = {}) {
   return d;
 }
 
+/** A new graded size, no point moved yet. */
+export function addSize(d, size) {
+  const name = String(size ?? '').trim(); if (!name) throw new Error('A size needs a name');
+  d = clone(d); if ((d.grades ||= []).some((g) => g.size === name)) throw new Error(`There is already a size '${name}'`);
+  d.grades.push({ size: name, rules: [] }); return d;
+}
+export const removeSize = (d, size) => ({ ...clone(d), grades: (d.grades || []).filter((g) => g.size !== size) });
+
+/** Where a point sits in a size: dx, dy mm from the base pattern; 0, 0 drops its rule. */
+export function gradePoint(d, size, pid, qid, dx, dy) {
+  d = clone(d); const g = (d.grades || []).find((v) => v.size === size); if (!g) throw new Error(`No size '${size}'`);
+  if (!pieceOf(d, pid).points.some((q) => q.id === qid)) throw new Error(`No point '${qid}'`);
+  g.rules = g.rules.filter((r) => r.pattern !== pid || r.point !== qid); dx = r2(dx); dy = r2(dy);
+  if (dx || dy) g.rules.push({ pattern: pid, point: qid, dx, dy }); return d;
+}
+
+/** A piece as it is in a graded size (the base piece when there is none). */
+export function graded(p, g) {
+  const m = new Map((g?.rules || []).filter((r) => r.pattern === p.id).map((r) => [r.point, r]));
+  return { ...p, points: p.points.map((q) => { const r = m.get(q.id); return r ? { ...q, x: q.x + r.dx, y: q.y + r.dy } : q; }) };
+}
+
 // ---- the board
 
 // A piece drawn on the board keeps its shape but starts at its own origin: its lowest, leftmost corner at 0, 0.
 const origin = (pts) => { const x0 = Math.min(...pts.map((q) => q.x)), y0 = Math.min(...pts.map((q) => q.y)); return pts.map((q) => ({ x: q.x - x0, y: q.y - y0 })); };
 
-const TOOLS = ['move', 'pen', 'point', 'curve', 'seam', 'delete', 'dart', 'pleat', 'cut', 'line', 'notch', 'allowance', 'mirror'];
+const TOOLS = ['move', 'pen', 'point', 'curve', 'seam', 'delete', 'dart', 'pleat', 'cut', 'line', 'notch', 'allowance', 'mirror', 'grade'];
 // The numbers a tool takes from the board's two fields: [label, default] each.
 export const AMOUNTS = { dart: [['width mm', 20], ['length mm', 80]], pleat: [['intake mm', 30]], allowance: [['allowance mm', 10]] };
-const HELP = { move: 'drag a point or a handle · drag the board to pan', pen: 'click the corners of a new piece · click the first one or press Enter to close · Esc cancels', point: 'click an edge to put a point on it', curve: 'click a straight edge to bend it (then drag its handles), a curved one to straighten it', seam: 'click an edge, then the edge it is sewn to', delete: 'click a point, a seam or inside a piece to delete it', dart: 'click an edge where the dart goes: width and length from the fields', pleat: 'click an edge where the pleat goes: intake from the field', cut: 'click two places on a piece\'s edge: it is cut in two along the line and the cut is sewn', line: 'click two places inside a piece for a stitch or placement line', notch: 'click an edge to notch it there', allowance: 'click an edge to give it the allowance in the field', mirror: 'click an edge: the piece is mirrored across it, the other hand' };
+const HELP = { move: 'drag a point or a handle · drag the board to pan', pen: 'click the corners of a new piece · click the first one or press Enter to close · Esc cancels', point: 'click an edge to put a point on it', curve: 'click a straight edge to bend it (then drag its handles), a curved one to straighten it', seam: 'click an edge, then the edge it is sewn to', delete: 'click a point, a seam or inside a piece to delete it', dart: 'click an edge where the dart goes: width and length from the fields', pleat: 'click an edge where the pleat goes: intake from the field', cut: 'click two places on a piece\'s edge: it is cut in two along the line and the cut is sewn', line: 'click two places inside a piece for a stitch or placement line', notch: 'click an edge to notch it there', allowance: 'click an edge to give it the allowance in the field', mirror: 'click an edge: the piece is mirrored across it, the other hand', grade: 'drag a point to where it is in the size chosen; every size is drawn over the base' };
 
 /**
  * The drafting board on `canvas`. getDoc() is the page's document; commit(next) PUTs it and resolves to the saved document
  * (or throws with the server's reason); say(text, bad) writes the page's status line.
  */
 export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = () => [], say, onSelect = () => {} }) {
-  let tool = 'move', view = { k: 1, x: 0, y: 0 }, drag = null, pen = [], pick = null, hover = null, local = null, undo = [], busy = false;
+  let tool = 'move', size = null, view = { k: 1, x: 0, y: 0 }, drag = null, pen = [], pick = null, hover = null, local = null, undo = [], busy = false;
   const doc = () => local || getDoc();
   const frame = () => {
     // Laid out and fitted from the saved document, drawn from the edit in hand: a dragged point never rescales the board under the pointer.
@@ -192,7 +214,7 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
   // What is under the pointer: a point (8 px), else an edge (6 px, with its parameter there), else the piece it is inside.
   function hit(X, Y, f = frame()) {
     let best = null;
-    for (const p of f.d.patterns) for (const q of p.points) { const [x, y] = f.toScreen(p.id, q), e = Math.hypot(x - X, y - Y); if (e < 8 && (!best || e < best.e)) best = { kind: 'point', pattern: p.id, id: q.id, e }; }
+    for (const p of shownPieces(f.d)) for (const q of p.points) { const [x, y] = f.toScreen(p.id, q), e = Math.hypot(x - X, y - Y); if (e < 8 && (!best || e < best.e)) best = { kind: 'point', pattern: p.id, id: q.id, e }; }
     if (best) return best;
     for (const p of f.d.patterns) for (const s of p.segments) {
       const q = s.type === 'line' ? Array.from({ length: 33 }, (_, i) => { const [a, b] = sample(p, s); return { x: a.x + (b.x - a.x) * i / 32, y: a.y + (b.y - a.y) * i / 32 }; }) : sample(p, s, 32);
@@ -202,6 +224,8 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
     for (const p of f.d.patterns) { const at = f.toBoard(X, Y), o = f.lay.get(p.id) || { dx: 0, dy: 0 }, u = { x: at.x - o.dx, y: at.y - o.dy }, ring = p.segments.flatMap((s) => sample(p, s, 12)); let inside = false; for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) { const a = ring[i], b = ring[j]; if ((a.y > u.y) !== (b.y > u.y) && u.x < (b.x - a.x) * (u.y - a.y) / (b.y - a.y) + a.x) inside = !inside; } if (inside) return { kind: 'piece', pattern: p.id, id: p.id }; }
     return null;
   }
+  const activeGrade = (d) => (tool === 'grade' ? (d.grades || []).find((g) => g.size === size) : null);
+  const shownPieces = (d) => { const g = activeGrade(d); return g ? d.patterns.map((p) => graded(p, g)) : d.patterns; };
   async function apply(next, done) {
     if (busy) return; busy = true; const before = getDoc();
     try { local = next; draw(); await commit(next); undo.push(before); if (undo.length > 50) undo.shift(); say(done || ''); }
@@ -222,6 +246,10 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
     const line = (pid, pts, { width = 1, color = '#000', dash = [] } = {}) => { x.setLineDash(dash); x.lineWidth = width; x.strokeStyle = color; x.beginPath(); pts.forEach((q, i) => { const [X, Y] = f.toScreen(pid, q); i ? x.lineTo(X, Y) : x.moveTo(X, Y); }); x.stroke(); x.setLineDash([]); };
     const is = (h, kind, pid, id) => h && h.kind === kind && h.pattern === pid && h.id === id;
     f.d.seams.forEach((seam, i) => { for (const ref of [seam.a, seam.b]) { const p = f.d.patterns.find((q) => q.id === ref?.pattern); if (!p) continue; for (const sid of seamSide(ref).segments) { const s = p.segments.find((v) => v.id === sid); if (s) line(p.id, sample(p, s, 32), { width: is(hover, 'seam', seam.id, seam.id) ? 7 : 5, color: seamCss(i) }); } } });
+    if (tool === 'grade') for (const g of f.d.grades || []) for (const p0 of f.d.patterns) {
+      const p = graded(p0, g), on = g.size === size; for (const s of p.segments) line(p.id, sample(p, s, 32), { color: on ? '#e35a1e' : '#bbb', dash: on ? [] : [4, 3] });
+      if (on) for (const r of g.rules.filter((v) => v.pattern === p.id)) { const q = p.points.find((v) => v.id === r.point); if (q) { const [X, Y] = f.toScreen(p.id, q); x.fillStyle = '#e35a1e'; x.fillRect(X - 3, Y - 3, 6, 6); } }
+    }
     for (const p of f.d.patterns) {
       for (const s of p.segments) { const hot = is(hover, 'edge', p.id, s.id) || is(pick, 'edge', p.id, s.id); line(p.id, sample(p, s, 32), { width: hot ? 3 : 1.5, color: hot ? '#e35a1e' : '#000' }); }
       const m = new Map(p.points.map((q) => [q.id, q]));
@@ -247,6 +275,7 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
     canvas.setPointerCapture(e.pointerId); const r = canvas.getBoundingClientRect(), X = e.clientX - r.left, Y = e.clientY - r.top, f = frame(), h = hit(X, Y, f), d = getDoc();
     if (h?.pattern && h.kind !== 'seam') onSelect(h.pattern);   // the schedule and its properties follow the piece clicked
     if (tool === 'move') { drag = h?.kind === 'point' ? { point: h, moved: false } : { pan: [e.clientX, e.clientY] }; return; }
+    if (tool === 'grade') { if (!activeGrade(d)) { say('add a size first: name it in the field and press Enter', true); return; } drag = h?.kind === 'point' ? { point: h, moved: false } : { pan: [e.clientX, e.clientY] }; return; }
     if (tool === 'pen') {
       const at = f.toBoard(X, Y), first = pen[0] && f.toScreen(null, pen[0]);
       if (pen.length >= 3 && Math.hypot(first[0] - X, first[1] - Y) < 8) { const pts = pen; pen = []; edit((doc0) => addPiece(doc0, origin(pts)), 'piece added'); return; }
@@ -289,6 +318,10 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
     if (drag?.pan) { view.x += e.clientX - drag.pan[0]; view.y += e.clientY - drag.pan[1]; drag.pan = [e.clientX, e.clientY]; draw(); return; }
     if (drag?.point) {
       const f = frame(), at = f.toBoard(X, Y), o = f.lay.get(drag.point.pattern);
+      if (tool === 'grade') {
+        const base = getDoc().patterns.find((q) => q.id === drag.point.pattern).points.find((v) => v.id === drag.point.id), dx = Math.round(2 * (at.x - o.dx - base.x)) / 2, dy = Math.round(2 * (at.y - o.dy - base.y)) / 2;
+        local = gradePoint(getDoc(), size, drag.point.pattern, drag.point.id, dx, dy); drag.moved = true; say(`${drag.point.id} in ${size} · dx ${dx} dy ${dy} mm`); draw(); return;
+      }
       local = movePoint(getDoc(), drag.point.pattern, drag.point.id, at.x - o.dx, at.y - o.dy); drag.moved = true;
       const p = local.patterns.find((q) => q.id === drag.point.pattern), q = p.points.find((v) => v.id === drag.point.id); say(`${q.id} · x ${q.x.toFixed(1)} y ${q.y.toFixed(1)} mm`); draw(); return;
     }
@@ -298,7 +331,7 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
   };
   canvas.onpointerup = canvas.onpointercancel = () => {
     const was = drag; drag = null;
-    if (was?.point && was.moved) { const next = local; local = null; apply(next, 'point moved'); }
+    if (was?.point && was.moved) { const next = local; local = null; apply(next, tool === 'grade' ? `graded in ${size}` : 'point moved'); }
     else if (was?.point) local = null;
   };
   canvas.addEventListener('wheel', (e) => {
@@ -319,6 +352,7 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
     draw, key, edit,
     setTool(t) { if (!TOOLS.includes(t)) return; tool = t; pen = []; pick = null; hover = null; say(''); draw(); },
     get tool() { return tool; },
+    setSize(v) { size = v || null; draw(); },
     get amounts() { return AMOUNTS[tool] || []; },
   };
 }
