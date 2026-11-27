@@ -107,11 +107,12 @@ test('trims: spots become discs on both pieces, runs become lines filled in alon
   assert.equal(nearestVertex(uv, 6, 4), 4); assert.equal(nearestVertex(uv, 6, 4, [0, 1, 2, 3]), 1, 'held to the edge vertices it is given'); assert.equal(nearestVertex([], 0, 0), -1);
   const { discs, runs } = trimShapes([
     { id: 'rivet', type: 'point', points: [{ pattern: 'front', x: 4, y: 5 }] },
-    { id: 'buttons', type: 'tack', attachments: [{ pattern: 'front', at: [1, 2], to: { pattern: 'back', at: [3, 4] } }] },
+    { id: 'buttons', type: 'tack', diameterMm: 18, attachments: [{ pattern: 'front', at: [1, 2], to: { pattern: 'back', at: [3, 4] } }] },
     { id: 'zip', type: 'seam', pairs: [{ a: { pattern: 'front', x: 0, y: 0 }, b: { pattern: 'back', x: 0, y: 20 } }, { a: { pattern: 'front', x: 0, y: 20 }, b: { pattern: 'back', x: 0, y: 0 } }] },
     { id: 'binding', type: 'strip', paths: [{ pattern: 'front', points: [[0, 0], [12, 0]] }] },
   ]);
-  assert.deepEqual(discs, [{ trim: 'rivet', pattern: 'front', at: [4, 5] }, { trim: 'buttons', pattern: 'front', at: [1, 2] }, { trim: 'buttons', pattern: 'back', at: [3, 4] }]);
+  // A spot is drawn at its trim's diameter, 10 mm where the spec gives none.
+  assert.deepEqual(discs, [{ trim: 'rivet', pattern: 'front', at: [4, 5], size: 10 }, { trim: 'buttons', pattern: 'front', at: [1, 2], size: 18 }, { trim: 'buttons', pattern: 'back', at: [3, 4], size: 18 }]);
   assert.deepEqual(runs.map((r) => [r.trim, r.pattern, r.points.length]), [['zip', 'front', 5], ['zip', 'back', 5], ['binding', 'front', 4]]);
   assert.deepEqual(runs[2].points, [[0, 0], [4, 0], [8, 0], [12, 0]]); assert.deepEqual(trimShapes(undefined), { discs: [], runs: [] });
   const view = read('softgoods-view.js'), page = read('softgoods.js'), html = read('softgoods.html');
