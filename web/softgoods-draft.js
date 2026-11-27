@@ -178,6 +178,19 @@ export function addTrim(d, kind, place) {
   d = clone(d); const ids = new Set((d.trims || []).map((t) => t.id)); let n = 1; while (ids.has(`${kind}_${n}`)) n++;
   (d.trims ||= []).push({ id: `${kind}_${n}`, kind, ...place }); return d;
 }
+/** The other side of trim `id`: a spot (`at`) for a button or snap, a run of edges (`along`) for a zipper or hook-and-loop. */
+export const MATED = ['button', 'snap', 'zipper', 'hook-and-loop'];
+export function setMate(d, id, place) {
+  d = clone(d); const t = (d.trims || []).find((v) => v.id === id); if (!t) throw new Error(`No trim '${id}'`);
+  t.mate = t.along ? place.along : place.at; if (!t.mate) throw new Error(t.along ? `${t.kind}'s other side runs along an edge` : `${t.kind}'s other side is a spot`); return d;
+}
+/** The seam constructions of src/core/softgoods-trims.js SEAM_KINDS. */
+export const SEAM_KINDS = ['plain', 'overlock', 'gather', 'elastic', 'flat-felled', 'french', 'lapped', 'bound', 'topstitched', 'double-topstitched'];
+/** A seam's kind, and flip: whether its second side runs the other way (a seam sewn twisted is flipped). */
+export function setSeam(d, id, { kind, flip } = {}) {
+  d = clone(d); const s = d.seams.find((v) => v.id === id); if (!s) throw new Error(`No seam '${id}'`);
+  if (kind != null) s.kind = String(kind); if (flip != null) s.flip = !!flip; return d;
+}
 export const removeTrim = (d, id) => ({ ...clone(d), trims: (d.trims || []).filter((t) => t.id !== id) });
 // A material's fields as the fabric panel edits them: [key, label]. tensile.warp and tensile.weft are the nested tensile.
 export const FABRIC_FIELDS = [['arealDensity', 'WEIGHT g/m²'], ['thickness', 'THICK mm'], ['rigidity', 'BEND N·mm'], ['tensile.warp', 'WARP N/mm'], ['tensile.weft', 'WEFT N/mm'], ['shearRigidity', 'SHEAR N/mm'], ['friction', 'FRICTION 0-1'], ['pricePerMeter', 'PRICE /m'], ['rollWidth', 'ROLL mm']];
@@ -234,7 +247,7 @@ const HELP = { trim: 'a spot trim: click inside a piece or on an edge (10 mm in)
  * (or throws with the server's reason); say(text, bad) writes the page's status line.
  */
 export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = () => [], say, onSelect = () => {}, marks = () => null }) {
-  let tool = 'move', size = null, trimKind = 'snap', view = { k: 1, x: 0, y: 0 }, drag = null, pen = [], pick = null, hover = null, local = null, undo = [], busy = false;
+  let tool = 'move', size = null, trimKind = 'snap', mating = null, view = { k: 1, x: 0, y: 0 }, drag = null, pen = [], pick = null, hover = null, local = null, undo = [], busy = false;
   const doc = () => local || getDoc();
   const frame = () => {
     // Laid out and fitted from the saved document, drawn from the edit in hand: a dragged point never rescales the board under the pointer.
@@ -324,10 +337,13 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
       const a = pick.q; pick = null; op({ op: 'internalLine', pattern: inside, a, b: q }, 'line drawn'); return;
     }
     if (tool === 'trim') {
-      const spot = TRIM_KINDS.point.includes(trimKind), at = f.toBoard(X, Y);
-      if (h?.kind === 'piece' && spot) { const o = f.lay.get(h.pattern); edit((doc0) => addTrim(doc0, trimKind, { at: { pattern: h.pattern, u: r2(at.x - o.dx), v: r2(at.y - o.dy) } }), `${trimKind} placed`); }
-      else if (h?.kind === 'edge') edit((doc0) => addTrim(doc0, trimKind, spot ? { at: { pattern: h.pattern, segment: h.id, t: Math.round(h.t * 1e4) / 1e4, inset: 10 } } : { along: [{ pattern: h.pattern, segment: h.id }] }), `${trimKind} placed`);
-      else say(spot ? 'click inside a piece or on an edge' : 'click the edge it runs along', true);
+      // A button, snap, zipper or hook-and-loop's next click is its other side; another tool or Esc leaves it one-sided.
+      const spot = TRIM_KINDS.point.includes(trimKind), at = f.toBoard(X, Y), o = h && f.lay.get(h.pattern), mate = mating;
+      const place = h?.kind === 'piece' && spot ? { at: { pattern: h.pattern, u: r2(at.x - o.dx), v: r2(at.y - o.dy) } } : h?.kind === 'edge' ? (spot ? { at: { pattern: h.pattern, segment: h.id, t: Math.round(h.t * 1e4) / 1e4, inset: 10 } } : { along: [{ pattern: h.pattern, segment: h.id }] }) : null;
+      if (!place) { say(spot ? 'click inside a piece or on an edge' : 'click the edge it runs along', true); return; }
+      mating = null;
+      if (mate) { edit((doc0) => setMate(doc0, mate, place), `${mate} closes onto its other side`); return; }
+      edit((doc0) => { const next = addTrim(doc0, trimKind, place); if (MATED.includes(trimKind)) mating = next.trims.at(-1).id; return next; }, `${trimKind} placed${MATED.includes(trimKind) ? ' · now its other side, or Esc for one side only' : ''}`);
       return;
     }
     if (!h) return;
@@ -386,14 +402,14 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
   canvas.ondblclick = () => { if (tool === 'move') { view = { k: 1, x: 0, y: 0 }; draw(); } };
   function key(e) {
     if (canvas.hidden || e.target.matches?.('input,select,textarea')) return false;
-    if (e.key === 'Escape') { pen = []; pick = null; drag = null; say(''); draw(); return true; }
+    if (e.key === 'Escape') { pen = []; pick = null; drag = null; mating = null; say(''); draw(); return true; }
     if (e.key === 'Enter' && tool === 'pen' && pen.length >= 3) { const pts = pen; pen = []; edit((d) => addPiece(d, origin(pts)), 'piece added'); return true; }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && undo.length) { const back = undo.pop(); commit(back).then(() => say('undone')).catch((err) => say(err.message, true)).finally(draw); return true; }
     return false;
   }
   return {
     draw, key, edit,
-    setTool(t) { if (!TOOLS.includes(t)) return; tool = t; pen = []; pick = null; hover = null; say(''); draw(); },
+    setTool(t) { if (!TOOLS.includes(t)) return; tool = t; pen = []; pick = null; hover = null; mating = null; say(''); draw(); },
     get tool() { return tool; },
     setSize(v) { size = v || null; draw(); },
     setTrimKind(v) { trimKind = v; },

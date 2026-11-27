@@ -2,8 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SoftgoodsDocument, validateSoftgoodsDocument } from '../src/core/softgoods-document.js';
-import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS, setPiece, addSize, removeSize, gradePoint, graded, setMaterial, TRIM_KINDS, addTrim, removeTrim, REGIONS } from '../web/softgoods-draft.js';
-import { TRIM_KINDS as CORE_TRIMS } from '../src/core/softgoods-trims.js';
+import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS, setPiece, addSize, removeSize, gradePoint, graded, setMaterial, TRIM_KINDS, addTrim, removeTrim, REGIONS, setMate, SEAM_KINDS, setSeam } from '../web/softgoods-draft.js';
+import { TRIM_KINDS as CORE_TRIMS, SEAM_KINDS as CORE_SEAMS } from '../src/core/softgoods-trims.js';
 import { editSoftgoods } from '../src/core/softgoods-edit.js';
 
 const two = () => { const d = new SoftgoodsDocument(null); d.addRectangle({ id: 'front', width: 200, height: 100 }); d.addRectangle({ id: 'back', width: 200, height: 100 }); return d.toJSON(); };
@@ -113,4 +113,14 @@ test('drafting: a piece is placed on an avatar region or a body side, keeps its 
   assert.deepEqual(setPiece(d, 'front', { place: 'lid:top' }).patterns[0].placement, { body: 'lid', side: 'top', layer: 1 });
   assert.equal(v(setPiece(d, 'front', { place: '' })).patterns[0].placement, undefined);
   assert.throws(() => setPiece(two(), 'front', { layer: 2 }), /Place the piece first/); assert.ok(REGIONS.includes('right-leg'));
+});
+
+test('drafting: a closure takes its other side, and a seam its construction and direction', () => {
+  let d = addTrim(two(), 'zipper', { along: [{ pattern: 'front', segment: 'front_right' }] });
+  d = ok(setMate(d, 'zipper_1', { along: [{ pattern: 'back', segment: 'back_left' }] })); assert.deepEqual(d.trims[0].mate, [{ pattern: 'back', segment: 'back_left' }]);
+  d = ok(setMate(addTrim(d, 'snap', { at: { pattern: 'front', u: 50, v: 50 } }), 'snap_1', { at: { pattern: 'back', u: 50, v: 50 } })); assert.deepEqual(d.trims[1].mate, { pattern: 'back', u: 50, v: 50 });
+  assert.throws(() => setMate(d, 'zipper_1', { at: { pattern: 'back', u: 1, v: 1 } }), /runs along an edge/);
+  assert.deepEqual(SEAM_KINDS, Object.keys(CORE_SEAMS));
+  const s = sewEdges(two(), { pattern: 'front', segment: 'front_right' }, { pattern: 'back', segment: 'back_left' });
+  assert.deepEqual(ok(setSeam(s, 'seam_1', { kind: 'french', flip: false })).seams.map((v) => [v.kind, v.flip]), [['french', false]]);
 });
