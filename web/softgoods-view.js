@@ -7,6 +7,7 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { attachOrbitInput } from './orbitinput.js';
 import { meshField } from './softgoods-sdf.js';
+import { startOn } from './softgoods-start.js';
 
 // ---- colours, shared with the page's schedules, its legend and its painter's view (all sRGB, 0..1)
 
@@ -44,6 +45,7 @@ export function cutLine(q, f0, f1) {
 /** Where a pattern point (u, v mm) starts in 3D from its arrangement row: the solver's own transform (web/softgoods-worker.js), wrap included,
  *  so what the page places by itself lies where the first frame will put it. test/softgoods-view.test.js holds the two together. */
 export function placeOnRow(u, v, a = {}) {
+  if (a.start) return startOn(a.start, u, v);
   const [rx, ry, rz] = (a.rotation || [0, 0, 0]).map((x) => x * Math.PI / 180), p = a.position || [0, 0, 0]; let x = u, y = v * Math.cos(rx), z = v * Math.sin(rx);
   if (a.wrap) { const t = (u - a.wrap.centre) / a.wrap.radius, w = a.wrap.radius * (Math.cos(t) - 1); x = a.wrap.centre + a.wrap.radius * Math.sin(t); y -= w * Math.sin(rx); z += w * Math.cos(rx); }
   [x, z] = [x * Math.cos(ry) + z * Math.sin(ry), -x * Math.sin(ry) + z * Math.cos(ry)]; [x, y] = [x * Math.cos(rz) - y * Math.sin(rz), x * Math.sin(rz) + y * Math.cos(rz)]; return [p[0] + x, p[1] + y, p[2] + z];

@@ -6,6 +6,7 @@
 // Units: mm, g, s. A force is g·mm/s² (1e-6 N), so a pressure is g/(mm·s²), which is the pascal.
 
 import { meshField } from './softgoods-sdf.js';
+import { startOn } from './softgoods-start.js';
 
 let state = null, timer = null;
 const V = (a, i) => [a[i * 3], a[i * 3 + 1], a[i * 3 + 2]];
@@ -13,7 +14,8 @@ const set = (a, i, p) => { a[i * 3] = p[0]; a[i * 3 + 1] = p[1]; a[i * 3 + 2] = 
 // An arrangement turns a flat piece about x, then y, then z (degrees) and moves it: [90,0,0] stands it up facing -y.
 // src/core/softgoods-arrange.js centres pieces with the same convention.
 // wrap {radius, centre} first bends the flat piece into a tube about a line parallel to its v axis, `radius` behind its face at u = centre: a sleeve round an arm.
-const transform = (u, v, a = {}) => { const [rx, ry, rz] = (a.rotation || [0, 0, 0]).map((x) => x * Math.PI / 180), p = a.position || [0, 0, 0]; let x = u, y = v * Math.cos(rx), z = v * Math.sin(rx); if (a.wrap) { const t = (u - a.wrap.centre) / a.wrap.radius, w = a.wrap.radius * (Math.cos(t) - 1); x = a.wrap.centre + a.wrap.radius * Math.sin(t); y -= w * Math.sin(rx); z += w * Math.cos(rx); } [x, z] = [x * Math.cos(ry) + z * Math.sin(ry), -x * Math.sin(ry) + z * Math.cos(ry)]; [x, y] = [x * Math.cos(rz) - y * Math.sin(rz), x * Math.sin(rz) + y * Math.cos(rz)]; return [p[0] + x, p[1] + y, p[2] + z]; };
+// start {uv, xyz, triangles} (a flattened piece no wrap fits: a cone, a dome) puts each point where its flatten mesh came from.
+const transform = (u, v, a = {}) => { if (a.start) return startOn(a.start, u, v); const [rx, ry, rz] = (a.rotation || [0, 0, 0]).map((x) => x * Math.PI / 180), p = a.position || [0, 0, 0]; let x = u, y = v * Math.cos(rx), z = v * Math.sin(rx); if (a.wrap) { const t = (u - a.wrap.centre) / a.wrap.radius, w = a.wrap.radius * (Math.cos(t) - 1); x = a.wrap.centre + a.wrap.radius * Math.sin(t); y -= w * Math.sin(rx); z += w * Math.cos(rx); } [x, z] = [x * Math.cos(ry) + z * Math.sin(ry), -x * Math.sin(ry) + z * Math.cos(ry)]; [x, y] = [x * Math.cos(rz) - y * Math.sin(rz), x * Math.sin(rz) + y * Math.cos(rz)]; return [p[0] + x, p[1] + y, p[2] + z]; };
 
 const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 // Elastic. The cloth beside an elastic gathers in folds finer than the mesh, so within GATHER_DEPTH of the line it may shorten

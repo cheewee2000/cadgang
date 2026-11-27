@@ -546,6 +546,8 @@ function settle(piece) {
   // cover through it. Where a wrap starts it back on its patch it starts wrapped.
   const wrapped = wrapOn(piece);
   if (wrapped) Object.assign(piece, wrapped);
+  // No wrap fits a cone or a dome: it starts on its patch, each point where its own flatten mesh came from.
+  else if (offPatch(piece, piece) > WRAP_FIT) piece.start = { uv: Array.from(piece.flat.uv, r4), xyz: Array.from(piece.patch.P, r4), triangles: Array.from(piece.patch.tri) };
 }
 
 /** R = Rz·Ry·Rx (degrees about x, then y, then z: what the arrangement and the cloth preview use), columns e1 e2 e3. */
@@ -563,13 +565,13 @@ const WRAP_FIT = 0.5;
  * transform, startPoint in softgoods-bodies.js), so it fits a patch that is part of a round cylinder whose rulings are the
  * piece's v axis and whose outside is the piece's face: the side of a can or a sleeve. The axis is the patch's ∂xyz/∂v, the
  * circle a least-squares fit to the vertices seen along it, and the row is taken only if it puts every vertex within
- * WRAP_FIT of where it came from. Anything else keeps the tangent row: a cone frustum (its rulings fan out, so no line
+ * WRAP_FIT of where it came from. Anything else that is curved starts from its own mesh instead (settle): a cone frustum (its rulings fan out, so no line
  * parallel to v is its axis; a wrap at its mean radius starts its rims r1 - r0 / 2 off), a doubly curved piece, a piece
  * whose face is the inside of a tube (a wrap bends one way only), a flat piece.
  */
 function wrapOn(piece) {
   const { patch, flat } = piece, uv = flat.uv, P = patch.P, n = patch.gv.length, tri = patch.tri;
-  const off = (row) => { let worst = 0; for (let i = 0; i < n; i++) { const p = startPoint([uv[2 * i], uv[2 * i + 1]], row); worst = Math.max(worst, Math.hypot(p[0] - P[3 * i], p[1] - P[3 * i + 1], p[2] - P[3 * i + 2])); } return worst; };
+  const off = (row) => offPatch(piece, row);
   if (off(piece) <= WRAP_FIT) return null;   // it lies on its patch already
   const a = [0, 0, 0]; let area = 0;
   for (let t = 0; t < tri.length; t += 3) {
@@ -593,6 +595,12 @@ function wrapOn(piece) {
   let s0 = 0; for (let i = 0; i < n; i++) s0 += (P[3 * i] * ax[0] + P[3 * i + 1] * ax[1] + P[3 * i + 2] * ax[2] - uv[2 * i + 1]) / n;
   const row = { position: [0, 1, 2].map((k) => r4(b1[k] * (m[0] + cx) + b2[k] * (m[1] + cy) + R * out[k] + ax[k] * s0 - e1[k] * centre)), rotation: euler(e1, ax, e3), wrap: { radius: r4(R), centre: r4(centre) } };
   return off(row) <= WRAP_FIT ? row : null;
+}
+/** The farthest (mm) the row starts a vertex of the piece's patch from where it came from. */
+function offPatch(piece, row) {
+  const uv = piece.flat.uv, P = piece.patch.P; let worst = 0;
+  for (let i = 0; i < piece.patch.gv.length; i++) { const p = startPoint([uv[2 * i], uv[2 * i + 1]], row); worst = Math.max(worst, Math.hypot(p[0] - P[3 * i], p[1] - P[3 * i + 1], p[2] - P[3 * i + 2])); }
+  return worst;
 }
 const dot = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2], cross = (p, q) => [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]];
 const unitOf = (v) => { const l = Math.hypot(...v) || 1; return v.map((x) => x / l); };
@@ -805,7 +813,7 @@ export function flattenMesh(mesh, options = {}) {
       pattern.notches.push({ segment: run.id, at: r4(Math.max(0, Math.min(1, place))), kind: 'match' });
     }
   }
-  const arrangement = pieces.map((p) => ({ pattern: p.id, position: p.position, rotation: p.rotation, ...(p.wrap && { wrap: p.wrap }), layer: 0, source: 'flatten' }));
+  const arrangement = pieces.map((p) => ({ pattern: p.id, position: p.position, rotation: p.rotation, ...(p.wrap && { wrap: p.wrap }), ...(p.start && { start: p.start }), layer: 0, source: 'flatten' }));
   const meshes = pieces.map((p) => ({ id: p.id, uv: p.flat.uv, xyz: p.patch.P, triangles: p.patch.tri, stretch: p.flat.stretch }));
   // Every cut names the seams that close it again: a cut up a tube is where a zipper goes (a trim along that seam's two sides).
   const closing = (keys) => { const on = new Set(keys); return chains.filter((c) => c.seam && c.edges.some((e) => on.has(e.key))).map((c) => c.seam); };
