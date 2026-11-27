@@ -2,7 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SoftgoodsDocument, validateSoftgoodsDocument } from '../src/core/softgoods-document.js';
-import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS, setPiece, addSize, removeSize, gradePoint, graded, setMaterial } from '../web/softgoods-draft.js';
+import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS, setPiece, addSize, removeSize, gradePoint, graded, setMaterial, TRIM_KINDS, addTrim, removeTrim } from '../web/softgoods-draft.js';
+import { TRIM_KINDS as CORE_TRIMS } from '../src/core/softgoods-trims.js';
 import { editSoftgoods } from '../src/core/softgoods-edit.js';
 
 const two = () => { const d = new SoftgoodsDocument(null); d.addRectangle({ id: 'front', width: 200, height: 100 }); d.addRectangle({ id: 'back', width: 200, height: 100 }); return d.toJSON(); };
@@ -95,4 +96,12 @@ test('drafting: a fabric starts from a preset, its own numbers go over it, a bla
   assert.throws(() => setMaterial(d, 'shell', { friction: 2 }), /between 0 and 1/); assert.throws(() => setMaterial(d, 'shell', { color: 'red' }), /#rrggbb/);
   assert.throws(() => validateSoftgoodsDocument(setMaterial(d, 'shell', { preset: 'silk' })), /not in the fabric library/);
   assert.equal(ok(setMaterial(d, 'shell', { rollWidth: '1400' })).materials.shell.rollWidth, 1400);
+});
+
+test('drafting: TRIM places the core\'s kinds, a spot on a piece or an edge and a length along one, and takes them away', () => {
+  for (const [place, kinds] of Object.entries(TRIM_KINDS)) assert.deepEqual(kinds.sort(), Object.keys(CORE_TRIMS).filter((k) => CORE_TRIMS[k].place === place).sort());
+  let d = ok(addTrim(two(), 'snap', { at: { pattern: 'front', u: 50, v: 50 } })); d = ok(addTrim(d, 'snap', { at: { pattern: 'front', segment: 'front_top', t: 0.5, inset: 10 } }));
+  d = ok(addTrim(d, 'zipper', { along: [{ pattern: 'front', segment: 'front_right' }] }));
+  assert.deepEqual(d.trims.map((t) => t.id), ['snap_1', 'snap_2', 'zipper_1']);
+  assert.deepEqual(ok(removeTrim(d, 'snap_1')).trims.map((t) => t.id), ['snap_2', 'zipper_1']);
 });

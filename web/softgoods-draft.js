@@ -164,6 +164,14 @@ export function setPiece(d, pid, { name, material, cut, grain } = {}) {
 }
 
 // A material's fields as the fabric panel edits them: [key, label]. tensile.warp and tensile.weft are the nested tensile.
+/** The trim kinds TRIM places, as src/core/softgoods-trims.js TRIM_KINDS has them: a spot, or a length along an edge. */
+export const TRIM_KINDS = { point: ['snap', 'button', 'rivet', 'eyelet', 'grommet', 'label', 'd-ring', 'buckle'], length: ['zipper', 'hook-and-loop', 'binding', 'piping', 'elastic', 'drawcord', 'topstitch', 'webbing'] };
+/** A trim of `kind` at a spot (`at`: { pattern, u, v } or { pattern, segment, t, inset }) or along edges (`along`), named kind_n. */
+export function addTrim(d, kind, place) {
+  d = clone(d); const ids = new Set((d.trims || []).map((t) => t.id)); let n = 1; while (ids.has(`${kind}_${n}`)) n++;
+  (d.trims ||= []).push({ id: `${kind}_${n}`, kind, ...place }); return d;
+}
+export const removeTrim = (d, id) => ({ ...clone(d), trims: (d.trims || []).filter((t) => t.id !== id) });
 export const FABRIC_FIELDS = [['arealDensity', 'WEIGHT g/m²'], ['thickness', 'THICK mm'], ['rigidity', 'BEND N·mm'], ['tensile.warp', 'WARP N/mm'], ['tensile.weft', 'WEFT N/mm'], ['shearRigidity', 'SHEAR N/mm'], ['friction', 'FRICTION 0-1'], ['pricePerMeter', 'PRICE /m'], ['rollWidth', 'ROLL mm']];
 
 /** Set a material's fields: preset (a library id, '' for none), color (#rrggbb) or a FABRIC_FIELDS number ('' leaves it to the preset). */
@@ -208,17 +216,17 @@ export function graded(p, g) {
 // A piece drawn on the board keeps its shape but starts at its own origin: its lowest, leftmost corner at 0, 0.
 const origin = (pts) => { const x0 = Math.min(...pts.map((q) => q.x)), y0 = Math.min(...pts.map((q) => q.y)); return pts.map((q) => ({ x: q.x - x0, y: q.y - y0 })); };
 
-const TOOLS = ['move', 'pen', 'point', 'curve', 'seam', 'delete', 'dart', 'pleat', 'cut', 'line', 'notch', 'allowance', 'mirror', 'grade'];
+const TOOLS = ['move', 'pen', 'point', 'curve', 'seam', 'delete', 'dart', 'pleat', 'cut', 'line', 'notch', 'allowance', 'mirror', 'grade', 'trim'];
 // The numbers a tool takes from the board's two fields: [label, default] each.
 export const AMOUNTS = { dart: [['width mm', 20], ['length mm', 80]], pleat: [['intake mm', 30]], allowance: [['allowance mm', 10]] };
-const HELP = { move: 'drag a point or a handle · drag the board to pan', pen: 'click the corners of a new piece · click the first one or press Enter to close · Esc cancels', point: 'click an edge to put a point on it', curve: 'click a straight edge to bend it (then drag its handles), a curved one to straighten it', seam: 'click an edge, then the edge it is sewn to', delete: 'click a point, a seam or inside a piece to delete it', dart: 'click an edge where the dart goes: width and length from the fields', pleat: 'click an edge where the pleat goes: intake from the field', cut: 'click two places on a piece\'s edge: it is cut in two along the line and the cut is sewn', line: 'click two places inside a piece for a stitch or placement line', notch: 'click an edge to notch it there', allowance: 'click an edge to give it the allowance in the field', mirror: 'click an edge: the piece is mirrored across it, the other hand', grade: 'drag a point to where it is in the size chosen; every size is drawn over the base' };
+const HELP = { trim: 'a spot trim: click inside a piece or on an edge (10 mm in) · a length trim: click the edge it runs along', move: 'drag a point or a handle · drag the board to pan', pen: 'click the corners of a new piece · click the first one or press Enter to close · Esc cancels', point: 'click an edge to put a point on it', curve: 'click a straight edge to bend it (then drag its handles), a curved one to straighten it', seam: 'click an edge, then the edge it is sewn to', delete: 'click a point, a seam or inside a piece to delete it', dart: 'click an edge where the dart goes: width and length from the fields', pleat: 'click an edge where the pleat goes: intake from the field', cut: 'click two places on a piece\'s edge: it is cut in two along the line and the cut is sewn', line: 'click two places inside a piece for a stitch or placement line', notch: 'click an edge to notch it there', allowance: 'click an edge to give it the allowance in the field', mirror: 'click an edge: the piece is mirrored across it, the other hand', grade: 'drag a point to where it is in the size chosen; every size is drawn over the base' };
 
 /**
  * The drafting board on `canvas`. getDoc() is the page's document; commit(next) PUTs it and resolves to the saved document
  * (or throws with the server's reason); say(text, bad) writes the page's status line.
  */
-export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = () => [], say, onSelect = () => {} }) {
-  let tool = 'move', size = null, view = { k: 1, x: 0, y: 0 }, drag = null, pen = [], pick = null, hover = null, local = null, undo = [], busy = false;
+export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = () => [], say, onSelect = () => {}, marks = () => null }) {
+  let tool = 'move', size = null, trimKind = 'snap', view = { k: 1, x: 0, y: 0 }, drag = null, pen = [], pick = null, hover = null, local = null, undo = [], busy = false;
   const doc = () => local || getDoc();
   const frame = () => {
     // Laid out and fitted from the saved document, drawn from the edit in hand: a dragged point never rescales the board under the pointer.
@@ -279,6 +287,8 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
       for (const q of p.points) { const [X, Y] = f.toScreen(p.id, q), hot = is(hover, 'point', p.id, q.id); x.fillStyle = hot ? '#e35a1e' : handles.has(q.id) ? '#fff' : '#000'; x.strokeStyle = hot ? '#e35a1e' : '#000'; x.lineWidth = 1; if (handles.has(q.id)) { x.beginPath(); x.arc(X, Y, 3.5, 0, 2 * Math.PI); x.fill(); x.stroke(); } else x.fillRect(X - 3, Y - 3, 6, 6); }
       const o = f.lay.get(p.id) || { lo: [0, 0], hi: [0, 0] }, [LX, LY] = f.toScreen(p.id, { x: o.lo[0], y: o.hi[1] }); x.fillStyle = is(hover, 'piece', p.id, p.id) ? '#e35a1e' : '#000'; x.fillText(p.name || p.id, LX, LY - 8, Math.max(20, (o.hi[0] - o.lo[0] + 30) * f.k));
     }
+    // Trims as the tech pack marks them (the page's GET /trim-marks), violet.
+    for (const [pid, list] of Object.entries(marks() || {})) for (const t of list) { for (const l of t.lines) line(pid, [{ x: l.a[0], y: l.a[1] }, { x: l.b[0], y: l.b[1] }], { color: '#6b2bd9', width: 2 }); for (const q of t.drills || []) { const [X, Y] = f.toScreen(pid, { x: q.at[0], y: q.at[1] }); x.fillStyle = '#6b2bd9'; x.fillRect(X - 3, Y - 3, 6, 6); } }
     if (pick?.kind === 'spot') { const [X, Y] = f.toScreen(pick.pattern, { x: pick.q[0], y: pick.q[1] }); x.fillStyle = '#e35a1e'; x.fillRect(X - 3, Y - 3, 6, 6); }
     if (pen.length) { x.strokeStyle = '#e35a1e'; x.lineWidth = 1.5; x.beginPath(); pen.forEach((q, i) => { const [X, Y] = f.toScreen(null, q); i ? x.lineTo(X, Y) : x.moveTo(X, Y); }); if (drag?.at) x.lineTo(drag.at[0], drag.at[1]); x.stroke(); for (const q of pen) { const [X, Y] = f.toScreen(null, q); x.fillStyle = '#e35a1e'; x.fillRect(X - 3, Y - 3, 6, 6); } }
     // Scale bar: the longest of 1, 2 or 5 × a power of ten under 90 px.
@@ -304,6 +314,13 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
       const o = f.lay.get(inside), q = [r2(at.x - o.dx), r2(at.y - o.dy)];
       if (!pick || pick.pattern !== inside) { pick = { kind: 'spot', pattern: inside, q }; say('now the other end'); draw(); return; }
       const a = pick.q; pick = null; op({ op: 'internalLine', pattern: inside, a, b: q }, 'line drawn'); return;
+    }
+    if (tool === 'trim') {
+      const spot = TRIM_KINDS.point.includes(trimKind), at = f.toBoard(X, Y);
+      if (h?.kind === 'piece' && spot) { const o = f.lay.get(h.pattern); edit((doc0) => addTrim(doc0, trimKind, { at: { pattern: h.pattern, u: r2(at.x - o.dx), v: r2(at.y - o.dy) } }), `${trimKind} placed`); }
+      else if (h?.kind === 'edge') edit((doc0) => addTrim(doc0, trimKind, spot ? { at: { pattern: h.pattern, segment: h.id, t: Math.round(h.t * 1e4) / 1e4, inset: 10 } } : { along: [{ pattern: h.pattern, segment: h.id }] }), `${trimKind} placed`);
+      else say(spot ? 'click inside a piece or on an edge' : 'click the edge it runs along', true);
+      return;
     }
     if (!h) return;
     if (h.kind === 'edge') {
@@ -371,6 +388,7 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
     setTool(t) { if (!TOOLS.includes(t)) return; tool = t; pen = []; pick = null; hover = null; say(''); draw(); },
     get tool() { return tool; },
     setSize(v) { size = v || null; draw(); },
+    setTrimKind(v) { trimKind = v; },
     get amounts() { return AMOUNTS[tool] || []; },
   };
 }
