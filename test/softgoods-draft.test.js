@@ -124,3 +124,9 @@ test('drafting: a closure takes its other side, and a seam its construction and 
   const s = sewEdges(two(), { pattern: 'front', segment: 'front_right' }, { pattern: 'back', segment: 'back_left' });
   assert.deepEqual(ok(setSeam(s, 'seam_1', { kind: 'french', flip: false })).seams.map((v) => [v.kind, v.flip]), [['french', false]]);
 });
+
+test('drafting: an elastic along an edge gathers by its ratio, and goes with its trim', () => {
+  let d = ok(addTrim(two(), 'elastic', { along: [{ pattern: 'front', segment: 'front_top' }] }, { ratio: 0.7 }));
+  assert.deepEqual(d.elastics, [{ id: 'elastic_1', pattern: 'front', segment: 'front_top', ratio: 0.7 }]); assert.equal(d.trims[0].elastic, 'elastic_1');
+  assert.deepEqual(ok(removeTrim(d, 'elastic_1')).elastics, []); assert.throws(() => addTrim(two(), 'elastic', { along: [{ pattern: 'front', segment: 'front_top' }] }, { ratio: 2 }), /ratio/);
+});
