@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SoftgoodsDocument, validateSoftgoodsDocument } from '../src/core/softgoods-document.js';
-import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS } from '../web/softgoods-draft.js';
+import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS, setPiece } from '../web/softgoods-draft.js';
 import { editSoftgoods } from '../src/core/softgoods-edit.js';
 
 const two = () => { const d = new SoftgoodsDocument(null); d.addRectangle({ id: 'front', width: 200, height: 100 }); d.addRectangle({ id: 'back', width: 200, height: 100 }); return d.toJSON(); };
@@ -70,4 +70,10 @@ test('drafting: notches and allowances are set on the board; the server operatio
   assert.deepEqual(editSoftgoods(two(), { op: 'split', pattern: 'front', from: { segment: 'front_top', at: 0.5 }, to: { segment: 'front_bottom', at: 0.5 } }).patterns.map((p) => p.id).sort(), ['back', 'front_a', 'front_b']);
   assert.equal(piece(editSoftgoods(two(), { op: 'internalLine', pattern: 'front', a: [20, 20], b: [120, 20] }), 'front').internalLines.length, 1);
   assert.equal(editSoftgoods(two(), { op: 'mirror', pattern: 'front', segment: 'front_right' }).patterns.length, 3);
+});
+
+test('drafting: a piece\'s name, material, cut count and grain are set in place, and nonsense is refused', () => {
+  const d = ok(setPiece(two(), 'front', { name: 'Front panel', material: 'denim', cut: '2', grain: '45' })), p = piece(d, 'front');
+  assert.deepEqual([p.name, p.material, p.cut, p.grain.angle], ['Front panel', 'denim', 2, 45]);
+  assert.throws(() => setPiece(two(), 'front', { cut: 0 }), /whole number/); assert.throws(() => setPiece(two(), 'front', { name: ' ' }), /needs a name/);
 });
