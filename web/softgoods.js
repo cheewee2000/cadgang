@@ -2,7 +2,7 @@ import { createClothView, strainRGB, pressureRGB, css, materialCss, seamCss, sea
 import { createDraftBoard, sample, setPiece, addSize, removeSize, setMaterial, FABRIC_FIELDS } from './softgoods-draft.js';
 const $=(s)=>document.querySelector(s),API='/api/softgoods',esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
 async function api(path,{method='GET',body}={}){const r=await fetch(API+path,{method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`HTTP ${r.status}`);return d}
-let fabrics={},drafting=false,doc=null,check=null,cut=null,trims=null,marks=null,selectedTrim=null,yaw=-.45,pitch=.18,dist=1,drag=null,frame=null,loading=false,running=false,mapMode='off',selectedPattern=null,view2d={k:1,x:0,y:0};
+let fabrics={},avatarOptions=null,drafting=false,doc=null,check=null,cut=null,trims=null,marks=null,selectedTrim=null,yaw=-.45,pitch=.18,dist=1,drag=null,frame=null,loading=false,running=false,mapMode='off',selectedPattern=null,view2d={k:1,x:0,y:0};
 // The camera follows the viewer's Trackpad / Mouse choice, read on every scroll so a change made in another tab is followed.
 const scheme=()=>{try{return JSON.parse(localStorage.getItem('cadgang-view'))?.scroll==='mouse'?'mouse':'trackpad'}catch{return'trackpad'}};
 const seamColour=id=>seamCss(doc?.seams.findIndex(s=>s.id===id)??0);
@@ -80,7 +80,7 @@ const trimPattern=t=>t.geometry?.pattern||t.geometry?.positions?.[0]?.pattern;
 function renderTrims(){const list=trims?.trims||[],el=$('#trims');el.hidden=!list.length;el.innerHTML='<b>TRIMS</b>'+list.map(t=>{const g=t.geometry||{},spec=Object.entries(t.spec||{}).map(([k,v])=>`${k} ${Array.isArray(v)?v.join('/'):v}`).join(', ');return`<button class="item pattern-item ${t.id===selectedTrim?'selected':''}" data-trim="${esc(t.id)}"><b>${esc(t.name||t.id)} · ${esc(t.kind)}</b><small>${esc(spec||'no spec')} · ${g.cutLengthMm!=null?`${g.cutLengthMm} mm`:`qty ${g.count??1}`}${g.cutLengthMm!=null&&g.count>1?` × ${g.count}`:''}</small></button>`}).join('');el.querySelectorAll('[data-trim]').forEach(b=>b.onclick=()=>{const t=list.find(q=>q.id===b.dataset.trim);select(trimPattern(t)||selectedPattern,t.id===selectedTrim?null:t.id)})}
 // What the pattern maker checks before cutting: every named measurement against its target and both sides of every seam, at each size.
 function renderCheck(){const el=$('#check');if(!check){el.innerHTML='';return}const rows=z=>z.constraints.map(c=>`<div class="item ${c.withinTolerance?'':'bad'}"><b>${esc(c.name||c.id)}</b><small>${c.measured} mm · target ${c.target} mm${c.withinTolerance?'':` · out by ${c.delta} mm`}</small></div>`).join('')+z.seams.filter(q=>!q.ok).map(q=>`<div class="item bad"><b>${esc(q.id)}</b><small>sides ${q.lengthA} / ${q.lengthB} mm · ${(q.mismatch*100).toFixed(1)}% apart</small></div>`).join('');el.innerHTML=`<b>CHECK · ${check.ok?'OK':'NEEDS WORK'}</b>`+rows(check)+(check.physics||[]).map(q=>`<div class="item ${q.ok?'':'bad'}"><b>${esc(q.id)} · ${esc(q.kind)}</b><small>${esc(q.note)}</small></div>`).join('')+check.sizes.map(z=>`<div class="item ${z.ok?'':'bad'}"><b>SIZE ${esc(z.size)} · ${z.ok?'OK':'NEEDS WORK'}</b></div>`+(z.ok?'':rows(z))).join('')}
-function render(){renderText();render2d();render3d()}
+function render(){renderText();renderAvatar();render2d();render3d()}
 const c=$('#arrangeCanvas');c.onpointerdown=e=>{drag={x:e.clientX,y:e.clientY};c.setPointerCapture(e.pointerId)};c.onpointermove=e=>{if(!drag)return;yaw+=(e.clientX-drag.x)*.006;pitch=Math.max(-1.4,Math.min(1.4,pitch+(e.clientY-drag.y)*.006));drag={x:e.clientX,y:e.clientY};render3d()};c.onpointerup=()=>drag=null;c.onwheel=e=>{e.preventDefault();dist=Math.max(.2,Math.min(5,dist*Math.exp(e.deltaY*.001)));render3d()};
 // The 3D view's buttons: five views, fit (also F) and the mesh.
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>view?.look(b.dataset.view));$('#fit').onclick=()=>view?.fit();$('#wire').onclick=()=>view?.setWire($('#wire').classList.toggle('on'));
@@ -118,7 +118,7 @@ $('#newSize').onkeydown=e=>{if(e.key!=='Enter')return;const v=e.target.value.tri
 $('#dropSize').onclick=()=>{const v=$('#size').value;if(v)board.edit(d=>removeSize(d,v),`size ${v} deleted`)};
 document.querySelectorAll('[data-tool]').forEach(b=>b.onclick=()=>tool(b.dataset.tool));$('#undo').onclick=()=>board.key({key:'z',metaKey:true,target:document.body});
 $('#draft').onclick=async()=>{drafting=!drafting;$('#draft').classList.toggle('on',drafting);$('#review').classList.toggle('drafting',drafting);$('#draftCanvas').hidden=!drafting;$('#tools').hidden=!drafting;$('#paneTitle').textContent=drafting?'PATTERN DRAFTING':'3D ARRANGEMENT REVIEW';
-renderProps();if(drafting){running=false;worker.postMessage({type:'pause'});$('#simulate').textContent='SIMULATE';$('#simulate').classList.remove('on');tool(board.tool);board.draw()}else{say('');await refresh()}};
+renderProps();renderAvatar();if(drafting){running=false;worker.postMessage({type:'pause'});$('#simulate').textContent='SIMULATE';$('#simulate').classList.remove('on');tool(board.tool);board.draw()}else{say('');await refresh()}};
 addEventListener('keydown',e=>{if(drafting&&board.key(e))e.preventDefault()});addEventListener('resize',()=>{if(drafting)board.draw()});
 
 // While drafting, the selected piece's properties are edited in place under the schedule: name, material, cut count, grain.
@@ -132,3 +132,12 @@ el.insertAdjacentHTML('beforeend',`<b class="sub">${esc(mid)} · FABRIC</b><labe
 el.querySelectorAll('[data-m]').forEach(i=>i.onchange=()=>board.edit(d=>setMaterial(d,mid,{[i.dataset.m]:i.value}),`${mid}: ${i.dataset.m} ${i.value||'from the preset'}`));
 $('#newMaterial').onkeydown=e=>{const v=e.target.value.trim();if(e.key==='Enter'&&v)board.edit(d=>setPiece(setMaterial(d,v,{}),p.id,{material:v}),`${p.id} is now ${v}`)}}
 api('/fabrics').then(f=>{fabrics=f;renderProps()}).catch(()=>{});
+
+// AVATAR: the body the cloth is draped on. A size or pose starts it again from that size's measurements; a measurement edited goes over them.
+// Each change is the server's /arrange/avatar, which lays the pieces on the new body; the page refreshes when it is saved.
+function renderAvatar(){const AVATAR_FIELDS=[['height','HEIGHT'],['chest','CHEST'],['waist','WAIST'],['hip','HIP'],['shoulders','SHOULDERS'],['armLength','ARM'],['inseam','INSEAM'],['neck','NECK'],['ease','EASE']];let el=$('#avatar');if(!el){el=document.createElement('div');el.id='avatar';$('#check').after(el)}const a=doc?.simulation?.avatar;el.hidden=!avatarOptions||drafting;if(el.hidden)return;
+const opt=(list,v)=>`<option value="">${a?'custom':'none'}</option>`+list.map(k=>`<option ${k===v?'selected':''}>${esc(k)}</option>`).join('');
+el.innerHTML=`<b>AVATAR${a?'':' · none'}</b><label>SIZE<select data-a="size">${opt(Object.keys(avatarOptions.sizes),a?.size)}</select></label><label>POSE<select data-a="pose">${opt(avatarOptions.poses,a?.pose)}</select></label>`+(a?AVATAR_FIELDS.map(([k,l])=>`<label>${l} mm<input data-a="${k}" type="number" min="0" value="${a[k]??''}"></label>`).join(''):'');
+el.querySelectorAll('[data-a]').forEach(i=>i.onchange=async()=>{const k=i.dataset.a,v=k==='size'||k==='pose'?i.value:Number(i.value),next=k==='size'?{size:v,pose:a?.pose}:{...(a||{}),[k]:v};if(k==='size'&&!v)return;if(!v&&k!=='size')delete next[k];
+try{say('arranging on the avatar…');await api('/arrange/avatar',{method:'POST',body:next});say(`avatar ${k} ${i.value}`)}catch(e){say(e.message,true);renderAvatar()}})}
+api('/avatar').then(o=>{avatarOptions=o;renderAvatar()}).catch(()=>{});
