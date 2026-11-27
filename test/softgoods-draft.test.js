@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SoftgoodsDocument, validateSoftgoodsDocument } from '../src/core/softgoods-document.js';
-import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS, setPiece, addSize, removeSize, gradePoint, graded, setMaterial, TRIM_KINDS, addTrim, removeTrim } from '../web/softgoods-draft.js';
+import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS, setPiece, addSize, removeSize, gradePoint, graded, setMaterial, TRIM_KINDS, addTrim, removeTrim, REGIONS } from '../web/softgoods-draft.js';
 import { TRIM_KINDS as CORE_TRIMS } from '../src/core/softgoods-trims.js';
 import { editSoftgoods } from '../src/core/softgoods-edit.js';
 
@@ -104,4 +104,13 @@ test('drafting: TRIM places the core\'s kinds, a spot on a piece or an edge and 
   d = ok(addTrim(d, 'zipper', { along: [{ pattern: 'front', segment: 'front_right' }] }));
   assert.deepEqual(d.trims.map((t) => t.id), ['snap_1', 'snap_2', 'zipper_1']);
   assert.deepEqual(ok(removeTrim(d, 'snap_1')).trims.map((t) => t.id), ['snap_2', 'zipper_1']);
+});
+
+test('drafting: a piece is placed on an avatar region or a body side, keeps its layer, and goes back flat', () => {
+  const v = (d) => validateSoftgoodsDocument({ ...d, simulation: { avatar: { size: 'M' } } });
+  let d = v(setPiece(two(), 'front', { place: 'front', layer: '1' })); assert.deepEqual(piece(d, 'front').placement, { region: 'front', layer: 1 });
+  d = v(setPiece(d, 'front', { place: 'left-arm' })); assert.deepEqual(piece(d, 'front').placement, { region: 'left-arm', layer: 1 });
+  assert.deepEqual(setPiece(d, 'front', { place: 'lid:top' }).patterns[0].placement, { body: 'lid', side: 'top', layer: 1 });
+  assert.equal(v(setPiece(d, 'front', { place: '' })).patterns[0].placement, undefined);
+  assert.throws(() => setPiece(two(), 'front', { layer: 2 }), /Place the piece first/); assert.ok(REGIONS.includes('right-leg'));
 });

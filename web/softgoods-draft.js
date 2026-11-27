@@ -154,16 +154,23 @@ export function setAllowance(d, pid, sid, mm) {
 }
 
 /** A piece's name, material, cut count (1 or more) and grain angle (degrees), any of them. */
-export function setPiece(d, pid, { name, material, cut, grain } = {}) {
+/** Where a piece starts for the drape: an avatar region, or 'body:side' on one of the design's bodies. */
+export const REGIONS = ['front', 'back', 'left', 'right', 'left-arm', 'right-arm', 'left-leg', 'right-leg'], SIDES = ['front', 'back', 'left', 'right', 'top', 'bottom'];
+export function setPiece(d, pid, { name, material, cut, grain, place, layer } = {}) {
   d = clone(d); const p = pieceOf(d, pid);
   if (name != null) { if (!String(name).trim()) throw new Error('A piece needs a name'); p.name = String(name).trim(); }
   if (material != null) p.material = String(material);
   if (cut != null) { if (!(Number.isInteger(Number(cut)) && Number(cut) >= 1)) throw new Error('Cut is a whole number, 1 or more'); p.cut = Number(cut); }
   if (grain != null) { if (!Number.isFinite(Number(grain))) throw new Error('Grain is an angle in degrees'); p.grain = { ...(p.grain || {}), angle: Number(grain) }; }
+  // A new place keeps the piece's layer, offset and anchor; '' takes the piece off the body (laid flat beside the others).
+  if (place != null) {
+    const { layer: l, offset, anchor } = p.placement || {}, kept = Object.fromEntries(Object.entries({ layer: l, offset, anchor }).filter(([, v]) => v != null)), [body, side] = String(place).split(':');
+    if (!place) delete p.placement; else if (side != null) p.placement = { body, side, ...kept }; else p.placement = { region: place, ...kept };
+  }
+  if (layer != null && layer !== '') { if (!p.placement) throw new Error('Place the piece first'); if (!Number.isFinite(Number(layer))) throw new Error('Layer is a number'); p.placement = { ...p.placement, layer: Number(layer) }; }
   return d;
 }
 
-// A material's fields as the fabric panel edits them: [key, label]. tensile.warp and tensile.weft are the nested tensile.
 /** The trim kinds TRIM places, as src/core/softgoods-trims.js TRIM_KINDS has them: a spot, or a length along an edge. */
 export const TRIM_KINDS = { point: ['snap', 'button', 'rivet', 'eyelet', 'grommet', 'label', 'd-ring', 'buckle'], length: ['zipper', 'hook-and-loop', 'binding', 'piping', 'elastic', 'drawcord', 'topstitch', 'webbing'] };
 /** A trim of `kind` at a spot (`at`: { pattern, u, v } or { pattern, segment, t, inset }) or along edges (`along`), named kind_n. */
@@ -172,6 +179,7 @@ export function addTrim(d, kind, place) {
   (d.trims ||= []).push({ id: `${kind}_${n}`, kind, ...place }); return d;
 }
 export const removeTrim = (d, id) => ({ ...clone(d), trims: (d.trims || []).filter((t) => t.id !== id) });
+// A material's fields as the fabric panel edits them: [key, label]. tensile.warp and tensile.weft are the nested tensile.
 export const FABRIC_FIELDS = [['arealDensity', 'WEIGHT g/m²'], ['thickness', 'THICK mm'], ['rigidity', 'BEND N·mm'], ['tensile.warp', 'WARP N/mm'], ['tensile.weft', 'WEFT N/mm'], ['shearRigidity', 'SHEAR N/mm'], ['friction', 'FRICTION 0-1'], ['pricePerMeter', 'PRICE /m'], ['rollWidth', 'ROLL mm']];
 
 /** Set a material's fields: preset (a library id, '' for none), color (#rrggbb) or a FABRIC_FIELDS number ('' leaves it to the preset). */
