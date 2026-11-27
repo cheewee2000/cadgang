@@ -34,6 +34,8 @@ AXIAL_IDS = tuple(LABEL_ID[n] for n in AXIAL)
 # a pair with several mates takes the first type in this order: the ones that say how the part moves come first
 PRIORITY = ('REVOLUTE', 'CYLINDRICAL', 'SLIDER', 'BALL', 'PLANAR', 'FASTENED')
 N_CH = 5      # per point: x, y, z, contact (within contact_mm of a vertex of the other part), inside the other's bbox + contact_mm
+N_LOCAL = 3  # optional, after those: xyz again in the smaller part's own frame (its bbox centre and diagonal), clipped to +-2
+N_NORMAL = 3 # optional, last: the unit surface normal at the point (zero where the point is a bare mesh vertex)
 N_EXTRA = 4   # per pair: log10(pair diagonal mm), diag A / pair diag, diag B / pair diag, bbox gap / pair diag
 SPLIT_NAMES = ('train', 'val', 'test')
 
@@ -273,20 +275,54 @@ def in_box(p, box, tol):
     return np.all((p >= box[:3] - tol) & (p <= box[3:] + tol), axis=1)
 
 
-def make_pair(va, vb, bbox_a, bbox_b, n_points, contact_mm, rng_a, rng_b, gap=0.0):
+def focus_indices(v, other, n, frac, tol, rng, pool=4096):
+    """n indices into v. frac of them (as many as there are) lie within tol of the other part, the rest are uniform.
+    frac = 0 is sample_indices exactly, so older checkpoints see the points they were trained on."""
+    idx = sample_indices(len(v), n, rng)
+    if frac <= 0:
+        return idx
+    # ponytail: contact is looked for among at most `pool` random vertices, so a huge part costs no more than a small one
+    cand = rng.choice(len(v), size=min(len(v), pool), replace=False)
+    return prefer(idx, cand[near(np.asarray(v[cand], dtype=np.float64), other, tol)], frac, rng)
+
+
+def prefer(idx, hit, frac, rng):
+    """idx with its first frac share replaced by picks from hit (as many as there are)."""
+    k = min(int(round(frac * len(idx))), len(hit))
+    if k:
+        idx[:k] = rng.choice(hit, size=k, replace=False)
+    return idx
+
+
+def make_pair(va, vb, bbox_a, bbox_b, n_points, contact_mm, rng_a, rng_b, gap=0.0, focus=0.0, local=False, normals=False):
     """Model input for one pair from the parts' world vertices (mm): (xa, xb, extra).
     xa, xb: (n_points, N_CH) float32 = xyz centred on the pair's joint bbox and divided by its diagonal, then
-    contact (within contact_mm of a vertex of the other part) and inside-other-bbox (+ contact_mm) flags."""
-    pa = np.asarray(va[sample_indices(len(va), n_points, rng_a)], dtype=np.float64)
-    pb = np.asarray(vb[sample_indices(len(vb), n_points, rng_b)], dtype=np.float64)
+    contact (within contact_mm of a vertex of the other part) and inside-other-bbox (+ contact_mm) flags.
+    focus: share of the points drawn from the contact region. local: N_LOCAL more channels, xyz in the smaller
+    part's frame, so a screw in a large housing is not a dot."""
+    va64, vb64 = np.asarray(va, dtype=np.float64), np.asarray(vb, dtype=np.float64)
+    pa = np.asarray(va[focus_indices(va, vb64, n_points, focus, contact_mm, rng_a)], dtype=np.float64)
+    pb = np.asarray(vb[focus_indices(vb, va64, n_points, focus, contact_mm, rng_b)], dtype=np.float64)
+    zero = np.zeros((n_points, 3)) if normals else None   # a bare vertex has no one normal
+    return pair_channels(pa, pb, near(pa, vb64, contact_mm), near(pb, va64, contact_mm), bbox_a, bbox_b, contact_mm,
+                         gap, local, zero, zero)
+
+
+def pair_channels(pa, pb, ca, cb, bbox_a, bbox_b, contact_mm, gap=0.0, local=False, na=None, nb=None):
+    """(xa, xb, extra) from the chosen points (world mm), their contact flags and, when given, their normals."""
     ba, bb = np.asarray(bbox_a, dtype=np.float64), np.asarray(bbox_b, dtype=np.float64)
     lo, hi = np.minimum(ba[:3], bb[:3]), np.maximum(ba[3:], bb[3:])
     c, d = (lo + hi) / 2, float(np.linalg.norm(hi - lo))
     if not d > 1e-9:
         d = 1.0
-    va64, vb64 = np.asarray(va, dtype=np.float64), np.asarray(vb, dtype=np.float64)
-    xa = np.concatenate([(pa - c) / d, near(pa, vb64, contact_mm)[:, None], in_box(pa, bb, contact_mm)[:, None]], 1)
-    xb = np.concatenate([(pb - c) / d, near(pb, va64, contact_mm)[:, None], in_box(pb, ba, contact_mm)[:, None]], 1)
+    xa = np.concatenate([(pa - c) / d, ca[:, None], in_box(pa, bb, contact_mm)[:, None]], 1)
+    xb = np.concatenate([(pb - c) / d, cb[:, None], in_box(pb, ba, contact_mm)[:, None]], 1)
+    if local:
+        ca, da = (ba[:3] + ba[3:]) / 2, max(bbox_diag(ba), 1e-9)
+        xa = np.concatenate([xa, np.clip((pa - ca) / da, -2, 2)], 1)
+        xb = np.concatenate([xb, np.clip((pb - ca) / da, -2, 2)], 1)
+    if na is not None:
+        xa, xb = np.concatenate([xa, na], 1), np.concatenate([xb, nb], 1)
     extra = np.array([np.log10(max(d, 1e-3)), bbox_diag(ba) / d, bbox_diag(bb) / d, gap / d], dtype=np.float32)
     return xa.astype(np.float32), xb.astype(np.float32), extra
 
@@ -297,13 +333,18 @@ class PairDataset:
     every pair the same way every time."""
 
     def __init__(self, index, dump_dir, n_points=1024, contact_mm=1.0, seed=0, train=False, augment='none',
-                 resample=True, cache_files=16):
+                 resample=True, cache_files=16, focus=0.0, local=False, surface=None, normals=False):
         if augment not in ('none', 'so3', 'z'):
             raise ValueError(f'augment {augment!r}')
         self.index, self.dump = index, Path(dump_dir)
         self.asm_ids = [str(a) for a in index['asm_ids']]
         self.n_points, self.contact_mm, self.seed = n_points, contact_mm, seed
         self.train, self.augment, self.resample = train, augment, resample
+        self.focus, self.local, self.normals = float(focus), bool(local), bool(normals)
+        self.surf = None
+        if surface:   # points on the surfaces with exact contact, where the cache has them; mesh vertices elsewhere
+            from joints.surface import SurfaceCache
+            self.surf = SurfaceCache(surface)
         self._maps, self._cache_files = {}, cache_files
 
     def __len__(self):
@@ -332,11 +373,22 @@ class PairDataset:
         ai = int(I['asm'][row])
         aid = self.asm_ids[ai]
         ep = int(epoch) if (self.train and self.resample) else 'eval'
-        va = self.vertices(ai, I['first_a'][row], I['count_a'][row])
-        vb = self.vertices(ai, I['first_b'][row], I['count_b'][row])
-        xa, xb, extra = make_pair(va, vb, I['bbox_a'][row], I['bbox_b'][row], self.n_points, self.contact_mm,
-                                  rng_for(self.seed, 'pts', aid, int(I['occ_a'][row]), ep),
-                                  rng_for(self.seed, 'pts', aid, int(I['occ_b'][row]), ep), gap=float(I['gap'][row]))
+        rngs = [rng_for(self.seed, 'pts', aid, int(I[c][row]), ep) for c in ('occ_a', 'occ_b')]
+        if self.surf is not None and self.surf.ok[row]:
+            S, pts, flags, nrm = self.surf, [], [], []
+            for s in (0, 1):
+                near_s = np.asarray(S.dist[row, s], dtype=np.float32) <= self.contact_mm
+                i = np.sort(prefer(sample_indices(len(near_s), self.n_points, rngs[s]), np.flatnonzero(near_s), self.focus, rngs[s]))
+                pts.append(np.asarray(S.xyz[row, s][i], dtype=np.float64))
+                flags.append(near_s[i])
+                nrm.append(np.asarray(S.nrm[row, s][i], dtype=np.float64) / 127 if self.normals else None)
+            xa, xb, extra = pair_channels(*pts, *flags, I['bbox_a'][row], I['bbox_b'][row], self.contact_mm,
+                                          float(I['gap'][row]), self.local, *nrm)
+        else:
+            va = self.vertices(ai, I['first_a'][row], I['count_a'][row])
+            vb = self.vertices(ai, I['first_b'][row], I['count_b'][row])
+            xa, xb, extra = make_pair(va, vb, I['bbox_a'][row], I['bbox_b'][row], self.n_points, self.contact_mm, *rngs,
+                                      gap=float(I['gap'][row]), focus=self.focus, local=self.local, normals=self.normals)
         label = int(I['label'][row])
         axis, sdir = I['axis'][row].astype(np.float64), I['solver_dir'][row].astype(np.float64)
         amask, smask = label in AXIAL_IDS and bool(np.all(np.isfinite(axis))), bool(np.all(np.isfinite(sdir)))
@@ -344,8 +396,10 @@ class PairDataset:
         if self.train and self.augment != 'none':
             r = rng_for(self.seed, 'rot', row, epoch)
             R = random_rotation(r) if self.augment == 'so3' else _z_rotation(r)
-            xa[:, :3] = xa[:, :3] @ R.T.astype(np.float32)
-            xb[:, :3] = xb[:, :3] @ R.T.astype(np.float32)
+            for x in (xa, xb):
+                x[:, :3] = x[:, :3] @ R.T.astype(np.float32)
+                for s in range(N_CH, x.shape[1], 3):   # the local frame's xyz and the normals, when they are there
+                    x[:, s:s + 3] = x[:, s:s + 3] @ R.T.astype(np.float32)
             axis, sdir = R @ axis, R @ sdir
         return dict(pa=xa, pb=xb, extra=extra, label=np.int64(label), axis=axis.astype(np.float32),
                     axis_mask=np.float32(amask), solver_dir=sdir.astype(np.float32), solver_mask=np.float32(smask),

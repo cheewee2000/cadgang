@@ -1,6 +1,7 @@
 // The explode solver scored against AutoMate's mates (compute/README.md, stage 1).
 //   node compute/automate/explode.automate.mjs --root DIR --one ID [--dump OUT]                    one assembly, one JSON line
 //   JOBS=n node compute/automate/explode.automate.mjs --root DIR --list ids.txt --out run.jsonl [--dump OUT]   all of them, resumable
+//   JOBS=n node compute/automate/explode.automate.mjs --root DIR --list ids.txt --out tris.jsonl --dump OUT --tris TRIS      the triangles of an existing dump
 // DIR holds assemblies/<id>.json and step/<part>.step as unzipped from the dataset. HINTS=1 feeds the mates to the solver as
 // joints. EXPLODE=path runs another solver copy. SCALE converts the metadata's metres to the mesh's mm (1000).
 import fs from 'node:fs';
@@ -33,6 +34,22 @@ async function one(id, dump) {
     bodies.push(mesh); byOcc.set(oi, mesh);
   }
   if (bodies.length < 2) return { id, bodies: bodies.length, error: 'fewer than two bodies with geometry' };
+  // --tris: the first dump wrote vertices only. This writes each part's triangles (vertex indices local to the part) in
+  // the part order of the dump's <id>.json, and only when the mesh made now is byte for byte the one in <id>.f32.
+  if (arg('--tris')) {
+    const old = JSON.parse(fs.readFileSync(`${dump}/${id}.json`, 'utf8')), f32 = fs.readFileSync(`${dump}/${id}.f32`);
+    const rows = [], buf = []; let ifirst = 0;
+    for (const p of old.parts) {
+      const P = byOcc.get(p.occ)?.geometry.getAttribute('position');
+      if (!P || P.count !== p.count || Buffer.compare(Buffer.from(P.array.buffer, P.array.byteOffset, P.array.byteLength), f32.subarray(p.first * 12, (p.first + p.count) * 12))) return { id, error: `part ${p.occ} is not the mesh in the dump` };
+      const I = byOcc.get(p.occ).geometry.index.array; rows.push([p.occ, ifirst, I.length]); ifirst += I.length; buf.push(I);
+    }
+    const all = new Uint32Array(ifirst); let o = 0; for (const a of buf) { all.set(a, o); o += a.length; }
+    fs.mkdirSync(arg('--tris'), { recursive: true });
+    fs.writeFileSync(`${arg('--tris')}/${id}.u32`, Buffer.from(all.buffer));
+    fs.writeFileSync(`${arg('--tris')}/${id}.tri.json`, JSON.stringify({ id, parts: rows }));   // written last: its presence means the .u32 is whole
+    return { id, bodies: bodies.length, tris: ifirst / 3, ms: Date.now() - t0 };
+  }
   const box = new THREE.Box3(); for (const b of bodies) { b.geometry.computeBoundingBox(); box.union(b.geometry.boundingBox); }
   const size = box.getSize(new THREE.Vector3()).length(), centre = box.getCenter(new THREE.Vector3());
   const diag = (b) => b.geometry.boundingBox.getSize(new THREE.Vector3()).length();
@@ -94,7 +111,7 @@ if (arg('--one')) {
   await Promise.all(Array.from({ length: jobs }, async () => {
     while (next < ids.length) {
       const id = ids[next++], bodies = +(JSON.parse(fs.readFileSync(`${root}/assemblies/${id}.json`, 'utf8')).n_occurrences ?? 20);
-      const args = [process.argv[1], '--root', root, '--one', id, ...(arg('--dump') ? ['--dump', arg('--dump')] : [])];
+      const args = [process.argv[1], '--root', root, '--one', id, ...(arg('--dump') ? ['--dump', arg('--dump')] : []), ...(arg('--tris') ? ['--tris', arg('--tris')] : [])];
       const line = await new Promise((res) => execFile(process.execPath, args, { timeout: Math.round((120 + 2 * bodies) * 1000), maxBuffer: 1 << 24, env: process.env }, (err, stdout) => res(stdout.trim().split('\n').pop() || JSON.stringify({ id, error: err ? (err.killed ? 'timeout' : String(err.message).slice(0, 300)) : 'no output' }))));
       fs.appendFileSync(out, line + '\n');
       if (++n % 100 === 0) console.error(`${n}/${ids.length} in ${((Date.now() - t0) / 60000).toFixed(1)} min`);

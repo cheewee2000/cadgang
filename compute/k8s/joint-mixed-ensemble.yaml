@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cadgang-joint-mixed-ensemble
+  namespace: cadgang-compute
+  labels: {app: cadgang-joint-mixed-ensemble, kueue.x-k8s.io/queue-name: default}
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: {app: cadgang-joint-mixed-ensemble}
+    spec:
+      restartPolicy: Never
+      # The free CPU worker only: vertex (Stage 8) and surface (Stage 9) checkpoints averaged, no training.
+      nodeSelector: {node-role.kubernetes.io/cpu: ""}
+      containers:
+        - name: ensemble
+          image: python:3.12-bookworm
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              git config --global --add safe.directory '*'
+              git -C "$WORK/repo" fetch origin "$REF"
+              rm -rf /tmp/repo && git clone -q --shared "$WORK/repo" /tmp/repo && cd /tmp/repo
+              git checkout -q "$COMMIT"
+              pip install -q --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
+              pip install -q --no-cache-dir numpy scipy
+              V=$WORK/joint-inputs-v1 S=$WORK/joint-surface-v1 OUT=$WORK/joint-mixed-ensemble
+              mkdir -p "$OUT"
+              E="python compute/joints/main.py ensemble --index $WORK/automate/joints-index --dump $WORK/automate/dump --device cpu --batch-size 256 --workers 6"
+              $E --ckpts $V/static/run/best.pt $S/surf-normals-static/run/best.pt --report $OUT/static-pair
+              $E --ckpts $V/static/run/best.pt $V/focus50/run/best.pt $S/surf-normals/run/best.pt $S/surf-normals-static/run/best.pt --report $OUT/four
+              cat $OUT/*.md
+          env:
+            - {name: WORK, value: /mnt/shared/cadgang}
+            - {name: REF, value: compute/joint-inputs}
+            - {name: COMMIT, value: aa8f943b9499d123508b2fe45f703587aa7f23a1}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: 24Gi}
+            limits: {cpu: "16", memory: 56Gi}
+          volumeMounts:
+            - {name: shared, mountPath: /mnt/shared}
+      volumes:
+        - name: shared
+          hostPath: {path: /mnt/shared, type: Directory}

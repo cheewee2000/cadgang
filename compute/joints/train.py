@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from cadnn.runtime import describe_device, export_onnx, fit, load_ckpt, log_err, pick_device
 from cadnn.util import (angle_deg, angle_stats, atomic_write_json, atomic_write_text, class_metrics, class_weights,
                         fmt, md_table, rng_for)
-from joints.data import AXIAL, LABEL_ID, LABELS, N_CH, N_EXTRA, PairDataset, load_index, rows_in, train_rows_for_epoch
+from joints.data import AXIAL, LABEL_ID, LABELS, N_EXTRA, PairDataset, load_index, rows_in, train_rows_for_epoch
 from joints.model import arch_of, build, joint_loss
 
 
@@ -162,13 +162,24 @@ def write_report(m, meta, info, base):
     atomic_write_text(base.with_suffix('.md'), '\n'.join(L))
 
 
+def dataset_for(index, dump, d, **kw):
+    """The PairDataset a checkpoint's data config describes (older checkpoints have no focus or local frame)."""
+    return PairDataset(index, dump, d['n_points'], d['contact_mm'], d['seed'], focus=d.get('focus', 0.0),
+                       local=d.get('local', False), surface=d.get('surface'), normals=d.get('normals', False), **kw)
+
+
 def train(args, on_step=None):
     index, meta = load_index(args.index)
     dump = args.dump or meta['dump_dir']
     device = pick_device(args.device)
     log_err(f'device {describe_device(device)}; index {meta["pairs"]} pairs from {meta["assemblies"]} assemblies')
-    ds = PairDataset(index, dump, args.points, args.contact_mm, args.seed, train=True, augment=args.augment)
-    ev = PairDataset(index, dump, args.points, args.contact_mm, args.seed, train=False)
+    arch = arch_of(args)
+    data = dict(n_points=args.points, contact_mm=args.contact_mm, gap_mm=meta['gap_mm'], index=str(args.index),
+                seed=args.seed, n_ch=arch['in_ch'], n_extra=N_EXTRA, focus=float(getattr(args, 'focus', 0.0)),
+                local=bool(getattr(args, 'local_frame', False)), surface=getattr(args, 'surface', None),
+                normals=bool(getattr(args, 'normals', False)))
+    ds = dataset_for(index, dump, data, train=True, augment=args.augment)
+    ev = dataset_for(index, dump, data, train=False)
     rows_fn = lambda e: train_rows_for_epoch(index, e, args.seed, args.none_ratio, args.max_train_rows)
     r0 = rows_fn(0)
     if not len(r0):
@@ -179,16 +190,13 @@ def train(args, on_step=None):
     log_err(f'{len(r0)} training pairs per epoch, {len(val_rows)} validation pairs; class weights '
             + (', '.join(f'{n} {x:.2f}' for n, x in zip(LABELS, w)) if w is not None else 'none'))
     torch.manual_seed(args.seed)
-    arch = arch_of(args)
     model = build(arch)
     pretrain = None
     if args.init_encoder:
         from cadnn.pointnet import load_encoder_xyz
         pretrain = load_encoder_xyz(model.enc, args.init_encoder)
         log_err(f'initialized XYZ encoder weights from {args.init_encoder}')
-    config = dict(stage='joints', arch=arch, labels=list(LABELS), pretrain=pretrain,
-                  data=dict(n_points=args.points, contact_mm=args.contact_mm, gap_mm=meta['gap_mm'], index=str(args.index),
-                            seed=args.seed, n_ch=N_CH, n_extra=N_EXTRA),
+    config = dict(stage='joints', arch=arch, labels=list(LABELS), pretrain=pretrain, data=data,
                   args={k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items() if k != 'func'})
 
     teachers = [load_model(p, device)[0] for p in getattr(args, 'teachers', None) or []]
@@ -234,7 +242,7 @@ def evaluate(args):
     d = ck['config']['data']
     if abs(meta['gap_mm'] - d['gap_mm']) > 1e-9:
         log_err(f'note: index gap {meta["gap_mm"]} mm, model trained on gap {d["gap_mm"]} mm')
-    ds = PairDataset(index, args.dump or meta['dump_dir'], d['n_points'], d['contact_mm'], d['seed'], train=False)
+    ds = dataset_for(index, args.dump or meta['dump_dir'], d, train=False)
     rows = np.arange(len(index['label'])) if args.split == 'all' else rows_in(index, args.split)
     n_all = len(rows)
     rows = _limit(rows, args.limit, 0, 'eval')
@@ -280,7 +288,7 @@ def ensemble(args):
     for path in args.ckpts:
         model, ck = load_model(path, device)
         d = ck['config']['data']
-        ds = PairDataset(index, args.dump or meta['dump_dir'], d['n_points'], d['contact_mm'], d['seed'], train=False)
+        ds = dataset_for(index, args.dump or meta['dump_dir'], d, train=False)
         p, v = (predict(model, ds, rows, device, args.batch_size, args.workers) for rows in (test, val))
         if P is None:
             P, V = p, v
@@ -308,16 +316,18 @@ def ensemble(args):
 def export(args):
     model, ck = load_model(args.ckpt)
     d = ck['config']['data']
-    n = d['n_points']
+    n, ch = d['n_points'], ck['config']['arch']['in_ch']
     g = torch.Generator().manual_seed(0)
-    ex = (torch.rand(2, n, N_CH, generator=g) - 0.5, torch.rand(2, n, N_CH, generator=g) - 0.5,
+    ex = (torch.rand(2, n, ch, generator=g) - 0.5, torch.rand(2, n, ch, generator=g) - 0.5,
           torch.rand(2, N_EXTRA, generator=g))
     rep = export_onnx(model, ex, args.out, ['pa', 'pb', 'extra'], ['type_logits', 'axis'],
                       {'pa': {0: 'batch', 1: 'points'}, 'pb': {0: 'batch', 1: 'points'}, 'extra': {0: 'batch'},
                        'type_logits': {0: 'batch'}, 'axis': {0: 'batch'}}, opset=args.opset, target_mb=args.target_mb)
     rep['checkpoint'] = str(args.ckpt)
     rep['contract'] = dict(
-        labels=list(LABELS), axial=list(AXIAL), n_points=n, contact_mm=d['contact_mm'],
+        labels=list(LABELS), axial=list(AXIAL), n_points=n, contact_mm=d['contact_mm'], focus=d.get('focus', 0.0),
+        local_frame=d.get('local', False), normals=d.get('normals', False), surface_points=bool(d.get('surface')),
+        # local_frame and normals each add three channels, in that order: see joints/data.py pair_channels
         inputs=dict(pa='(B, N, 5) smaller part (by bbox diagonal): xyz centred on the union bbox of both parts and divided by '
                        'its diagonal; contact flag (within contact_mm of a vertex of the other part); inside the other '
                        "part's bbox grown by contact_mm. Points: N vertices sampled from the part's world-space mesh (mm).",

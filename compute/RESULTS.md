@@ -152,3 +152,89 @@ Conclusion: pretraining does not help. Accuracy stays at the baseline whatever t
 Conclusion: if joint suggestions ship, ship the ensemble or nothing new. It is the only result in Stages 4 to 7 that moves accuracy by more than seed noise, and it also gives the best axis and the most high-confidence coverage. A single distilled model is not a substitute. The class ceiling (PLANAR, CYLINDRICAL) is untouched by any of this and needs different inputs or labels, not more seeds.
 
 Artifacts: checkpoints, reports, predictions, ONNX files and `summary.{md,json,csv}` under `/mnt/shared/cadgang/joint-ensemble-v1/`.
+
+## Stage 8 — what the joint model is shown (2026-11-26)
+
+`compute/research/run-joint-inputs.sh` (Job `compute/k8s/joint-inputs-v1.yaml`, 8 GPUs, 14:53Z to 17:56Z, no restarts, $99.27 of credits) trained the Stage 4 winner (EdgeConv k=8, CE, widths 48,96,192, seed 1) eight ways, each changing only its input:
+`focus50` / `focus75` draw that share of each part's points from vertices within 1 mm of the other part; `local` adds the point's xyz in the smaller part's own frame (3 more channels); `static` ranks EdgeConv neighbours once on the input xyz instead of on each block's features; `p512` uses 512 points per part (15 and 30 epochs only, for cost). The comparison is the nine plain seeds of Stage 7.
+
+| model (best checkpoint) | accuracy | macro F1 | median axis | REVOLUTE | CYLINDRICAL | PLANAR | p≥0.90 precision / coverage | ONNX matches PyTorch |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| nine plain seeds, 60 epochs | 64.97% to 65.75% | 0.418 to 0.442 | 0.69° to 0.96° | 48% to 52% | 14% to 19% | | 95.2% to 95.8% / 18.9% to 21.1% | 19 of 33 files |
+| focus50 | 65.47% | **0.454** | 0.72° | 49.8% | 16.7% | **9.3%** | 95.7% / 20.3% | no (0.07) |
+| static | 65.28% | 0.439 | 0.93° | 53.5% | 16.6% | 8.3% | 95.8% / 20.0% | **yes (2e-4)** |
+| p512 (30 epochs) | 64.84% | 0.424 | 0.64° | 51.4% | 15.9% | 4.7% | 95.5% / 19.2% | no (0.04) |
+| local | 64.60% | 0.403 | 0.85° | 52.7% | 16.7% | 2.7% | 94.9% / 16.6% | yes (7e-4) |
+| focus50-local | 64.68% | 0.414 | **0.57°** | **55.5%** | 17.7% | 3.6% | 94.5% / 17.8% | yes (8e-6) |
+| focus75-local | 64.97% | 0.417 | 0.64° | 55.9% | 14.6% | 2.9% | 94.4% / 17.6% | yes (8e-6) |
+| static-focus50-local | 65.34% | 0.419 | 0.81° | 51.4% | 17.9% | 2.9% | 94.6% / 18.2% | yes (2e-5) |
+| p512-focus50-local (30 epochs) | 65.30% | 0.423 | 0.73° | 51.5% | 15.5% | 3.9% | 94.4% / 17.2% | yes (7e-4) |
+
+ONNX: largest difference from PyTorch over the export check's inputs; "yes" is within 1e-3. For the `local` variants the 30- and 60-epoch rows are identical: their best validation checkpoint was the 30-epoch one.
+
+**Accuracy.** No input change moves accuracy outside the seed spread. The best, `focus50`, is 65.47% against a seed mean of 65.34%.
+
+**Minority types.** Drawing half the points from the contact region is the only change that helps PLANAR (9.3% recall against 5.5% for the Stage 7 ensemble) and it gives the best macro F1 of any single model so far (0.454). The local frame does the opposite: REVOLUTE recall rises to 55 to 56% and the median axis error falls to 0.57°, but PLANAR collapses to about 3%.
+
+**Export.** The static graph fixes the Stage 7 export problem without costing accuracy: `static` is inside the seed spread at 60 epochs and both of its files match PyTorch to 2e-4, as do all four `static-*` files. Every variant with the local frame also exports cleanly. Every dynamic-graph variant without it still fails. If a joint model ships as ONNX, train it with `--edge-graph static`.
+
+**Contact.** These models still see mesh vertices only: on 300 validation pairs per type, 61% of SLIDER and NONE pairs, 39% of PLANAR, 28% of CYLINDRICAL and 23% of FASTENED pairs have no vertex within 1 mm of the other part, so their contact flag is blank. On surface points (Stage 9) the share without contact falls to 2% for SLIDER and 3% for PLANAR. Stage 9 trains on those.
+
+Artifacts: checkpoints, reports, ONNX files and `summary.{md,json,csv}` under `/mnt/shared/cadgang/joint-inputs-v1/`.
+
+## Stage 9 — surface points (2026-11-26)
+
+The same script with `STUDY=surface` (Job `compute/k8s/joint-surface-v1.yaml`, commit 3af2d29, 8 GPUs, 22:58Z to 00:50Z, no restarts, about $81 of credits) trained the Stage 8 model on the surface cache (`main.py surface`: 512 points per part spread over its faces, exact distance to the other part, and the face normal) instead of mesh vertices. `normals` adds the three normal channels; the other names are as in Stage 8. Every run is 60 epochs except `p512` (30).
+
+| model (best checkpoint) | accuracy | macro F1 | median axis | REVOLUTE | CYLINDRICAL | SLIDER | PLANAR | p≥0.90 precision / coverage | ONNX matches PyTorch |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| Stage 7 seeds (vertices) | 64.97% to 65.75% | 0.418 to 0.442 | 0.69° to 0.96° | 48% to 52% | 14% to 19% | | | 95.2% to 95.8% / 18.9% to 21.1% | 19 of 33 files |
+| Stage 8 `static` (vertices) | 65.28% | 0.439 | 0.93° | 53.5% | 16.6% | | 8.3% | 95.8% / 20.0% | yes (2e-4) |
+| surf | 62.13% | 0.396 | 2.97° | 42.0% | 11.4% | 32.6% | 8.6% | 95.7% / 20.6% | no (4e-3) |
+| surf-normals | **63.26%** | 0.433 | 1.21° | 46.2% | 12.9% | 31.6% | 8.6% | 95.4% / 20.5% | yes (2e-5) |
+| surf-normals-focus50 | 62.39% | 0.431 | **0.93°** | 42.5% | 13.2% | 34.3% | 10.5% | 96.1% / 19.0% | yes (3e-5) |
+| surf-normals-static | 62.31% | **0.449** | 1.13° | 45.7% | 17.9% | 33.7% | **18.5%** | 95.8% / 19.8% | yes (3e-5) |
+| surf-normals-local | 61.62% | 0.412 | 1.51° | 49.6% | **20.1%** | 30.1% | 8.9% | 94.3% / 20.5% | yes (2e-5) |
+| surf-normals-focus50-local | 61.06% | 0.405 | 1.08° | 44.0% | 14.1% | 29.9% | 16.3% | 95.2% / 18.6% | yes (1e-5) |
+| surf-normals-focus50-local-static | 62.88% | 0.427 | 1.33° | 47.3% | 15.6% | 27.2% | 10.0% | 95.5% / **21.6%** | yes (8e-6) |
+| surf-normals-p512 (30 epochs) | 60.84% | 0.428 | 1.01° | **50.3%** | 18.6% | **35.6%** | 16.8% | 96.0% / 18.6% | yes (5e-6) |
+
+`focus50`'s 30- and 60-epoch rows are identical (its best checkpoint was the 30-epoch one). `p512` at 15 epochs: 61.02%, F1 0.404, ONNX no (7e-3).
+
+**Accuracy.** Surface points cost 2 to 4 points of accuracy against vertices: the best, `surf-normals`, is 63.26% against the Stage 7 seed floor of 64.97%. Vertices cluster on edges and fillets, where a joint's character shows; surface points spread evenly over flat faces.
+
+**Normals.** On surface points they are not optional: without them the median axis error is 2.97° (1.21° with them), macro F1 drops from 0.433 to 0.396, and the export fails.
+
+**Minority types.** The static graph on surface points is the best minority-type model so far: PLANAR recall 18.5% (Stage 8 best 9.3%, vertex `static` 8.3%), CYLINDRICAL 17.9%, and a macro F1 of 0.449, within 0.005 of Stage 8's `focus50`. Exact contact shows up where Stage 8 predicted it would, in PLANAR, not in accuracy.
+
+**Export.** Every surface run with normals matches PyTorch to 3e-5, dynamic graph included; `surf` without them does not (4e-3). The dynamic graph exports when its inputs carry normals, so `--edge-graph static` is needed only for vertex models.
+
+**Next, if continued.** The two inputs are good at different things, so the cheap test is an ensemble of a vertex model (Stage 8 `static`) and a surface model (`surf-normals-static`) on existing checkpoints, CPU only. No training run is planned.
+
+Artifacts: checkpoints, reports, ONNX files and `summary.{md,json,csv}` under `/mnt/shared/cadgang/joint-surface-v1/`.
+
+## Stage 10 — vertex and surface models together (2026-11-27)
+
+`compute/k8s/joint-mixed-ensemble.yaml` ran `main.py ensemble` on the free CPU worker (0 GPUs, no credits, 01:12Z to about 03:00Z) over checkpoints already trained: mean type probability and sign-aligned mean axis, one temperature fitted on validation, as in Stage 7. Test split, 86,806 pairs.
+
+| model | members | accuracy | macro F1 | median axis (all axial) | REVOLUTE | SLIDER | CYLINDRICAL | PLANAR |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Stage 7 ensemble of nine (vertices, nine seeds) | 9 | 66.90% | 0.450 | 0.37° | 52.0% | | 14.3% | 5.5% |
+| Stage 8 `static` (vertices) | 1 | 65.28% | 0.439 | 0.93° | 53.5% | | 16.6% | 8.3% |
+| Stage 9 `surf-normals-static` (surface) | 1 | 62.31% | 0.449 | 1.13° | 45.7% | 33.7% | 17.9% | 18.5% |
+| **pair**: `static` + `surf-normals-static` | 2 | 67.0% | 0.475 | 1.0° | 53.0% | 34.2% | **17.3%** | **10.6%** |
+| **four**: `static`, `focus50` + `surf-normals`, `surf-normals-static` | 4 | **67.6%** | **0.479** | 0.8° | 52.6% | 34.0% | 14.9% | 8.4% |
+
+Axis by type for the four: REVOLUTE 0.6°, SLIDER 2.4° (the shape solver's is 20.8°), CYLINDRICAL 0.9°. As before, the model beats the solver's axis only on SLIDER.
+
+**Accuracy.** Two models, one on vertices and one on surface points, reach 67.0%, level with nine vertex seeds (66.90%). Four reach 67.6%, the best result so far and 0.7 points above the nine-seed ensemble with fewer than half the forward passes. The two inputs make different mistakes, so averaging them gains more than averaging seeds of one.
+
+**Minority types.** Macro F1 rises to 0.475 and 0.479, the best so far, mostly on precision. PLANAR recall in the ensembles (8 to 11%) sits between the vertex models (about 8%) and the surface model alone (18.5%): averaging dilutes the one model that finds PLANAR.
+
+**Axis.** The median axis error (0.8° to 1.0°) is worse than the nine-seed ensemble's 0.37°: that one averaged nine axes of the same kind, and the surface models' axes are less precise (Stage 9).
+
+**Export.** Every member exports to ONNX and matches PyTorch (Stage 8 `static` within 2e-4; surface models with normals within 3e-5). `focus50` does not (0.07), so the exportable choice is the pair, or the four with `focus50` swapped for another static vertex seed (untested).
+
+Conclusion: if joint suggestions ship, ship a mixed ensemble (vertex `static` + surface `surf-normals-static`, plus more of each as the budget allows). It is the most accurate and the best on macro F1, both members export, and it costs two forward passes plus the surface sampling at inference.
+
+Artifacts: `static-pair.{md,json}` and `four.{md,json}` under `/mnt/shared/cadgang/joint-mixed-ensemble/`.

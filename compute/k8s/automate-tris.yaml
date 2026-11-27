@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cadgang-automate-tris
+  namespace: cadgang-compute
+  labels: {app: cadgang-automate-tris, kueue.x-k8s.io/queue-name: default}
+spec:
+  backoffLimit: 2
+  podReplacementPolicy: Failed
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions: [{type: DisruptionTarget, status: "True"}]
+      - action: Ignore
+        onExitCodes: {operator: In, values: [143]}
+  template:
+    metadata:
+      labels: {app: cadgang-automate-tris}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 60
+      # The free CPU worker only: no GPUs, no market node.
+      nodeSelector: {node-role.kubernetes.io/cpu: ""}
+      containers:
+        - name: tris
+          image: node:22-bookworm
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              git config --global --add safe.directory '*'
+              git -C "$WORK/repo" fetch origin "$REF"
+              # A private clone: the shared checkout stays where the other jobs left it.
+              rm -rf /tmp/repo && git clone -q --shared "$WORK/repo" /tmp/repo && cd /tmp/repo
+              git checkout -q "$COMMIT"
+              npm ci --no-audit --no-fund
+              export AUTOMATE="$WORK/automate"
+              H=compute/automate/explode.automate.mjs
+              # Forty assemblies first: the triangles are only good if today's meshes are the dump's, byte for byte.
+              head -n 40 "$AUTOMATE/selected.txt" > /tmp/shard.txt
+              JOBS=14 node $H --list /tmp/shard.txt --out /tmp/shard.jsonl --dump "$AUTOMATE/dump" --tris /tmp/tris-shard
+              ok=$(grep -c '"tris"' /tmp/shard.jsonl || true)
+              echo "shard: $ok of 40 match the dump"; grep '"error"' /tmp/shard.jsonl | head -5 || true
+              [ "$ok" -ge 30 ] || { echo "too few match: stopping"; exit 1; }
+              mkdir -p "$AUTOMATE/tris"
+              JOBS=14 node $H --list "$AUTOMATE/selected.txt" --out "$WORK/results/full/automate-tris.jsonl" --dump "$AUTOMATE/dump" --tris "$AUTOMATE/tris"
+              echo "done: $(grep -c '"tris"' "$WORK/results/full/automate-tris.jsonl") with triangles, $(grep -c '"error"' "$WORK/results/full/automate-tris.jsonl" || true) errors"
+              du -sh "$AUTOMATE/tris"
+          env:
+            - {name: WORK, value: /mnt/shared/cadgang}
+            - {name: REF, value: compute/joint-inputs}
+            - {name: COMMIT, value: c4265460b577ca224737fa882a83201ca69a98c4}
+          resources:
+            requests: {cpu: "8", memory: 24Gi}
+            limits: {cpu: "16", memory: 56Gi}
+          volumeMounts:
+            - {name: shared, mountPath: /mnt/shared}
+      volumes:
+        - name: shared
+          hostPath: {path: /mnt/shared, type: Directory}

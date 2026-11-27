@@ -6,7 +6,21 @@ import torch.nn.functional as F
 from torch import nn
 
 from cadnn.pointnet import PointNetEncoder, mlp
-from joints.data import AXIAL_IDS, LABELS, N_CH, N_EXTRA
+from joints.data import AXIAL_IDS, LABELS, N_CH, N_EXTRA, N_LOCAL, N_NORMAL
+
+
+@torch.no_grad()
+def knn(p, k):
+    """Indices (B,N,k) of each point's k nearest others in p (B,N,3)."""
+    # Squared distances rank as distances do. They and the gather in the block export to ONNX; cdist and x[b, idx] did not.
+    n = p.shape[1]
+    sq = (p * p).sum(-1)
+    d = sq[:, :, None] + sq[:, None, :] - 2 * p @ p.transpose(1, 2)
+    # Points whose three values are equal (all zero after a ReLU, often) tie exactly, and PyTorch and onnxruntime
+    # broke those ties differently: 4% of real pairs got another answer. The lower index now wins. That holds for
+    # the normalised input coordinates (the static graph); feature distances can be too large for 1e-7 to show.
+    d = d + torch.arange(n, dtype=d.dtype, device=d.device) * 1e-7
+    return d.topk(k + 1, largest=False).indices[:, :, 1:]
 
 
 class EdgeConvBlock(nn.Module):
@@ -16,19 +30,12 @@ class EdgeConvBlock(nn.Module):
         self.k = int(k)
         self.net = nn.Sequential(nn.Conv2d(2 * in_ch, out_ch, 1), nn.BatchNorm2d(out_ch), nn.ReLU())
 
-    def forward(self, x):
+    def forward(self, x, idx=None):
         # x: B,N,C. Neighbours are selected without gradient; gathered features still carry gradients.
         n = x.shape[1]
         k = min(self.k, max(1, n - 1))
-        with torch.no_grad():
-            # Squared distances rank as distances do. They and the gather below export to ONNX; cdist and x[b, idx] did not.
-            p = x[:, :, :3]
-            sq = (p * p).sum(-1)
-            d = sq[:, :, None] + sq[:, None, :] - 2 * p @ p.transpose(1, 2)
-            # Points whose first three features are equal (all zero after a ReLU, often) tie exactly, and PyTorch and
-            # onnxruntime broke those ties differently: 4% of real pairs got another answer. The lower index now wins.
-            d = d + torch.arange(n, dtype=d.dtype, device=d.device) * 1e-7
-            idx = d.topk(k + 1, largest=False).indices[:, :, 1:]
+        if idx is None:
+            idx = knn(x[:, :, :3], k)
         c = x.shape[2]
         nbr = x.gather(1, idx.flatten(1)[:, :, None].expand(-1, -1, c)).reshape(x.shape[0], n, k, c)
         ctr = x[:, :, None, :].expand_as(nbr)
@@ -37,8 +44,11 @@ class EdgeConvBlock(nn.Module):
 
 
 class EdgeConvEncoder(nn.Module):
-    def __init__(self, in_ch=N_CH, widths=(64, 128, 256), k=12):
+    def __init__(self, in_ch=N_CH, widths=(64, 128, 256), k=12, graph='dynamic'):
         super().__init__()
+        if graph not in ('dynamic', 'static'):
+            raise ValueError(f'edge graph {graph!r}')
+        self.graph = graph   # static: every block uses the neighbours of the input xyz; dynamic: of its own features
         blocks, c = [], in_ch
         for w in widths:
             blocks.append(EdgeConvBlock(c, w, k))
@@ -47,8 +57,9 @@ class EdgeConvEncoder(nn.Module):
         self.in_ch, self.widths, self.k, self.out_dim = in_ch, tuple(widths), int(k), 2 * c
 
     def forward(self, x):
+        idx = knn(x[:, :, :3], min(self.k, max(1, x.shape[1] - 1))) if self.graph == 'static' else None
         for block in self.blocks:
-            x = block(x)
+            x = block(x, idx)
         return torch.cat([x.max(dim=1).values, x.mean(dim=1)], dim=1)
 
 
@@ -84,11 +95,12 @@ class AttentionSetEncoder(nn.Module):
         return torch.cat([q.max(dim=1).values, q.mean(dim=1)], dim=1)
 
 
-def make_encoder(kind, in_ch, widths, edge_k=12, attn_width=128, attn_heads=4, attn_tokens=16, attn_layers=2):
+def make_encoder(kind, in_ch, widths, edge_k=12, attn_width=128, attn_heads=4, attn_tokens=16, attn_layers=2,
+                 edge_graph='dynamic'):
     if kind == 'pointnet':
         return PointNetEncoder(in_ch, widths)
     if kind == 'edgeconv':
-        return EdgeConvEncoder(in_ch, widths, edge_k)
+        return EdgeConvEncoder(in_ch, widths, edge_k, edge_graph)
     if kind == 'attention':
         return AttentionSetEncoder(in_ch, attn_width, attn_heads, attn_tokens, attn_layers)
     raise ValueError(f'unknown encoder {kind}')
@@ -98,9 +110,10 @@ class JointNet(nn.Module):
     """(pa, pb, extra) -> type logits and a sign-ambiguous unit axis."""
     def __init__(self, widths=(64, 128, 256), head=(256, 128), dropout=0.2, in_ch=N_CH, extra_dim=N_EXTRA,
                  n_types=len(LABELS), encoder='pointnet', edge_k=12, attn_width=128, attn_heads=4,
-                 attn_tokens=16, attn_layers=2):
+                 attn_tokens=16, attn_layers=2, edge_graph='dynamic'):
         super().__init__()
-        self.enc = make_encoder(encoder, in_ch, widths, edge_k, attn_width, attn_heads, attn_tokens, attn_layers)
+        self.enc = make_encoder(encoder, in_ch, widths, edge_k, attn_width, attn_heads, attn_tokens, attn_layers,
+                                edge_graph)
         d = self.enc.out_dim
         self.trunk = mlp([4 * d + extra_dim, *head], dropout)
         self.type_head = nn.Linear(head[-1], n_types)
@@ -115,7 +128,10 @@ class JointNet(nn.Module):
 def arch_of(args):
     return dict(encoder=args.encoder, widths=list(args.widths), head=list(args.head), dropout=float(args.dropout),
                 edge_k=int(args.edge_k), attn_width=int(args.attn_width), attn_heads=int(args.attn_heads),
-                attn_tokens=int(args.attn_tokens), attn_layers=int(args.attn_layers), in_ch=N_CH,
+                attn_tokens=int(args.attn_tokens), attn_layers=int(args.attn_layers),
+                edge_graph=getattr(args, 'edge_graph', 'dynamic'),
+                in_ch=N_CH + (N_LOCAL if getattr(args, 'local_frame', False) else 0)
+                + (N_NORMAL if getattr(args, 'normals', False) else 0),
                 extra_dim=N_EXTRA, n_types=len(LABELS))
 
 
@@ -125,7 +141,8 @@ def build(arch):
                     in_ch=arch['in_ch'], extra_dim=arch['extra_dim'], n_types=arch['n_types'],
                     encoder=arch.get('encoder', 'pointnet'), edge_k=arch.get('edge_k', 12),
                     attn_width=arch.get('attn_width', 128), attn_heads=arch.get('attn_heads', 4),
-                    attn_tokens=arch.get('attn_tokens', 16), attn_layers=arch.get('attn_layers', 2))
+                    attn_tokens=arch.get('attn_tokens', 16), attn_layers=arch.get('attn_layers', 2),
+                    edge_graph=arch.get('edge_graph', 'dynamic'))
 
 
 def axial_mask(label, axis_mask):
