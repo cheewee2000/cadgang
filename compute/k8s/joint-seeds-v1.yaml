@@ -41,7 +41,7 @@ spec:
             - {name: WORK, value: /mnt/shared/cadgang}
             - {name: ROOT, value: /mnt/shared/cadgang/joint-seeds-v1}
             - {name: REF, value: compute/joint-seeds}
-            - {name: COMMIT, value: 3af2d295e3077b281b3ef8e4c2d03eb7e85e90a2}
+            - {name: COMMIT, value: 1bb4a6c54e275db1958e052ea5530b3aea3352b0}
             - {name: STUDY, value: seeds}
             - {name: PYTHONUNBUFFERED, value: "1"}
           resources:
