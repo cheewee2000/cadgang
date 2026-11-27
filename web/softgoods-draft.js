@@ -163,6 +163,24 @@ export function setPiece(d, pid, { name, material, cut, grain } = {}) {
   return d;
 }
 
+// A material's fields as the fabric panel edits them: [key, label]. tensile.warp and tensile.weft are the nested tensile.
+export const FABRIC_FIELDS = [['arealDensity', 'WEIGHT g/m²'], ['thickness', 'THICK mm'], ['rigidity', 'BEND N·mm'], ['tensile.warp', 'WARP N/mm'], ['tensile.weft', 'WEFT N/mm'], ['shearRigidity', 'SHEAR N/mm'], ['friction', 'FRICTION 0-1'], ['pricePerMeter', 'PRICE /m']];
+
+/** Set a material's fields: preset (a library id, '' for none), color (#rrggbb) or a FABRIC_FIELDS number ('' leaves it to the preset). */
+export function setMaterial(d, id, fields) {
+  if (!String(id ?? '').trim()) throw new Error('A material needs a name');
+  d = clone(d); const m = ((d.materials ||= {})[id] ||= {});
+  for (const [k, raw] of Object.entries(fields)) {
+    const v = String(raw ?? '').trim(), [top, sub] = k.split('.');
+    if (k === 'preset' || k === 'color') { if (k === 'color' && v && !/^#[0-9a-f]{6}$/i.test(v)) throw new Error('A colour is #rrggbb'); if (v) m[k] = v; else delete m[k]; continue; }
+    if (!FABRIC_FIELDS.some(([f]) => f === k)) throw new Error(`No material field '${k}'`);
+    const n = Number(v); if (v && !(n >= 0 && (k !== 'friction' || n <= 1))) throw new Error(`${k} is ${k === 'friction' ? 'between 0 and 1' : '0 or more'}`);
+    if (sub) { const t = (m[top] = typeof m[top] === 'object' && m[top] ? m[top] : {}); if (v) t[sub] = n; else delete t[sub]; if (!Object.keys(t).length) delete m[top]; }
+    else if (v) m[k] = n; else delete m[k];
+  }
+  return d;
+}
+
 /** A new graded size, no point moved yet. */
 export function addSize(d, size) {
   const name = String(size ?? '').trim(); if (!name) throw new Error('A size needs a name');

@@ -1,8 +1,8 @@
 import { createClothView, strainRGB, pressureRGB, css, materialCss, seamCss, seamSide, sideLabel, cutLine, placeOnRow } from './softgoods-view.js';
-import { createDraftBoard, sample, setPiece, addSize, removeSize } from './softgoods-draft.js';
+import { createDraftBoard, sample, setPiece, addSize, removeSize, setMaterial, FABRIC_FIELDS } from './softgoods-draft.js';
 const $=(s)=>document.querySelector(s),API='/api/softgoods',esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
 async function api(path,{method='GET',body}={}){const r=await fetch(API+path,{method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`HTTP ${r.status}`);return d}
-let drafting=false,doc=null,check=null,cut=null,trims=null,marks=null,selectedTrim=null,yaw=-.45,pitch=.18,dist=1,drag=null,frame=null,loading=false,running=false,mapMode='off',selectedPattern=null,view2d={k:1,x:0,y:0};
+let fabrics={},drafting=false,doc=null,check=null,cut=null,trims=null,marks=null,selectedTrim=null,yaw=-.45,pitch=.18,dist=1,drag=null,frame=null,loading=false,running=false,mapMode='off',selectedPattern=null,view2d={k:1,x:0,y:0};
 // The camera follows the viewer's Trackpad / Mouse choice, read on every scroll so a change made in another tab is followed.
 const scheme=()=>{try{return JSON.parse(localStorage.getItem('cadgang-view'))?.scroll==='mouse'?'mouse':'trackpad'}catch{return'trackpad'}};
 const seamColour=id=>seamCss(doc?.seams.findIndex(s=>s.id===id)??0);
@@ -125,4 +125,10 @@ addEventListener('keydown',e=>{if(drafting&&board.key(e))e.preventDefault()});ad
 function renderProps(){let el=$('#props');if(!el){el=document.createElement('div');el.id='props';$('#patterns').after(el)}const p=doc?.patterns.find(q=>q.id===selectedPattern);el.hidden=!drafting||!p;if(el.hidden)return;
 const mats=[...new Set([...Object.keys(doc.materials||{}),p.material].filter(Boolean))];
 el.innerHTML=`<b>${esc(p.id)} · PROPERTIES</b><label>NAME<input data-k="name" value="${esc(p.name||p.id)}"></label><label>MATERIAL<select data-k="material">${mats.map(m=>`<option ${m===p.material?'selected':''}>${esc(m)}</option>`).join('')}</select></label><label>CUT<input data-k="cut" type="number" min="1" step="1" value="${p.cut||1}"></label><label>GRAIN °<input data-k="grain" type="number" step="5" value="${p.grain?.angle??90}"></label>`;
-el.querySelectorAll('[data-k]').forEach(i=>i.onchange=()=>board.edit(d=>setPiece(d,p.id,{[i.dataset.k]:i.value}),`${p.id}: ${i.dataset.k} ${i.value}`))}
+el.querySelectorAll('[data-k]').forEach(i=>i.onchange=()=>board.edit(d=>setPiece(d,p.id,{[i.dataset.k]:i.value}),`${p.id}: ${i.dataset.k} ${i.value}`))
+// Its fabric: a library preset under the material's own numbers (a blank field shows the preset's, greyed), a colour, a new material by name.
+const mid=p.material||p.id,m=doc.materials?.[mid]||{},pre=fabrics[m.preset]||{},val=k=>k.split('.').reduce((o,j)=>o?.[j],m),num=v=>typeof v==='number'?v:'';
+el.insertAdjacentHTML('beforeend',`<b class="sub">${esc(mid)} · FABRIC</b><label>PRESET<select data-m="preset"><option value="">none</option>${Object.entries(fabrics).map(([id,f])=>`<option value="${id}" ${id===m.preset?'selected':''}>${esc(f.name)}</option>`).join('')}</select></label><label>COLOUR<input data-m="color" type="color" value="${/^#[0-9a-f]{6}$/i.test(m.color||'')?m.color:'#ffffff'}"></label>${FABRIC_FIELDS.map(([k,l])=>`<label>${l}<input data-m="${k}" type="number" min="0" step="any" value="${num(val(k))}" placeholder="${num(k.split('.').reduce((o,j)=>o?.[j],pre))}"></label>`).join('')}<label>NEW MATERIAL<input id="newMaterial" placeholder="name, Enter"></label>${pre.notes?`<small>${esc(pre.notes)} Typical, not measured.</small>`:''}`);
+el.querySelectorAll('[data-m]').forEach(i=>i.onchange=()=>board.edit(d=>setMaterial(d,mid,{[i.dataset.m]:i.value}),`${mid}: ${i.dataset.m} ${i.value||'from the preset'}`));
+$('#newMaterial').onkeydown=e=>{const v=e.target.value.trim();if(e.key==='Enter'&&v)board.edit(d=>setPiece(setMaterial(d,v,{}),p.id,{material:v}),`${p.id} is now ${v}`)}}
+api('/fabrics').then(f=>{fabrics=f;renderProps()}).catch(()=>{});

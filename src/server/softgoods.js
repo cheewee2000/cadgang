@@ -3,7 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { GraphError } from '../core/errors.js';
 import { exportProduction, PRODUCTION_FORMATS } from '../core/softgoods-production.js';
-import { resolveMaterials } from '../core/softgoods-fabrics.js';
+import { resolveMaterials, FABRICS } from '../core/softgoods-fabrics.js';
 import { meshPatternFine } from '../core/softgoods-mesh.js';
 import { resolveSeamCorrespondence } from '../core/softgoods-seams.js';
 import { arrangeDesign, collisionBody, loadBodies } from '../core/softgoods-bodies.js';
@@ -75,6 +75,7 @@ export function softgoodsRouter(doc, { exportDir = () => process.cwd(), broadcas
   const fail = (res, e) => res.status(e instanceof GraphError ? 400 : 500).json({ error: e.message || String(e) });
   r.get('/simulation-input', async (req, res) => { try { const d = await ready(req, doc.toJSON()), target = Math.max(5, Math.min(100, Number(req.query.target || 25))), meshes = d.patterns.map((p) => meshPatternFine(p, { target, lines: conformLines(d, p) })), shut = closures(d, meshes, { spacing: target / 2 }), seams = [...resolveSeamCorrespondence(d.seams, meshes, { spacing: target / 2 }), ...shut.seams]; res.json({ revision: d.revision, meshes, seams, attachments: [...(d.attachments || []), ...shut.attachments], arrangement: d.arrangement, materials: resolveMaterials(d.materials), patterns: d.patterns.map((p) => ({ id: p.id, material: p.material, grain: p.grain, shrink: p.shrink, freeze: p.freeze, strengthen: p.strengthen, source: p.source })), ...physicsInput(d, meshes), ...trimsInput(d, { spacing: target / 2 }), collisionBody: d.simulation?.avatar || d.bodies?.length ? collisionBody(d) : null }); } catch (e) { fail(res, e); } });
   r.get('/document', (_req, res) => res.json(doc.toJSON()));
+  r.get('/fabrics', (_req, res) => res.json(FABRICS));
   r.put('/document', async (req, res) => { try { const body = pinned(req.body); await ready(req, validateSoftgoodsDocument(body)); res.json(doc.replace(arranged(body, avatarOf(body)))); } catch (e) { fail(res, e); } });
   // One pattern-making operation ({ op, ...args }, see src/core/softgoods-edit.js) on the stored design: a new revision, like a set.
   r.post('/edit', async (req, res) => { try { const before = await ready(req, doc.toJSON()), d = doc.replace(arranged(editSoftgoods(before, req.body || {}), doc.data.simulation?.avatar)); res.json({ revision: d.revision, patterns: d.patterns.map((p) => p.id), ...editChanges(before, d), check: checkDesign(d) }); } catch (e) { fail(res, e); } });
