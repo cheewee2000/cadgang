@@ -13,3 +13,4 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--paper);color:var
 
 /* DRAFT: the board of every piece takes the review pane; the 3D view and the painter's canvas wait under it. */
 #draftCanvas{flex:1;min-height:0;background:#fff;cursor:crosshair}#draftCanvas[hidden]{display:none}#review.drafting #view3d,#review.drafting #arrangeCanvas,#review.drafting #legend,#review.drafting #experimental,#review.drafting #views{display:none}#tools[hidden]{display:none}
+.amount{width:64px;font:inherit;font-size:var(--fs-12);border:var(--bw-hair) solid var(--rule);border-radius:0;padding:1px 4px;margin-left:4px}.amount[hidden]{display:none}#tools{flex-wrap:wrap;justify-content:flex-start}.pane-head{height:auto;min-height:32px}
