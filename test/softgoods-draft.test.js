@@ -2,7 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SoftgoodsDocument, validateSoftgoodsDocument } from '../src/core/softgoods-document.js';
-import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout } from '../web/softgoods-draft.js';
+import { addPiece, movePoint, insertPoint, toCurve, toLine, removePoint, removePiece, sewEdges, segLength, sample, boardLayout, addNotch, setAllowance, AMOUNTS } from '../web/softgoods-draft.js';
+import { editSoftgoods } from '../src/core/softgoods-edit.js';
 
 const two = () => { const d = new SoftgoodsDocument(null); d.addRectangle({ id: 'front', width: 200, height: 100 }); d.addRectangle({ id: 'back', width: 200, height: 100 }); return d.toJSON(); };
 const ok = (d) => validateSoftgoodsDocument(d);
@@ -56,4 +57,17 @@ test('drafting: a piece goes with its seams, and one a trim still names stays', 
 test('drafting: the board lays the pieces side by side without overlapping', () => {
   const lay = boardLayout(two()), f = lay.get('front'), b = lay.get('back');
   assert.ok(f.hi[0] + f.dx < b.lo[0] + b.dx, JSON.stringify([...lay]));
+});
+
+test('drafting: notches and allowances are set on the board; the server operations take what the board sends', () => {
+  let d = ok(addNotch(two(), 'front', 'front_top', 0.3)); assert.deepEqual(piece(d, 'front').notches, [{ segment: 'front_top', at: 0.3, kind: 'match' }]);
+  d = ok(setAllowance(d, 'front', 'front_top', 15)); assert.equal(piece(d, 'front').allowances.front_top, 15); assert.throws(() => setAllowance(d, 'front', 'front_top', -1), /0 mm or more/);
+  // The arguments the board's DART, PLEAT, CUT, LINE and MIRROR send (web/softgoods-draft.js), at the fields' defaults.
+  const [[, width], [, length]] = AMOUNTS.dart, [[, intake]] = AMOUNTS.pleat;
+  const darted = editSoftgoods(two(), { op: 'dart', pattern: 'front', segment: 'front_top', at: 0.5, width, length });
+  assert.ok(darted.seams.length >= 1, 'the dart legs are sewn');
+  assert.ok(editSoftgoods(two(), { op: 'pleat', pattern: 'front', segment: 'front_top', at: 0.4, intake }).annotations.some((a) => a.type === 'pleat' || a.type === 'fold_line'));
+  assert.deepEqual(editSoftgoods(two(), { op: 'split', pattern: 'front', from: { segment: 'front_top', at: 0.5 }, to: { segment: 'front_bottom', at: 0.5 } }).patterns.map((p) => p.id).sort(), ['back', 'front_a', 'front_b']);
+  assert.equal(piece(editSoftgoods(two(), { op: 'internalLine', pattern: 'front', a: [20, 20], b: [120, 20] }), 'front').internalLines.length, 1);
+  assert.equal(editSoftgoods(two(), { op: 'mirror', pattern: 'front', segment: 'front_right' }).patterns.length, 3);
 });

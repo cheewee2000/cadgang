@@ -141,19 +141,33 @@ export function sewEdges(d, a, b) {
   return d;
 }
 
+/** A match notch on edge `sid` at its parameter t. */
+export function addNotch(d, pid, sid, t) {
+  d = clone(d); const p = pieceOf(d, pid); if (!p.segments.some((s) => s.id === sid)) throw new Error(`No edge '${sid}'`);
+  (p.notches ||= []).push({ segment: sid, at: Math.round(Math.min(1, Math.max(0, t)) * 1e4) / 1e4, kind: 'match' }); return d;
+}
+/** The seam allowance (mm) of edge `sid`. */
+export function setAllowance(d, pid, sid, mm) {
+  if (!(Number(mm) >= 0)) throw new Error('An allowance is 0 mm or more');
+  d = clone(d); const p = pieceOf(d, pid); if (!p.segments.some((s) => s.id === sid)) throw new Error(`No edge '${sid}'`);
+  (p.allowances ||= {})[sid] = Number(mm); return d;
+}
+
 // ---- the board
 
 // A piece drawn on the board keeps its shape but starts at its own origin: its lowest, leftmost corner at 0, 0.
 const origin = (pts) => { const x0 = Math.min(...pts.map((q) => q.x)), y0 = Math.min(...pts.map((q) => q.y)); return pts.map((q) => ({ x: q.x - x0, y: q.y - y0 })); };
 
-const TOOLS = ['move', 'pen', 'point', 'curve', 'seam', 'delete'];
-const HELP = { move: 'drag a point or a handle · drag the board to pan', pen: 'click the corners of a new piece · click the first one or press Enter to close · Esc cancels', point: 'click an edge to put a point on it', curve: 'click a straight edge to bend it (then drag its handles), a curved one to straighten it', seam: 'click an edge, then the edge it is sewn to', delete: 'click a point, a seam or inside a piece to delete it' };
+const TOOLS = ['move', 'pen', 'point', 'curve', 'seam', 'delete', 'dart', 'pleat', 'cut', 'line', 'notch', 'allowance', 'mirror'];
+// The numbers a tool takes from the board's two fields: [label, default] each.
+export const AMOUNTS = { dart: [['width mm', 20], ['length mm', 80]], pleat: [['intake mm', 30]], allowance: [['allowance mm', 10]] };
+const HELP = { move: 'drag a point or a handle · drag the board to pan', pen: 'click the corners of a new piece · click the first one or press Enter to close · Esc cancels', point: 'click an edge to put a point on it', curve: 'click a straight edge to bend it (then drag its handles), a curved one to straighten it', seam: 'click an edge, then the edge it is sewn to', delete: 'click a point, a seam or inside a piece to delete it', dart: 'click an edge where the dart goes: width and length from the fields', pleat: 'click an edge where the pleat goes: intake from the field', cut: 'click two places on a piece\'s edge: it is cut in two along the line and the cut is sewn', line: 'click two places inside a piece for a stitch or placement line', notch: 'click an edge to notch it there', allowance: 'click an edge to give it the allowance in the field', mirror: 'click an edge: the piece is mirrored across it, the other hand' };
 
 /**
  * The drafting board on `canvas`. getDoc() is the page's document; commit(next) PUTs it and resolves to the saved document
  * (or throws with the server's reason); say(text, bad) writes the page's status line.
  */
-export function createDraftBoard({ canvas, getDoc, commit, say }) {
+export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = () => [], say }) {
   let tool = 'move', view = { k: 1, x: 0, y: 0 }, drag = null, pen = [], pick = null, hover = null, local = null, undo = [], busy = false;
   const doc = () => local || getDoc();
   const frame = () => {
@@ -184,6 +198,12 @@ export function createDraftBoard({ canvas, getDoc, commit, say }) {
     catch (e) { say(e.message, true); } finally { local = null; busy = false; draw(); }
   }
   const edit = (fn, done) => { try { apply(fn(getDoc()), done); } catch (e) { say(e.message, true); } };
+  // The server's own pattern-making operations (POST /edit: dart, pleat, split, internal line, mirror), undone like the rest.
+  async function op(args, done) {
+    if (busy) return; busy = true; const before = getDoc();
+    try { await operate(args); undo.push(before); if (undo.length > 50) undo.shift(); say(done); } catch (e) { say(e.message, true); } finally { busy = false; draw(); }
+  }
+  const num = (i) => { const v = Number(amounts()[i]); return Number.isFinite(v) && v > 0 ? v : AMOUNTS[tool][i][1]; };
   const length = (pid, sid) => { const p = getDoc().patterns.find((q) => q.id === pid), s = p?.segments.find((v) => v.id === sid); return s ? segLength(p, s) : 0; };
 
   function draw() {
@@ -195,11 +215,15 @@ export function createDraftBoard({ canvas, getDoc, commit, say }) {
     for (const p of f.d.patterns) {
       for (const s of p.segments) { const hot = is(hover, 'edge', p.id, s.id) || is(pick, 'edge', p.id, s.id); line(p.id, sample(p, s, 32), { width: hot ? 3 : 1.5, color: hot ? '#e35a1e' : '#000' }); }
       const m = new Map(p.points.map((q) => [q.id, q]));
+      // Internal lines dashed; a notch a short tick into the piece from the stitch line (inward is left of a counter-clockwise edge).
+      for (const l of p.internalLines || []) { const s = Array.isArray(l) ? { type: 'line', a: l[0], b: l[1] } : l; if (m.has(s.a) && m.has(s.b)) try { line(p.id, sample(p, s, 24), { dash: [3, 3] }); } catch { /* a line this board cannot read */ } }
+      for (const n of p.notches || []) { const s = p.segments.find((v) => v.id === n.segment); if (!s) continue; const q = sample(p, s, 64), last = q.length - 1, g = (n.at ?? 0.5) * last, i = Math.min(last - 1, Math.floor(g)), u = q[i], v = q[i + 1], L = Math.hypot(v.x - u.x, v.y - u.y) || 1, at = { x: u.x + (v.x - u.x) * (g - i), y: u.y + (v.y - u.y) * (g - i) }, tick = 6 / f.k; line(p.id, [at, { x: at.x - (v.y - u.y) / L * tick, y: at.y + (v.x - u.x) / L * tick }], { width: 2 }); }
       for (const s of p.segments) if (s.type === 'bezier') { line(p.id, [m.get(s.a), m.get(s.c1)], { color: '#999' }); line(p.id, [m.get(s.b), m.get(s.c2)], { color: '#999' }); }
       const handles = new Set(p.segments.flatMap((s) => [s.c, s.c1, s.c2]).filter(Boolean));
       for (const q of p.points) { const [X, Y] = f.toScreen(p.id, q), hot = is(hover, 'point', p.id, q.id); x.fillStyle = hot ? '#e35a1e' : handles.has(q.id) ? '#fff' : '#000'; x.strokeStyle = hot ? '#e35a1e' : '#000'; x.lineWidth = 1; if (handles.has(q.id)) { x.beginPath(); x.arc(X, Y, 3.5, 0, 2 * Math.PI); x.fill(); x.stroke(); } else x.fillRect(X - 3, Y - 3, 6, 6); }
-      const o = f.lay.get(p.id) || { lo: [0, 0], hi: [0, 0] }, [LX, LY] = f.toScreen(p.id, { x: o.lo[0], y: o.hi[1] }); x.fillStyle = is(hover, 'piece', p.id, p.id) ? '#e35a1e' : '#000'; x.fillText(p.name || p.id, LX, LY - 8);
+      const o = f.lay.get(p.id) || { lo: [0, 0], hi: [0, 0] }, [LX, LY] = f.toScreen(p.id, { x: o.lo[0], y: o.hi[1] }); x.fillStyle = is(hover, 'piece', p.id, p.id) ? '#e35a1e' : '#000'; x.fillText(p.name || p.id, LX, LY - 8, Math.max(20, (o.hi[0] - o.lo[0] + 30) * f.k));
     }
+    if (pick?.kind === 'spot') { const [X, Y] = f.toScreen(pick.pattern, { x: pick.q[0], y: pick.q[1] }); x.fillStyle = '#e35a1e'; x.fillRect(X - 3, Y - 3, 6, 6); }
     if (pen.length) { x.strokeStyle = '#e35a1e'; x.lineWidth = 1.5; x.beginPath(); pen.forEach((q, i) => { const [X, Y] = f.toScreen(null, q); i ? x.lineTo(X, Y) : x.moveTo(X, Y); }); if (drag?.at) x.lineTo(drag.at[0], drag.at[1]); x.stroke(); for (const q of pen) { const [X, Y] = f.toScreen(null, q); x.fillStyle = '#e35a1e'; x.fillRect(X - 3, Y - 3, 6, 6); } }
     // Scale bar: the longest of 1, 2 or 5 × a power of ten under 90 px.
     const pow = 10 ** Math.floor(Math.log10(90 / f.k)), L = [5, 2, 1].map((v) => v * pow).find((v) => v * f.k <= 90), y = f.h - 10;
@@ -217,7 +241,24 @@ export function createDraftBoard({ canvas, getDoc, commit, say }) {
       if (pen.length >= 3 && Math.hypot(first[0] - X, first[1] - Y) < 8) { const pts = pen; pen = []; edit((doc0) => addPiece(doc0, origin(pts)), 'piece added'); return; }
       pen.push({ x: r2(at.x), y: r2(at.y) }); say(`${pen.length} point${pen.length === 1 ? '' : 's'}${pen.length >= 3 ? ' · Enter or the first point closes' : ''}`); draw(); return;
     }
+    if (tool === 'line') {
+      const at = f.toBoard(X, Y), inside = h?.kind === 'piece' ? h.pattern : null; if (!inside) { say('click inside a piece', true); return; }
+      const o = f.lay.get(inside), q = [r2(at.x - o.dx), r2(at.y - o.dy)];
+      if (!pick || pick.pattern !== inside) { pick = { kind: 'spot', pattern: inside, q }; say('now the other end'); draw(); return; }
+      const a = pick.q; pick = null; op({ op: 'internalLine', pattern: inside, a, b: q }, 'line drawn'); return;
+    }
     if (!h) return;
+    if (h.kind === 'edge') {
+      if (tool === 'dart') op({ op: 'dart', pattern: h.pattern, segment: h.id, at: h.t, width: num(0), length: num(1) }, 'dart taken out and sewn');
+      if (tool === 'pleat') op({ op: 'pleat', pattern: h.pattern, segment: h.id, at: h.t, intake: num(0) }, 'pleat spread and sewn at the edge');
+      if (tool === 'mirror') op({ op: 'mirror', pattern: h.pattern, segment: h.id }, 'mirrored: the other hand is a new piece');
+      if (tool === 'notch') edit((doc0) => addNotch(doc0, h.pattern, h.id, h.t), 'notched');
+      if (tool === 'allowance') edit((doc0) => setAllowance(doc0, h.pattern, h.id, num(0)), `allowance ${num(0)} mm`);
+      if (tool === 'cut') {
+        if (!pick || pick.pattern !== h.pattern) { pick = h; say('now the other end of the cut, on the same piece'); draw(); return; }
+        const a = pick; pick = null; op({ op: 'split', pattern: h.pattern, from: { segment: a.id, at: a.t }, to: { segment: h.id, at: h.t } }, 'cut in two; the cut is sewn');
+      }
+    }
     if (tool === 'point' && h.kind === 'edge') edit((doc0) => insertPoint(doc0, h.pattern, h.id, h.t), 'point added');
     if (tool === 'curve' && h.kind === 'edge') { const s = d.patterns.find((p) => p.id === h.pattern).segments.find((v) => v.id === h.id); edit((doc0) => (s.type === 'line' ? toCurve : toLine)(doc0, h.pattern, h.id), s.type === 'line' ? 'edge bent: drag its handles with MOVE' : 'edge straightened'); }
     if (tool === 'seam' && h.kind === 'edge') {
@@ -267,6 +308,7 @@ export function createDraftBoard({ canvas, getDoc, commit, say }) {
     draw, key,
     setTool(t) { if (!TOOLS.includes(t)) return; tool = t; pen = []; pick = null; hover = null; say(''); draw(); },
     get tool() { return tool; },
+    get amounts() { return AMOUNTS[tool] || []; },
   };
 }
 export { TOOLS };
