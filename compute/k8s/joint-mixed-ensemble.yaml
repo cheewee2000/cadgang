@@ -35,7 +35,7 @@ spec:
           env:
             - {name: WORK, value: /mnt/shared/cadgang}
             - {name: REF, value: compute/joint-inputs}
-            - {name: COMMIT, value: COMMIT_HERE}
+            - {name: COMMIT, value: aa8f943b9499d123508b2fe45f703587aa7f23a1}
             - {name: PYTHONUNBUFFERED, value: "1"}
           resources:
             requests: {cpu: "8", memory: 24Gi}
