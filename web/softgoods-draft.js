@@ -174,9 +174,13 @@ export function setPiece(d, pid, { name, material, cut, grain, place, layer } = 
 /** The trim kinds TRIM places, as src/core/softgoods-trims.js TRIM_KINDS has them: a spot, or a length along an edge. */
 export const TRIM_KINDS = { point: ['snap', 'button', 'rivet', 'eyelet', 'grommet', 'label', 'd-ring', 'buckle'], length: ['zipper', 'hook-and-loop', 'binding', 'piping', 'elastic', 'drawcord', 'topstitch', 'webbing'] };
 /** A trim of `kind` at a spot (`at`: { pattern, u, v } or { pattern, segment, t, inset }) or along edges (`along`), named kind_n. */
-export function addTrim(d, kind, place) {
-  d = clone(d); const ids = new Set((d.trims || []).map((t) => t.id)); let n = 1; while (ids.has(`${kind}_${n}`)) n++;
-  (d.trims ||= []).push({ id: `${kind}_${n}`, kind, ...place }); return d;
+// An elastic along one whole edge, with a ratio, is gathered by the cloth: its ratio goes in elastics[] and the trim points there,
+// as the server's own trim route (src/core/softgoods-document.js addTrim) does.
+export function addTrim(d, kind, place, { ratio } = {}) {
+  d = clone(d); const ids = new Set([...(d.trims || []), ...(d.elastics || [])].map((t) => t.id)); let n = 1; while (ids.has(`${kind}_${n}`)) n++;
+  const id = `${kind}_${n}`, edge = place.along?.length === 1 ? place.along[0] : null;
+  if (kind === 'elastic' && ratio != null && edge) { if (!(ratio > 0 && ratio <= 1)) throw new Error('An elastic ratio is over 0 and at most 1: its length over the edge\'s'); (d.elastics ||= []).push({ id, pattern: edge.pattern, segment: edge.segment, ratio: Number(ratio) }); (d.trims ||= []).push({ id, kind, spec: {}, elastic: id }); return d; }
+  (d.trims ||= []).push({ id, kind, ...place }); return d;
 }
 /** The other side of trim `id`: a spot (`at`) for a button or snap, a run of edges (`along`) for a zipper or hook-and-loop. */
 export const MATED = ['button', 'snap', 'zipper', 'hook-and-loop'];
@@ -191,7 +195,7 @@ export function setSeam(d, id, { kind, flip } = {}) {
   d = clone(d); const s = d.seams.find((v) => v.id === id); if (!s) throw new Error(`No seam '${id}'`);
   if (kind != null) s.kind = String(kind); if (flip != null) s.flip = !!flip; return d;
 }
-export const removeTrim = (d, id) => ({ ...clone(d), trims: (d.trims || []).filter((t) => t.id !== id) });
+export const removeTrim = (d, id) => { const t = (d.trims || []).find((v) => v.id === id); d = { ...clone(d), trims: (d.trims || []).filter((v) => v.id !== id) }; if (t?.elastic === id && d.elastics) d.elastics = d.elastics.filter((e) => e.id !== id); return d; };
 // A material's fields as the fabric panel edits them: [key, label]. tensile.warp and tensile.weft are the nested tensile.
 export const FABRIC_FIELDS = [['arealDensity', 'WEIGHT g/m²'], ['thickness', 'THICK mm'], ['rigidity', 'BEND N·mm'], ['tensile.warp', 'WARP N/mm'], ['tensile.weft', 'WEFT N/mm'], ['shearRigidity', 'SHEAR N/mm'], ['friction', 'FRICTION 0-1'], ['pricePerMeter', 'PRICE /m'], ['rollWidth', 'ROLL mm']];
 
@@ -239,7 +243,7 @@ export const origin = (pts) => { const x0 = Math.min(...pts.map((q) => q.x)), y0
 
 const TOOLS = ['move', 'pen', 'point', 'curve', 'seam', 'delete', 'dart', 'pleat', 'cut', 'line', 'notch', 'allowance', 'mirror', 'grade', 'trim'];
 // The numbers a tool takes from the board's two fields: [label, default] each.
-export const AMOUNTS = { dart: [['width mm', 20], ['length mm', 80]], pleat: [['intake mm', 30]], allowance: [['allowance mm', 10]] };
+export const AMOUNTS = { dart: [['width mm', 20], ['length mm', 80]], pleat: [['intake mm', 30]], allowance: [['allowance mm', 10]], trim: [['elastic ratio', 0.8]] };
 const HELP = { trim: 'a spot trim: click inside a piece or on an edge (10 mm in) · a length trim: click the edge it runs along', move: 'drag a point or a handle · drag the board to pan', pen: 'click the corners of a new piece · click the first one or press Enter to close · Esc cancels', point: 'click an edge to put a point on it', curve: 'click a straight edge to bend it (then drag its handles), a curved one to straighten it', seam: 'click an edge, then the edge it is sewn to', delete: 'click a point, a seam or inside a piece to delete it', dart: 'click an edge where the dart goes: width and length from the fields', pleat: 'click an edge where the pleat goes: intake from the field', cut: 'click two places on a piece\'s edge: it is cut in two along the line and the cut is sewn', line: 'click two places inside a piece for a stitch or placement line', notch: 'click an edge to notch it there', allowance: 'click an edge to give it the allowance in the field', mirror: 'click an edge: the piece is mirrored across it, the other hand', grade: 'drag a point to where it is in the size chosen; every size is drawn over the base' };
 
 /**
@@ -343,7 +347,7 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
       if (!place) { say(spot ? 'click inside a piece or on an edge' : 'click the edge it runs along', true); return; }
       mating = null;
       if (mate) { edit((doc0) => setMate(doc0, mate, place), `${mate} closes onto its other side`); return; }
-      edit((doc0) => { const next = addTrim(doc0, trimKind, place); if (MATED.includes(trimKind)) mating = next.trims.at(-1).id; return next; }, `${trimKind} placed${MATED.includes(trimKind) ? ' · now its other side, or Esc for one side only' : ''}`);
+      edit((doc0) => { const next = addTrim(doc0, trimKind, place, { ratio: num(0) }); if (MATED.includes(trimKind)) mating = next.trims.at(-1).id; return next; }, `${trimKind} placed${MATED.includes(trimKind) ? ' · now its other side, or Esc for one side only' : ''}`);
       return;
     }
     if (!h) return;
