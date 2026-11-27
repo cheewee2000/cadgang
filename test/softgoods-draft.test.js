@@ -94,4 +94,5 @@ test('drafting: a fabric starts from a preset, its own numbers go over it, a bla
   d = ok(setMaterial(d, 'shell', { arealDensity: '', 'tensile.warp': '' })); assert.deepEqual(d.materials.shell, { preset: 'nylon-500d', color: '#336699' });
   assert.throws(() => setMaterial(d, 'shell', { friction: 2 }), /between 0 and 1/); assert.throws(() => setMaterial(d, 'shell', { color: 'red' }), /#rrggbb/);
   assert.throws(() => validateSoftgoodsDocument(setMaterial(d, 'shell', { preset: 'silk' })), /not in the fabric library/);
+  assert.equal(ok(setMaterial(d, 'shell', { rollWidth: '1400' })).materials.shell.rollWidth, 1400);
 });

@@ -164,7 +164,7 @@ export function setPiece(d, pid, { name, material, cut, grain } = {}) {
 }
 
 // A material's fields as the fabric panel edits them: [key, label]. tensile.warp and tensile.weft are the nested tensile.
-export const FABRIC_FIELDS = [['arealDensity', 'WEIGHT g/m²'], ['thickness', 'THICK mm'], ['rigidity', 'BEND N·mm'], ['tensile.warp', 'WARP N/mm'], ['tensile.weft', 'WEFT N/mm'], ['shearRigidity', 'SHEAR N/mm'], ['friction', 'FRICTION 0-1'], ['pricePerMeter', 'PRICE /m']];
+export const FABRIC_FIELDS = [['arealDensity', 'WEIGHT g/m²'], ['thickness', 'THICK mm'], ['rigidity', 'BEND N·mm'], ['tensile.warp', 'WARP N/mm'], ['tensile.weft', 'WEFT N/mm'], ['shearRigidity', 'SHEAR N/mm'], ['friction', 'FRICTION 0-1'], ['pricePerMeter', 'PRICE /m'], ['rollWidth', 'ROLL mm']];
 
 /** Set a material's fields: preset (a library id, '' for none), color (#rrggbb) or a FABRIC_FIELDS number ('' leaves it to the preset). */
 export function setMaterial(d, id, fields) {
