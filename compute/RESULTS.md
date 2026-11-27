@@ -181,3 +181,34 @@ ONNX: largest difference from PyTorch over the export check's inputs; "yes" is w
 **Contact.** These models still see mesh vertices only: on 300 validation pairs per type, 61% of SLIDER and NONE pairs, 39% of PLANAR, 28% of CYLINDRICAL and 23% of FASTENED pairs have no vertex within 1 mm of the other part, so their contact flag is blank. On surface points (Stage 9) the share without contact falls to 2% for SLIDER and 3% for PLANAR. Stage 9 trains on those.
 
 Artifacts: checkpoints, reports, ONNX files and `summary.{md,json,csv}` under `/mnt/shared/cadgang/joint-inputs-v1/`.
+
+## Stage 9 — surface points (2026-11-26)
+
+The same script with `STUDY=surface` (Job `compute/k8s/joint-surface-v1.yaml`, commit 3af2d29, 8 GPUs, 22:58Z to 00:50Z, no restarts, about $81 of credits) trained the Stage 8 model on the surface cache (`main.py surface`: 512 points per part spread over its faces, exact distance to the other part, and the face normal) instead of mesh vertices. `normals` adds the three normal channels; the other names are as in Stage 8. Every run is 60 epochs except `p512` (30).
+
+| model (best checkpoint) | accuracy | macro F1 | median axis | REVOLUTE | CYLINDRICAL | SLIDER | PLANAR | p≥0.90 precision / coverage | ONNX matches PyTorch |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| Stage 7 seeds (vertices) | 64.97% to 65.75% | 0.418 to 0.442 | 0.69° to 0.96° | 48% to 52% | 14% to 19% | | | 95.2% to 95.8% / 18.9% to 21.1% | 19 of 33 files |
+| Stage 8 `static` (vertices) | 65.28% | 0.439 | 0.93° | 53.5% | 16.6% | | 8.3% | 95.8% / 20.0% | yes (2e-4) |
+| surf | 62.13% | 0.396 | 2.97° | 42.0% | 11.4% | 32.6% | 8.6% | 95.7% / 20.6% | no (4e-3) |
+| surf-normals | **63.26%** | 0.433 | 1.21° | 46.2% | 12.9% | 31.6% | 8.6% | 95.4% / 20.5% | yes (2e-5) |
+| surf-normals-focus50 | 62.39% | 0.431 | **0.93°** | 42.5% | 13.2% | 34.3% | 10.5% | 96.1% / 19.0% | yes (3e-5) |
+| surf-normals-static | 62.31% | **0.449** | 1.13° | 45.7% | 17.9% | 33.7% | **18.5%** | 95.8% / 19.8% | yes (3e-5) |
+| surf-normals-local | 61.62% | 0.412 | 1.51° | 49.6% | **20.1%** | 30.1% | 8.9% | 94.3% / 20.5% | yes (2e-5) |
+| surf-normals-focus50-local | 61.06% | 0.405 | 1.08° | 44.0% | 14.1% | 29.9% | 16.3% | 95.2% / 18.6% | yes (1e-5) |
+| surf-normals-focus50-local-static | 62.88% | 0.427 | 1.33° | 47.3% | 15.6% | 27.2% | 10.0% | 95.5% / **21.6%** | yes (8e-6) |
+| surf-normals-p512 (30 epochs) | 60.84% | 0.428 | 1.01° | **50.3%** | 18.6% | **35.6%** | 16.8% | 96.0% / 18.6% | yes (5e-6) |
+
+`focus50`'s 30- and 60-epoch rows are identical (its best checkpoint was the 30-epoch one). `p512` at 15 epochs: 61.02%, F1 0.404, ONNX no (7e-3).
+
+**Accuracy.** Surface points cost 2 to 4 points of accuracy against vertices: the best, `surf-normals`, is 63.26% against the Stage 7 seed floor of 64.97%. Vertices cluster on edges and fillets, where a joint's character shows; surface points spread evenly over flat faces.
+
+**Normals.** On surface points they are not optional: without them the median axis error is 2.97° (1.21° with them), macro F1 drops from 0.433 to 0.396, and the export fails.
+
+**Minority types.** The static graph on surface points is the best minority-type model so far: PLANAR recall 18.5% (Stage 8 best 9.3%, vertex `static` 8.3%), CYLINDRICAL 17.9%, and a macro F1 of 0.449, within 0.005 of Stage 8's `focus50`. Exact contact shows up where Stage 8 predicted it would, in PLANAR, not in accuracy.
+
+**Export.** Every surface run with normals matches PyTorch to 3e-5, dynamic graph included, so the dynamic graph's export failure in Stages 7 and 8 came from tied vertex coordinates, not from the graph itself.
+
+**Next, if continued.** The two inputs are good at different things, so the cheap test is an ensemble of a vertex model (Stage 8 `static`) and a surface model (`surf-normals-static`) on existing checkpoints, CPU only. No training run is planned.
+
+Artifacts: checkpoints, reports, ONNX files and `summary.{md,json,csv}` under `/mnt/shared/cadgang/joint-surface-v1/`.
