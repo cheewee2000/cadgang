@@ -1,5 +1,8 @@
 import { createClothView, strainRGB, pressureRGB, css, materialCss, seamCss, seamSide, sideLabel, cutLine, placeOnRow } from './softgoods-view.js';
-import { createDraftBoard, sample, setPiece, addSize, removeSize, setMaterial, FABRIC_FIELDS, TRIM_KINDS, removeTrim, REGIONS, SIDES, SEAM_KINDS, setSeam } from './softgoods-draft.js';
+import * as THREE from 'three';
+import { NURBSCurve } from 'three/addons/curves/NURBSCurve.js';
+import { outlinesFromDxf } from './softgoods-dxf.js';
+import { addPiece, origin, createDraftBoard, sample, setPiece, addSize, removeSize, setMaterial, FABRIC_FIELDS, TRIM_KINDS, removeTrim, REGIONS, SIDES, SEAM_KINDS, setSeam } from './softgoods-draft.js';
 const $=(s)=>document.querySelector(s),API='/api/softgoods',esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
 async function api(path,{method='GET',body}={}){const r=await fetch(API+path,{method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`HTTP ${r.status}`);return d}
 let fabrics={},avatarOptions=null,drafting=false,doc=null,check=null,cut=null,trims=null,marks=null,selectedTrim=null,yaw=-.45,pitch=.18,dist=1,drag=null,frame=null,loading=false,running=false,mapMode='off',selectedPattern=null,view2d={k:1,x:0,y:0};
@@ -145,3 +148,7 @@ api('/avatar').then(o=>{avatarOptions=o;renderAvatar()}).catch(()=>{});
 $('#trimKind').innerHTML=Object.entries(TRIM_KINDS).map(([g,ks])=>`<optgroup label="${g==='point'?'at a spot':'along an edge'}">${ks.map(k=>`<option>${k}</option>`).join('')}</optgroup>`).join('');
 $('#trimKind').onchange=()=>board.setTrimKind($('#trimKind').value);
 $('#dropTrim').onclick=()=>{if(!selectedTrim)return say('select a trim in the schedule first',true);const id=selectedTrim;board.edit(d=>removeTrim(d,id),`trim ${id} deleted`)};
+// IMPORT DXF: each closed outline of the file a new piece (web/softgoods-dxf.js); a cut boundary comes in with no allowance.
+$('#importDxf').onclick=()=>$('#dxfFile').click();
+$('#dxfFile').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;try{const{outlines,layer}=outlinesFromDxf(await f.text(),{THREE,NURBSCurve}),base=f.name.replace(/\.dxf$/i,'');if(!outlines.length)return say(`${f.name} has no closed outline`,true);
+board.edit(d=>outlines.reduce((doc,q,i)=>addPiece(doc,origin(q),{name:outlines.length>1?`${base} ${i+1}`:base,allowance:layer==='14'?10:0}),d),`${outlines.length} piece${outlines.length===1?'':'s'} from ${f.name}${layer==='14'?' (stitch lines, 10 mm allowance)':layer==='1'?' (cut lines, no allowance)':''}`)}catch(err){say(err.message,true)}};

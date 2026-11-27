@@ -47,14 +47,14 @@ export function movePoint(d, pid, qid, x, y) {
 }
 
 /** A new piece from an outline clicked round (three or more points, either way round): straight edges, 10 mm allowance. */
-export function addPiece(d, pts, { name = null } = {}) {
+export function addPiece(d, pts, { name = null, allowance = 10 } = {}) {
   if (pts.length < 3) throw new Error('A piece needs three or more points');
   d = clone(d); const taken = new Set(d.patterns.map((p) => p.id)), id = fresh(taken, 'piece');
   let area = 0; pts.forEach((u, i) => { const v = pts[(i + 1) % pts.length]; area += u.x * v.y - v.x * u.y; });
   const loop = area < 0 ? [...pts].reverse() : pts;   // counter-clockwise, as the rest of the pattern code expects
   const points = loop.map((q, i) => ({ id: `${id}_p${i + 1}`, x: r2(q.x), y: r2(q.y) })), segments = points.map((q, i) => ({ id: `${id}_e${i + 1}`, type: 'line', a: q.id, b: points[(i + 1) % points.length].id }));
   const material = Object.keys(d.materials || {})[0] || 'canvas';
-  d.patterns.push({ id, name: name || id, material, cut: 1, points, segments, contours: [segments.map((s) => s.id)], allowances: Object.fromEntries(segments.map((s) => [s.id, 10])), notches: [], grain: { angle: 90 }, internalLines: [] });
+  d.patterns.push({ id, name: name || id, material, cut: 1, points, segments, contours: [segments.map((s) => s.id)], allowances: Object.fromEntries(segments.map((s) => [s.id, allowance])), notches: [], grain: { angle: 90 }, internalLines: [] });
   d.arrangement.push({ pattern: id, position: [d.arrangement.length * 240, 0, 0], rotation: [0, 0, 0], layer: 0 });
   return d;
 }
@@ -235,7 +235,7 @@ export function graded(p, g) {
 // ---- the board
 
 // A piece drawn on the board keeps its shape but starts at its own origin: its lowest, leftmost corner at 0, 0.
-const origin = (pts) => { const x0 = Math.min(...pts.map((q) => q.x)), y0 = Math.min(...pts.map((q) => q.y)); return pts.map((q) => ({ x: q.x - x0, y: q.y - y0 })); };
+export const origin = (pts) => { const x0 = Math.min(...pts.map((q) => q.x)), y0 = Math.min(...pts.map((q) => q.y)); return pts.map((q) => ({ x: q.x - x0, y: q.y - y0 })); };
 
 const TOOLS = ['move', 'pen', 'point', 'curve', 'seam', 'delete', 'dart', 'pleat', 'cut', 'line', 'notch', 'allowance', 'mirror', 'grade', 'trim'];
 // The numbers a tool takes from the board's two fields: [label, default] each.
