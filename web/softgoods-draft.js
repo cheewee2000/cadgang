@@ -153,6 +153,16 @@ export function setAllowance(d, pid, sid, mm) {
   (p.allowances ||= {})[sid] = Number(mm); return d;
 }
 
+/** A piece's name, material, cut count (1 or more) and grain angle (degrees), any of them. */
+export function setPiece(d, pid, { name, material, cut, grain } = {}) {
+  d = clone(d); const p = pieceOf(d, pid);
+  if (name != null) { if (!String(name).trim()) throw new Error('A piece needs a name'); p.name = String(name).trim(); }
+  if (material != null) p.material = String(material);
+  if (cut != null) { if (!(Number.isInteger(Number(cut)) && Number(cut) >= 1)) throw new Error('Cut is a whole number, 1 or more'); p.cut = Number(cut); }
+  if (grain != null) { if (!Number.isFinite(Number(grain))) throw new Error('Grain is an angle in degrees'); p.grain = { ...(p.grain || {}), angle: Number(grain) }; }
+  return d;
+}
+
 // ---- the board
 
 // A piece drawn on the board keeps its shape but starts at its own origin: its lowest, leftmost corner at 0, 0.
@@ -167,7 +177,7 @@ const HELP = { move: 'drag a point or a handle · drag the board to pan', pen: '
  * The drafting board on `canvas`. getDoc() is the page's document; commit(next) PUTs it and resolves to the saved document
  * (or throws with the server's reason); say(text, bad) writes the page's status line.
  */
-export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = () => [], say }) {
+export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = () => [], say, onSelect = () => {} }) {
   let tool = 'move', view = { k: 1, x: 0, y: 0 }, drag = null, pen = [], pick = null, hover = null, local = null, undo = [], busy = false;
   const doc = () => local || getDoc();
   const frame = () => {
@@ -235,6 +245,7 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
 
   canvas.onpointerdown = (e) => {
     canvas.setPointerCapture(e.pointerId); const r = canvas.getBoundingClientRect(), X = e.clientX - r.left, Y = e.clientY - r.top, f = frame(), h = hit(X, Y, f), d = getDoc();
+    if (h?.pattern && h.kind !== 'seam') onSelect(h.pattern);   // the schedule and its properties follow the piece clicked
     if (tool === 'move') { drag = h?.kind === 'point' ? { point: h, moved: false } : { pan: [e.clientX, e.clientY] }; return; }
     if (tool === 'pen') {
       const at = f.toBoard(X, Y), first = pen[0] && f.toScreen(null, pen[0]);
@@ -305,7 +316,7 @@ export function createDraftBoard({ canvas, getDoc, commit, operate, amounts = ()
     return false;
   }
   return {
-    draw, key,
+    draw, key, edit,
     setTool(t) { if (!TOOLS.includes(t)) return; tool = t; pen = []; pick = null; hover = null; say(''); draw(); },
     get tool() { return tool; },
     get amounts() { return AMOUNTS[tool] || []; },
