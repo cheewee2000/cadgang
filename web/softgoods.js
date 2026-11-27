@@ -1,5 +1,5 @@
 import { createClothView, strainRGB, pressureRGB, css, materialCss, seamCss, seamSide, sideLabel, cutLine, placeOnRow } from './softgoods-view.js';
-import { createDraftBoard, sample, setPiece, addSize, removeSize, setMaterial, FABRIC_FIELDS } from './softgoods-draft.js';
+import { createDraftBoard, sample, setPiece, addSize, removeSize, setMaterial, FABRIC_FIELDS, TRIM_KINDS, removeTrim } from './softgoods-draft.js';
 const $=(s)=>document.querySelector(s),API='/api/softgoods',esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
 async function api(path,{method='GET',body}={}){const r=await fetch(API+path,{method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`HTTP ${r.status}`);return d}
 let fabrics={},avatarOptions=null,drafting=false,doc=null,check=null,cut=null,trims=null,marks=null,selectedTrim=null,yaw=-.45,pitch=.18,dist=1,drag=null,frame=null,loading=false,running=false,mapMode='off',selectedPattern=null,view2d={k:1,x:0,y:0};
@@ -108,9 +108,9 @@ async function refresh(){doc=await api('/document');[check,cut,trims,marks]=awai
 // whole document, so the server checks it as it checks a prompt's; the 3D view is set up again on the way out.
 const say=(text,bad)=>{$('#status').textContent=text;$('#status').classList.toggle('err',!!bad)};
 const reread=async()=>{doc=await api('/document');[check,cut,trims,marks]=await Promise.all([api('/check').catch(()=>null),api('/cut').catch(()=>null),api('/trims').catch(()=>null),api('/trim-marks').catch(()=>null)]);renderText();render2d();renderSizes();return doc};
-const board=createDraftBoard({canvas:$('#draftCanvas'),getDoc:()=>doc,say,onSelect:id=>{if(id!==selectedPattern)select(id)},amounts:()=>[$('#amount0').value,$('#amount1').value],commit:async next=>{await api('/document',{method:'PUT',body:next});return reread()},operate:async args=>{await api('/edit',{method:'POST',body:args});return reread()}});
+const board=createDraftBoard({marks:()=>marks,canvas:$('#draftCanvas'),getDoc:()=>doc,say,onSelect:id=>{if(id!==selectedPattern)select(id)},amounts:()=>[$('#amount0').value,$('#amount1').value],commit:async next=>{await api('/document',{method:'PUT',body:next});return reread()},operate:async args=>{await api('/edit',{method:'POST',body:args});return reread()}});
 // A tool that takes numbers (a dart's width and length, a pleat's intake, an allowance) shows them in the two fields, at their defaults.
-const tool=t=>{board.setTool(t);document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('on',b.dataset.tool===t));board.amounts.forEach(([label,v],i)=>{const el=$(`#amount${i}`);el.placeholder=label;el.title=label;el.value=v});['#amount0','#amount1'].forEach((s,i)=>$(s).hidden=i>=board.amounts.length);$('#grading').hidden=t!=='grade';renderSizes()};
+const tool=t=>{board.setTool(t);document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('on',b.dataset.tool===t));board.amounts.forEach(([label,v],i)=>{const el=$(`#amount${i}`);el.placeholder=label;el.title=label;el.value=v});['#amount0','#amount1'].forEach((s,i)=>$(s).hidden=i>=board.amounts.length);$('#grading').hidden=t!=='grade';$('#trimming').hidden=t!=='trim';renderSizes()};
 // GRADE's sizes: the document's grades, one chosen; a name and Enter adds one, − deletes the chosen one.
 let wantSize=null;function renderSizes(){const el=$('#size'),sizes=(doc?.grades||[]).map(g=>g.size),keep=[wantSize,el.value].find(v=>sizes.includes(v))||sizes[0]||'';wantSize=null;el.innerHTML=sizes.map(v=>`<option ${v===keep?'selected':''}>${esc(v)}</option>`).join('');board.setSize(keep)}
 $('#size').onchange=()=>board.setSize($('#size').value);
@@ -141,3 +141,7 @@ el.innerHTML=`<b>AVATAR${a?'':' · none'}</b><label>SIZE<select data-a="size">${
 el.querySelectorAll('[data-a]').forEach(i=>i.onchange=async()=>{const k=i.dataset.a,v=k==='size'||k==='pose'?i.value:Number(i.value),next=k==='size'?{size:v,pose:a?.pose}:{...(a||{}),[k]:v};if(k==='size'&&!v)return;if(!v&&k!=='size')delete next[k];
 try{say('arranging on the avatar…');await api('/arrange/avatar',{method:'POST',body:next});say(`avatar ${k} ${i.value}`)}catch(e){say(e.message,true);renderAvatar()}})}
 api('/avatar').then(o=>{avatarOptions=o;renderAvatar()}).catch(()=>{});
+// TRIM's kind, and − deletes the trim selected in the schedule.
+$('#trimKind').innerHTML=Object.entries(TRIM_KINDS).map(([g,ks])=>`<optgroup label="${g==='point'?'at a spot':'along an edge'}">${ks.map(k=>`<option>${k}</option>`).join('')}</optgroup>`).join('');
+$('#trimKind').onchange=()=>board.setTrimKind($('#trimKind').value);
+$('#dropTrim').onclick=()=>{if(!selectedTrim)return say('select a trim in the schedule first',true);const id=selectedTrim;board.edit(d=>removeTrim(d,id),`trim ${id} deleted`)};
