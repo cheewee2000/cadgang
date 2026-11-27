@@ -207,7 +207,7 @@ The same script with `STUDY=surface` (Job `compute/k8s/joint-surface-v1.yaml`, c
 
 **Minority types.** The static graph on surface points is the best minority-type model so far: PLANAR recall 18.5% (Stage 8 best 9.3%, vertex `static` 8.3%), CYLINDRICAL 17.9%, and a macro F1 of 0.449, within 0.005 of Stage 8's `focus50`. Exact contact shows up where Stage 8 predicted it would, in PLANAR, not in accuracy.
 
-**Export.** Every surface run with normals matches PyTorch to 3e-5, dynamic graph included, so the dynamic graph's export failure in Stages 7 and 8 came from tied vertex coordinates, not from the graph itself.
+**Export.** Every surface run with normals matches PyTorch to 3e-5, dynamic graph included; `surf` without them does not (4e-3). The dynamic graph exports when its inputs carry normals, so `--edge-graph static` is needed only for vertex models.
 
 **Next, if continued.** The two inputs are good at different things, so the cheap test is an ensemble of a vertex model (Stage 8 `static`) and a surface model (`surf-normals-static`) on existing checkpoints, CPU only. No training run is planned.
 
