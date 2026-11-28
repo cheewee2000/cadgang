@@ -221,6 +221,13 @@ function stats(rows, limit, pressureAvailable) {
     contact: pressureAvailable ? round(touching.reduce((n, r) => n + r[2], 0) / area, 4) : null };
 }
 
+// The body's chest line sits at the armpit, where a shirt's armhole is still open, so the garment's chest is taken where
+// a tape goes on a shirt: the first level below the line that closes round the body, 10 mm at a time and at most 100 mm down.
+function closedAround(level, cutAt, height) {
+  for (let below = 0; below <= (level === 'chest' ? 100 : 0); below += 10) { const loop = cutAt(height - below).loops.find((l) => l.closed && l.encloses); if (loop) return [loop, below]; }
+  return [null, 0];
+}
+
 /** How the garment fits: stretch against each fabric's limit, pressure on the body, how much of the cloth touches it, and ease at the avatar's levels. */
 export function fitReport(document, drape) {
   const all = [], fabrics = resolveMaterials(document.materials), pieces = drape.pieces.map((p) => {
@@ -234,13 +241,13 @@ export function fitReport(document, drape) {
     const n = g.normal, e1 = Math.abs(n[2]) > 0.999 ? [1, 0, 0] : (() => { const l = Math.hypot(n[1], n[0]); return [-n[1] / l, n[0] / l, 0]; })(), e2 = [n[1] * e1[2] - n[2] * e1[1], n[2] * e1[0] - n[0] * e1[2], n[0] * e1[1] - n[1] * e1[0]];
     const turn = (a) => { const out = new Float32Array(a.length); for (let i = 0; i < a.length; i += 3) { out[i] = a[i] * e1[0] + a[i + 1] * e1[1] + a[i + 2] * e1[2]; out[i + 1] = a[i] * e2[0] + a[i + 1] * e2[1] + a[i + 2] * e2[2]; out[i + 2] = a[i] * n[0] + a[i + 1] * n[1] + a[i + 2] * n[2]; } return out; }, [cx, cy, height] = turn(g.at);
     const turned = { shapes: drape.body.shapes.filter((s) => g.shapes.includes(s.name)).map((s) => (s.type === 'mesh' ? { ...s, positions: turn(s.positions) } : s.type === 'capsule' ? { ...s, a: [...turn(s.a)], b: [...turn(s.b)] } : s)) };
-    const cut = circumference({ pieces: drape.pieces.map((p) => ({ ...p, positions: turn(p.positions) })) }, height, { centre: [cx, cy] }), loop = cut.loops.find((l) => l.closed && l.encloses), body = bodyCircumference(turned, height), garment = loop?.length ?? null;
-    return { level: g.level, height: round(g.at[2]), garment, body: round(body), stated: g.stated, ease: garment != null && body != null ? round(garment - body) : null, gap: garment != null && body != null ? round((garment - body) / (2 * Math.PI)) : null, closed: !!loop };
+    const cloth = { pieces: drape.pieces.map((p) => ({ ...p, positions: turn(p.positions) })) }, [loop, below] = closedAround(g.level, (h) => circumference(cloth, h, { centre: [cx, cy] }), height), body = bodyCircumference(turned, height), garment = loop?.length ?? null;
+    return { level: g.level, height: round(g.at[2]), garment, body: round(body), stated: g.stated, ease: garment != null && body != null ? round(garment - body) : null, gap: garment != null && body != null ? round((garment - body) / (2 * Math.PI)) : null, closed: !!loop, ...(below ? { below } : {}) };
   }) : Object.entries(drape.body?.levels || {}).filter(([level]) => level !== 'shoulder').map(([level, height]) => {
     const cut = circumference(drape, height), loop = cut.loops.find((l) => l.closed && l.encloses), body = bodyCircumference(drape.body, height), garment = loop?.length ?? null;
     return { level, height: round(height), garment, body: round(body), ease: garment != null && body != null ? round(garment - body) : null, gap: garment != null && body != null ? round((garment - body) / (2 * Math.PI)) : null, closed: !!loop, ...(level === 'chest' && drape.body?.chest ? { stated: drape.body.chest } : {}) };
   });
   const overall = stats(all, null, drape.pressureAvailable);
   return { schema: 'cadgang.softgoods-fit.v1', revision: drape.revision, drape: { settled: drape.settled, steps: drape.steps, residual: round(drape.residual, 4), target: drape.options.target }, ok: drape.settled && overall.strain.ok, overall, pieces, ease, bounds: boundsOf(drape),
-    notes: ['Lengths mm, strain %, pressure kPa.', `overLimit is the share of the cloth's area stretched past its fabric's strainLimit (${STRAIN_LIMIT * 100}% for a fabric that gives none); the stretch is ok while that is at most ${OVER_SHARE * 100}%.`, 'ease is the garment\'s circumference less the body\'s at that height; gap is that ease as a mean distance from the body. A level the garment does not close around has no ease.', girths ? 'body is measured round the avatar the cloth collides with, whose torso, upper arms and thighs are built to the stated girths; an arm or a thigh is measured square across the limb, a third of the way down it.' : 'body is measured round the avatar the cloth collides with, which is narrower than the stated chest.', 'An XPBD preview: it points at tight places and is not a fit guarantee.'] };
+    notes: ['Lengths mm, strain %, pressure kPa.', `overLimit is the share of the cloth's area stretched past its fabric's strainLimit (${STRAIN_LIMIT * 100}% for a fabric that gives none); the stretch is ok while that is at most ${OVER_SHARE * 100}%.`, 'ease is the garment\'s circumference less the body\'s at that height; gap is that ease as a mean distance from the body. A level the garment does not close around has no ease.', girths ? 'body is measured round the avatar the cloth collides with, whose torso, upper arms and thighs are built to the stated girths; an arm or a thigh is measured square across the limb, a third of the way down it. The chest line is at the armpit, so where the armholes are open there the garment is measured at the first level up to 100 mm below that closes, and below says how far down.' : 'body is measured round the avatar the cloth collides with, which is narrower than the stated chest.', 'An XPBD preview: it points at tight places and is not a fit guarantee.'] };
 }
