@@ -234,6 +234,8 @@ test('a body and the full avatar together: the page and the server drape the sam
   for (const e of fit.ease) assert.ok(Math.abs(e.body - e.stated) < 0.01 * e.stated, `${e.level}: the body is ${e.body} round, stated ${e.stated}`);
   // The tunic is 1040 round: it closes round the waist with that much less the waist's 840 to spare, and has no sleeves or legs.
   assert.ok(by.waist.closed && Math.abs(by.waist.ease - 200) < 15, `ease at the waist: ${by.waist.ease}`); assert.equal(by['left-upper-arm'].closed, false); assert.equal(by['left-thigh'].ease, null);
+  // The chest line is at the armpit, where the armholes are open: the garment's chest is taken below them, as a tape would be.
+  assert.ok(by.chest.closed && by.chest.below > 0 && by.chest.below <= 100 && Math.abs(by.chest.ease - 60) < 15, `ease at the chest: ${by.chest.ease}, ${by.chest.below} mm down`);
   assert.match(fit.notes.join(' '), /built to the stated girths/);
   // The cover has settled on the pack, and stayed there.
   const lid = drape.pieces.find((p) => p.id === 'cover'); for (let i = 0; i < lid.count; i++) assert.ok(lid.positions[i * 3 + 2] > 950 && lid.positions[i * 3 + 2] < 953.5, `the cover lies on the pack: ${lid.positions[i * 3 + 2].toFixed(1)}`);
